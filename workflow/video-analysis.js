@@ -1,6 +1,6 @@
 export const meta = {
   name: 'video-analysis',
-  description: 'Analisa vídeos em lotes sequenciais: curador Opus planeja (e, com curation batches, escreve o prompt de cada lote), analista Sonnet lê frames e falas; relatório por vídeo e combinado',
+  description: 'Analisa vídeos em lotes sequenciais: curador Opus planeja (e, com curation batches, escreve o prompt de cada lote), analista Sonnet lê frames e falas; relatório por vídeo e, com 2+ vídeos, combinado',
   whenToUse: 'Só pela skill video-analysis, com os workflow_args impressos por prepare.py',
   phases: [
     { title: 'Plano', detail: 'curador lê objetivo e transcrição; grava ledger e prompt do lote 1', model: 'opus' },

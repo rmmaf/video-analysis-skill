@@ -39,7 +39,7 @@ Leia em paralelo: objetivo, summary.json, transcript.md (se vier truncado, conti
 2. Interprete o objetivo: entregáveis, critérios de sucesso, o que o relatorio.md precisa conter. Ninguém responde perguntas durante o run: decida as ambiguidades e registre a suposição.
 3. Segmente a transcrição em assuntos e mapeie-os aos lotes. Sem fala, use overview e prancha.
 4. Escreva o plano de foco por lote. Se a chamada limitar o run (lotes 1–k), planeje todos e marque os demais "fora do run".
-5. Escreva o contrato do relatório: ajustes ao contrato padrão do analista.
+5. Escreva o contrato do relatório: ajustes ao contrato padrão do analista, só se houver MODO NEXT neste run (`curadoria: lotes` nas opções do objetivo). Sem ele, os analistas dos lotes 2 em diante não leem a seção 3: grave nela "contrato padrão, sem ajustes" e mantenha o prompt do lote 1 no contrato padrão.
 6. Grave o ledger (`Integrado até o lote: 000 de BBB`), depois o prompt do lote 1. Sem MODO NEXT neste run, as seções 4 e 5 são o único contexto dos analistas dos lotes 2 em diante: deixe nelas o que eles precisam saber (quem é quem, sistemas e telas, nomes corretos) e as perguntas que cada trecho pode responder.
 
 Devolva: `status` (ok|failed), `ledger_path`, `prompt_path`, `video_type` (screen|meeting|slides|mixed|other = tela|reunião|aula/slides|misto|outro), `focus` (foco do lote 1, 1 frase), `warnings` (opcional).
@@ -70,7 +70,7 @@ Integrado até o lote: {NNN} de {BBB} · Tipo: {tela|reunião|aula/slides|misto|
 ## 1. Objetivo interpretado (≤120 palavras: entregáveis, critérios, o que o relatorio.md precisa conter, suposições)
 ## 2. Mapa e plano (≤25 palavras por linha; agrupe lotes contíguos do mesmo assunto)
 | lotes | intervalo | assunto provável | foco | estado (pendente/feito/parcial/falhou/fora do run) |
-## 3. Contrato do relatório de lote (≤80: ajustes ao contrato padrão, repetidos em todo prompt)
+## 3. Contrato do relatório de lote (≤80: ajustes ao contrato padrão, repetidos em todo prompt; sem MODO NEXT, "contrato padrão, sem ajustes")
 ## 4. Contexto acumulado (≤300: falantes e papéis, sistemas e telas, estado em andamento, nomes corretos)
 ## 5. Fios abertos (≤150: pergunta → lote provável)
 ## 6. Achados consolidados (≤500: por tema, cada um com [lote · hh:mm:ss · Fxxxx]; funda os antigos)
@@ -87,7 +87,7 @@ Linha do tempo (frames, intervalos e falas): `{caminho absoluto de batch_NNN.md}
 ## O que você precisa saber (≤150 palavras: quem é quem, nomes corretos, estado em andamento)
 ## Foco (3–6 itens: onde olhar por id/tempo; o que pode ir em uma linha)
 ## Perguntas (Q1…Qk, 2 ≤ k ≤ 6, respondíveis neste lote)
-## Formato ("contrato padrão", sem reescrevê-lo, + seção 3 do ledger + específico do lote; limite de palavras)
+## Formato ("contrato padrão", sem reescrevê-lo, + seção 3 do ledger + específico do lote; limite de palavras. Sem MODO NEXT: só "contrato padrão")
 ## Frames de referência (opcional, ≤2, de lotes anteriores: id, caminho absoluto da imagem, por quê)
 ```
 Contrato padrão (o analista já o tem): 1 Linha do tempo (frame | intervalo | tela | fala | relação) · 2 Respostas · 3 Achados com confiança · 4 Para levar adiante · 5 Incertezas e correções de legenda · 6 Alertas; ≤1.000 palavras por ~20 frames.
@@ -98,7 +98,7 @@ Regras:
 3. Contexto só entra se mudar a leitura do lote.
 4. Fios abertos só quando o plano diz que este lote pode resolvê-los.
 5. Exija `[Fxxxx · hh:mm:ss]` em cada afirmação.
-6. Mesmo contrato em todos os lotes: o FINAL depende de relatórios comparáveis.
+6. Mesmo contrato em todos os lotes: o FINAL depende de relatórios comparáveis. Sem MODO NEXT, é o contrato padrão (INIT, passo 5).
 7. ≤450 palavras.
 8. Idioma do run.
 

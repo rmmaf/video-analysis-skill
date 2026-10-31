@@ -5,7 +5,9 @@ Uso:
 
 Os workflow_args (para achar batches_dir e out_dir de cada vídeo) vêm de --args ou de <run_dir>/run.json
 (chave "workflow_args"); <run_dir>/prepare.json é a reserva. Analisa os lotes 1..last de cada vídeo, com
-last = min(nº de lotes, options.max_batches), ou batches.planned do retorno quando --return é dado.
+last = min(nº de lotes, options.max_batches), ou batches.planned do retorno quando --return é dado. A
+curadoria é options.curation: plan (o padrão do prepare.py) ou batches (--curadoria lotes, com o NEXT antes
+de cada lote depois do 1º); sem a chave, batches, porque o run é anterior à opção e tinha o NEXT.
 
 Checagens (uma linha cada: PASS, AVISO ou FAIL; só FAIL reprova):
   args        o run_dir dos args é a pasta conferida
@@ -15,9 +17,11 @@ Checagens (uma linha cada: PASS, AVISO ou FAIL; só FAIL reprova):
               antiga em inglês, " (revisit of Fxxxx)"); revisita no lote ("· = Fxxxx (mesma tela, acima)"
               ou "(same screen, above)") não tem linha de imagem; nenhum caminho se repete no lote; há uma
               linha "Folha de contato:" (ou "Contact sheet:"), que nunca conta como imagem
-  ledger      existe; "Integrado até o lote: NNN de BBB" com NNN = last-1 (ou last) e BBB = nº de lotes;
+  ledger      existe; "Integrado até o lote: NNN de BBB" com BBB = nº de lotes e NNN = last-1 (ou last) com
+              batches, ou de 000 a last com plan (o INIT grava 000; sem o NEXT, ninguém reescreve o ledger);
               palavras (orçamento 1.500); tabela do plano (cabeçalho com "lotes")
-  prompt      cita o caminho absoluto de batch_NNN.md; fala copiada: 8 a 11 palavras seguidas de uma fala
+  prompt      existe (com plan, só o do lote 1 é exigido; os dos outros lotes são conferidos se existirem);
+              cita o caminho absoluto de batch_NNN.md; fala copiada: 8 a 11 palavras seguidas de uma fala
               do lote = citação curta (AVISO), 12 ou mais, ou a fala inteira = cópia (FAIL); referências a
               frames, com um intervalo F0041–F0045 contando como 1: até 8 (os 3–6 itens de Foco e os até 2
               frames de referência do papel do curador), até 16 AVISO, acima FAIL (lista de frames
@@ -298,6 +302,8 @@ def check_video(chk: Checker, wa: dict, v: dict, rv: dict | None) -> None:
     last = min(total, int(maxb)) if int(maxb) > 0 else total
     if rv and isinstance(rv.get("batches"), dict) and isinstance(rv["batches"].get("planned"), int):
         last = rv["batches"]["planned"]
+    cur = (wa.get("options") or {}).get("curation") or "batches"  # sem a chave: run anterior à opção, tinha o NEXT
+    plan = cur == "plan"  # sem o NEXT: o INIT grava o ledger com 000 e só o prompt do lote 1
 
     batches: dict[int, Batch] = {}
     for n in range(1, last + 1):
@@ -320,16 +326,18 @@ def check_video(chk: Checker, wa: dict, v: dict, rv: dict | None) -> None:
             chk.add(False, "ledger.integrado", slug, 'sem "Integrado até o lote: NNN de BBB"')
         else:
             k, bb = int(m.group(1)), m.group(2)
-            ok = bb is not None and int(bb) == total and max(0, last - 1) <= k <= last
+            lo = 0 if plan else max(0, last - 1)
+            ok = bb is not None and int(bb) == total and lo <= k <= last
+            want = f"{lo:03d}–{last:03d} de {total:03d} (curadoria plan)" if plan else f"{lo:03d} de {total:03d}"
             fmt = "" if bb is not None else ' · formato esperado "NNN de BBB"'
-            chk.add(ok, "ledger.integrado", slug, f"{m.group(0)} · esperado {max(0, last - 1):03d} de {total:03d}{fmt}")
+            chk.add(ok, "ledger.integrado", slug, f"{m.group(0)} · esperado {want}{fmt}")
         chk.budget(count_words(text), MAX_LEDGER_WORDS, "ledger.palavras", slug, "palavras")
         chk.add(has_plan_table(text), "ledger.plano", slug, "tabela do plano" if has_plan_table(text) else "sem tabela com cabeçalho \"lotes\"")
 
     for n in range(1, last + 1):
         tgt = f"{slug} {n:03d}"
         p = out / "prompts" / f"batch_{n:03d}.md"
-        if chk.add(p.is_file(), "prompt.existe", tgt, "" if p.is_file() else str(p)):
+        if (n == 1 or not plan or p.is_file()) and chk.add(p.is_file(), "prompt.existe", tgt, "" if p.is_file() else str(p)):
             text = read(p)
             want = norm(f"{v['batches_dir']}/batch_{n:03d}.md")
             chk.add(want in norm(text), "prompt.caminho", tgt, "cita batch_NNN.md" if want in norm(text) else f"não cita {want}")

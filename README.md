@@ -202,11 +202,13 @@ python tests/check_run.py <run_dir>     # confere um run concluído
   `%TEMP%\va-synth-v<N>` (ou em `VA_SYNTH_DIR`).
 - O `harness.mjs` roda o `workflow/video-analysis.js` com agentes simulados: caminho feliz, lote que pula
   frames, falhas, retomada, vários vídeos e os dois modos de papéis. Não tem dependências.
-- O `check_run.py` confere se o ledger evoluiu, se os prompts citam os lotes sem copiar falas, se os
-  relatórios cobrem todos os frames e se o relatório final responde ao objetivo. As checagens do ledger e
-  dos prompts supõem `--curadoria lotes`: num run no padrão `plano` com 2 ou mais lotes analisados,
-  `ledger.integrado` e o `prompt.existe` dos lotes 2 em diante saem FAIL, e a saída é 1 mesmo com o run
-  correto.
+- O `check_run.py` confere o ledger, se os prompts citam os lotes sem copiar falas, se os relatórios
+  cobrem todos os frames e se o relatório final responde ao objetivo. As checagens do ledger e dos
+  prompts seguem a curadoria do run (`options.curation`). No padrão `plano`, `Integrado até o lote`
+  pode ir de `000`, como o INIT o grava, até o último lote analisado, e só o prompt do lote 1 é
+  exigido; os dos outros lotes são conferidos quando existem. Com `--curadoria lotes`, o ledger tem de
+  estar integrado até o penúltimo ou o último lote analisado, e cada lote precisa do seu prompt. Um run
+  sem `options.curation` é anterior à opção, tinha o NEXT e é conferido como `lotes`.
 - `tests/test_vtt.py` e `tests/test_data_files.py` leem trechos reais de legenda que ficam fora do git
   (veja [Dados e privacidade](#dados-e-privacidade)). Num clone novo, esses testes falham por falta dos
   arquivos.

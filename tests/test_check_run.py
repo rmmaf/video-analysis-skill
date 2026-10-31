@@ -97,7 +97,8 @@ O indicador conta clientes sem pedido no mês [00:00:10 · F0002].
 
 def make_run(tmp_path: Path, *, run_json: bool = True, ledger_hdr: str = "Integrado até o lote: 001 de 003",
              foco1: str = "- F0001–F0002: filtros e nome exato do indicador.\n- F0004: origem do número.",
-             foco2: str = "- F0005–F0007: horário de corte e encerramento.", rows2: str = ROWS2) -> tuple[Path, dict]:
+             foco2: str = "- F0005–F0007: horário de corte e encerramento.", rows2: str = ROWS2,
+             curation: str | None = "batches") -> tuple[Path, dict]:
     bdir = tmp_path / "cache" / "teste-1a2b3c4d" / "batches-5e6f7a8b"
     fdir = tmp_path / "cache" / "teste-1a2b3c4d" / "frames-0a0b0c0d"
     run_dir = (tmp_path / "runs" / "20261006-120000-teste")
@@ -117,12 +118,15 @@ def make_run(tmp_path: Path, *, run_json: bool = True, ledger_hdr: str = "Integr
         "schema_version": 1, "run_id": "20261006-120000-teste", "run_dir": run_dir.resolve().as_posix(),
         "objective_path": (run_dir / "objective.md").as_posix(), "roles_dir": (tmp_path / "roles").as_posix(),
         "roles_mode": "inline", "language": "pt-BR",
-        "options": {"max_batches": 2, "max_parallel_videos": 3, "analyst_effort": "high", "curator_effort": "high"},
+        "options": {"max_batches": 2, "max_parallel_videos": 3, "analyst_effort": "high", "curator_effort": "high",
+                    "curation": curation},
         "combined_exists": False,
         "videos": [{"slug": "teste", "title": "Teste", "duration": "00:01:30", "n_frames": 9, "batches_dir": B,
                     "out_dir": out.as_posix(), "batch_images": [3, 3, 4], "start_batch": 1, "ledger_exists": False,
                     "start_prompt_exists": False, "final_exists": False}],
     }
+    if curation is None:
+        del wa["options"]["curation"]  # run anterior à opção
     if run_json:
         (run_dir / "run.json").write_text(json.dumps({"argv": [], "workflow_args": wa}, ensure_ascii=False), encoding="utf-8")
     return run_dir, wa
@@ -253,6 +257,48 @@ def test_ledger_fora_do_formato_e_retorno_divergente_falham(tmp_path, capsys):
     bad = " ".join(fails(capsys))
     for check in ("ledger.integrado", "retorno.frames", "retorno.status", "final.frames"):
         assert check in bad, bad
+
+
+def test_curadoria_plan_aceita_ledger_000_e_so_o_prompt_do_lote_1(tmp_path, capsys):
+    """No padrão plan não há NEXT: o INIT grava o ledger com 000 e só o prompt do lote 1."""
+    run_dir, wa = make_run(tmp_path, curation="plan", ledger_hdr="Integrado até o lote: 000 de 003")
+    (Path(wa["videos"][0]["out_dir"]) / "prompts" / "batch_002.md").unlink()
+    assert check_run.main([str(run_dir)]) == 0, fails(capsys)
+    assert check_run.main([str(run_dir), "--return", ret()]) == 0, fails(capsys)
+    t = table(capsys)
+    assert not t["FAIL"] and not t["AVISO"], t
+    run_dir2, _ = make_run(tmp_path / "b", curation="plan")  # ledger em 001: NEXT antes de retomar como plan
+    assert check_run.main([str(run_dir2)]) == 0, fails(capsys)
+    run_dir3, _ = make_run(tmp_path / "c", curation="plan", ledger_hdr="Integrado até o lote: 003 de 003")
+    assert check_run.main([str(run_dir3)]) == 1
+    bad = fails(capsys)
+    assert len(bad) == 1 and "ledger.integrado" in bad[0] and "esperado 000–002 de 003" in bad[0], bad
+
+
+def test_curadoria_plan_exige_o_prompt_do_lote_1_e_confere_os_outros_que_existem(tmp_path, capsys):
+    run_dir, wa = make_run(tmp_path, curation="plan", ledger_hdr="Integrado até o lote: 000 de 003")
+    for n in (1, 2):
+        (Path(wa["videos"][0]["out_dir"]) / "prompts" / f"batch_00{n}.md").unlink()
+    assert check_run.main([str(run_dir)]) == 1
+    bad = fails(capsys)
+    assert len(bad) == 1 and "prompt.existe" in bad[0] and "teste 001" in bad[0], bad
+    run_dir2, _ = make_run(tmp_path / "b", curation="plan", ledger_hdr="Integrado até o lote: 000 de 003",
+                           foco2="- Ele diz: então quando o pedido entra depois da meia noite ele só aparece depois.")
+    assert check_run.main([str(run_dir2)]) == 1
+    bad = fails(capsys)
+    assert len(bad) == 1 and "prompt.copia_fala" in bad[0] and "teste 002" in bad[0], bad
+
+
+def test_curadoria_lotes_ou_sem_a_chave_exige_ledger_integrado_e_todos_os_prompts(tmp_path, capsys):
+    """Sem options.curation, o run é anterior à opção e tinha o NEXT: vale como batches."""
+    for cur in ("batches", None):
+        run_dir, wa = make_run(tmp_path / str(cur), curation=cur, ledger_hdr="Integrado até o lote: 000 de 003")
+        (Path(wa["videos"][0]["out_dir"]) / "prompts" / "batch_002.md").unlink()
+        assert check_run.main([str(run_dir)]) == 1
+        bad = fails(capsys)
+        assert any("ledger.integrado" in ln and "esperado 001 de 003" in ln for ln in bad), (cur, bad)
+        assert any("prompt.existe" in ln and "teste 002" in ln for ln in bad), (cur, bad)
+        assert len(bad) == 2, (cur, bad)
 
 
 def test_relatorio_final_so_com_o_nome_novo(tmp_path, capsys):

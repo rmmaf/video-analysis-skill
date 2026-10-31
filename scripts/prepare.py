@@ -4,7 +4,7 @@
 Pela skill (sempre a ferramenta Bash, sempre ``python``, nunca ``python3``):
     python prepare.py --pedido "C:/Users/digom/video-analysis/pedidos/pedido.md" --estimar
     python prepare.py --pedido "C:/Users/digom/video-analysis/pedidos/pedido.md"
-    python prepare.py --resume <run_id|run_dir|ultimo> [--papeis agents|inline] [--max-lotes N]
+    python prepare.py --resume <run_id|run_dir|ultimo> [--papeis agents|inline] [--max-lotes N] [--curadoria plano|lotes]
 Uso manual:
     python prepare.py INPUT [INPUT ...] [--objective-file MD | --objective "texto"] [--run [NOME]] [opções]
     python prepare.py --gc [DIAS]
@@ -105,7 +105,8 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--paralelo", metavar="N")
     a.add_argument("--esforco-analista", dest="esforco_analista", metavar="NIVEL")
     a.add_argument("--esforco-curador", dest="esforco_curador", metavar="NIVEL")
-    a.add_argument("--curadoria", metavar="plano|lotes", help="lotes = curador antes de cada lote (padrão: plano)")
+    a.add_argument("--curadoria", metavar="plano|lotes",
+                   help="lotes = curador antes de cada lote (padrão: plano; no --resume, a do run, ou lotes num run anterior à opção)")
     a.add_argument("--idioma", metavar="xx")
     a.add_argument("--trecho", metavar="hh:mm:ss-hh:mm:ss")
     a.add_argument("--falantes", "--speaker-names", dest="falantes", metavar='"SPEAKER_01=Nome;…"')

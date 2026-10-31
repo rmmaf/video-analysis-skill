@@ -57,9 +57,10 @@ O desenho economiza tokens em três pontos:
   descartadas.
 - A transcrição é lida uma vez, pelo curador, e resumida no ledger.
 
-Cada vídeo usa um analista por lote, mais o plano e o relatório. Com `--curadoria lotes`, o curador
-também escreve o prompt de cada lote seguinte, o que custa cerca de 2× mais. Acima de 80 agentes, a skill pergunta antes
-de seguir; acima de 800, recusa o run.
+Cada vídeo usa um analista por lote, mais o plano e o relatório; com dois vídeos ou mais, um agente a
+mais escreve o relatório combinado. Com `--curadoria lotes`, o curador também escreve o prompt de cada
+lote seguinte, o que custa cerca do dobro. Acima de 80 agentes, a skill pergunta antes de seguir;
+acima de 800, recusa o run.
 
 ## Requisitos
 
@@ -126,9 +127,9 @@ Na conversa do Claude Code:
 
 O que acontece depois da chamada:
 
-1. A skill grava o pedido e estima o tamanho do run. Com mais de 80 agentes, ela pergunta antes de
-   seguir.
-2. O `prepare.py` extrai frames, legenda e lotes, ou os reaproveita do cache.
+1. A skill grava o pedido e estima o tempo da extração.
+2. O `prepare.py` extrai frames, legenda e lotes, ou os reaproveita do cache, e calcula quantos agentes o
+   run vai usar. Com mais de 80, a skill pergunta antes de disparar o Workflow.
 3. O Workflow roda em segundo plano, a cerca de 4 minutos por lote, e avisa quando termina.
 4. A skill mostra o resumo de cada vídeo e o caminho dos relatórios.
 
@@ -202,7 +203,10 @@ python tests/check_run.py <run_dir>     # confere um run concluído
 - O `harness.mjs` roda o `workflow/video-analysis.js` com agentes simulados: caminho feliz, lote que pula
   frames, falhas, retomada, vários vídeos e os dois modos de papéis. Não tem dependências.
 - O `check_run.py` confere se o ledger evoluiu, se os prompts citam os lotes sem copiar falas, se os
-  relatórios cobrem todos os frames e se o relatório final responde ao objetivo.
+  relatórios cobrem todos os frames e se o relatório final responde ao objetivo. As checagens do ledger e
+  dos prompts supõem `--curadoria lotes`: num run no padrão `plano` com 2 ou mais lotes analisados,
+  `ledger.integrado` e o `prompt.existe` dos lotes 2 em diante saem FAIL, e a saída é 1 mesmo com o run
+  correto.
 - `tests/test_vtt.py` e `tests/test_data_files.py` leem trechos reais de legenda que ficam fora do git
   (veja [Dados e privacidade](#dados-e-privacidade)). Num clone novo, esses testes falham por falta dos
   arquivos.

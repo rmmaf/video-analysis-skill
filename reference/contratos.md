@@ -53,14 +53,15 @@ Write seguinte precisa de Read antes. Opção dada na linha de comando prevalece
 ```bash
 python "<skill>/scripts/prepare.py" --pedido "C:/Users/digom/video-analysis/pedidos/pedido.md" --estimar
 python "<skill>/scripts/prepare.py" --pedido "C:/Users/digom/video-analysis/pedidos/pedido.md"
-python "<skill>/scripts/prepare.py" --resume <run_id|run_dir|ultimo> [--papeis agents|inline] [--max-lotes N]
+python "<skill>/scripts/prepare.py" --resume <run_id|run_dir|ultimo> [--papeis agents|inline] [--max-lotes N] [--curadoria plano|lotes]
 ```
 
 - `<skill>` é `${CLAUDE_SKILL_DIR}`. Sempre pela ferramenta Bash e sempre `python`, nunca `python3`.
 - Regra da legenda: a `.vtt` tem o mesmo nome do vídeo, na mesma pasta. `--vtt "<caminho>"` aponta outra
   (só com 1 vídeo); `--skip-missing` pula, numa pasta, os vídeos sem legenda.
 - `--resume` aceita só `--papeis`, `--max-lotes`, `--paralelo`, `--esforco-analista`,
-  `--esforco-curador` e `--curadoria` (run anterior à opção: `lotes`); recusa `--pedido`, entradas, `--estimar` e `--force`.
+  `--esforco-curador` e `--curadoria`; a que não vier mantém o valor gravado no run (`curadoria` de um run
+  anterior à opção: `lotes`). Recusa `--pedido`, entradas, `--estimar` e `--force`.
 - Uso manual, fora da skill: entradas diretas (`<vídeos…> --objective-file <md> | --objective "…"
   [--run [NOME]]`; sem objetivo, só aquece o cache, sem run), `--gc [DIAS]` (padrão 30) e os parâmetros de
   [`parametros.md`](parametros.md). Gerais: `--home PASTA` (padrão `VIDEO_ANALYSIS_HOME` ou
@@ -99,7 +100,7 @@ com `run_dir: …` e traz o progresso; o `status.json` do run é atualizado a ca
    "n_frames": 86, "n_batches": 4, "frames_per_min": 11.7, "n_cues": 98, "language": "pt",
    "cache_hit": {"cues": false, "frames": false, "batches": false},
    "timing_s": {"frames": 26.4, "batches": 1.1}, "warnings": [], "…": "demais campos do summary.json"}],
- "estimate": {"batches": 4, "agents": 9, "seconds": 28},
+ "estimate": {"batches": 2, "agents": 4, "seconds": 28},
  "env": {"permissions_ok": true, "agents_current": false, "workflow_current": true},
  "script_path": "C:/Users/digom/.claude/skills/video-analysis/workflow/video-analysis.js",
  "workflow_args": {"schema_version": 1, "…": "seção 4"},
@@ -141,7 +142,8 @@ a saída 4 com algum vídeo pronto, que traz `videos` e `workflow_args` utilizá
 | `script_path` | o script da skill, só para o Workflow inline (passo 6 do `SKILL.md`): lido e passado em `script`, sem edição. Em `scriptPath` a ferramenta o recusa; com `env.workflow_current: true`, o normal é `name: "video-analysis"`, o workflow salvo pelo setup |
 
 - `estimate.agents` = Σ por vídeo (lotes a analisar + 2, ou + 1 na retomada com ledger, que não tem INIT; com
-  `curadoria: lotes`, 2 × lotes + 1) + 1 se houver mais de um vídeo (o CROSS).
+  `curadoria: lotes`, 2 × lotes + 1; vídeo já concluído, com `final_exists`, conta 0) + 1 se houver mais de
+  um vídeo (o CROSS, contado mesmo com `combined_exists`).
 - Com `--estimar`, o envelope é o mesmo, com `"mode": "estimate"`: só ffprobe, então `estimate.seconds` é a
   estimativa da extração e os campos de lote podem vir nulos com o cache frio.
 
@@ -189,7 +191,7 @@ a saída 4 com algum vídeo pronto, que traz `videos` e `workflow_args` utilizá
 | `videos[].slug` | ASCII curto, único no run (duplicata ganha `-2`) |
 | `videos[].duration`, `n_frames` | `hh:mm:ss`; frames únicos do vídeo ou do trecho |
 | `videos[].batches_dir` | pasta `batches-<h8>` do cache (só leitura para os agentes) |
-| `videos[].out_dir` | `<run_dir>/v<N>`, N = posição do vídeo no run (runs antigos: `<run_dir>/<slug>`). O nome não repete o slug do run: com `<run_id>/<slug>`, o analista juntava os dois e gravava fora |
+| `videos[].out_dir` | `<run_dir>/v<N>`, com `v<N>` = o `vid` do vídeo no JSON do `prepare.py`, numerado na ordem das entradas (pasta e curinga por nome; sem os pulados por `--skip-missing`). Vídeo que falha no prepare (saída 4) fica sem pasta e não renumera os outros: o run pode ter `v1` e `v3`, ou só `v2`. Runs antigos: `<run_dir>/<slug>`. O nome não repete o slug do run: com `<run_id>/<slug>`, o analista juntava os dois e gravava fora |
 | `videos[].batch_images` | imagens a abrir em cada lote; revisita dentro do mesmo lote não conta. O tamanho da lista é o total de lotes |
 | `videos[].start_batch` | primeiro lote, até o último deste run, sem `reports/batch_NNN.md` |
 | `videos[].ledger_exists` | `ledger.md` existe |
@@ -323,7 +325,8 @@ const S_FINAL = { type: 'object', required: ['status', 'report_path', 'answered'
   e `frames_missing` lista só as que nenhuma das duas abriu.
 - `report_path` fora do caminho pedido nunca vale: a segunda tentativa recebe os dois caminhos e grava no
   pedido; errado de novo, o lote fica `failed`, com o aviso `lote N: relatório gravado em caminho errado
-  (<caminho>)`, e o NEXT seguinte o recebe como FALHOU.
+  (<caminho>)`, e o FINAL o lista em `Falhos`; com `curadoria: lotes`, o NEXT seguinte também o recebe,
+  como FALHOU.
 - `coverage` é a auditoria do curador: a tabela do relatório cobre todos os ids do lote? `incomplete`
   rebaixa o lote para `partial`; `missing`, para `failed`.
 - O S_FINAL não tem `warnings`: em falha, o motivo vai no `summary`. Nos outros, vai em `warnings`. O
@@ -336,12 +339,12 @@ const S_FINAL = { type: 'object', required: ['status', 'report_path', 'answered'
   "run_id": "20261006-153012-venda-zero-clientes",
   "run_dir": "C:/Users/digom/video-analysis/runs/20261006-153012-venda-zero-clientes",
   "roles_mode": "inline",
-  "agents": 5,
+  "agents": 4,
   "videos": [{
     "slug": "venda-zero-clientes",
     "title": "venda_zero_clientes",
     "status": "partial",
-    "report_path": "C:/Users/digom/video-analysis/runs/20261006-153012-venda-zero-clientes/venda-zero-clientes/relatorio.md",
+    "report_path": "C:/Users/digom/video-analysis/runs/20261006-153012-venda-zero-clientes/v1/relatorio.md",
     "answered": "partly",
     "summary": "…resposta direta ao objetivo, ≤ 120 palavras…",
     "batches": {"total": 4, "planned": 2, "from": 1, "ok": 2, "partial": [], "failed": []},
@@ -375,12 +378,15 @@ C:\Users\digom\video-analysis\
     batches-<h8>\                       batch_NNN.md/.json, sheet_NNN.jpg, overview.jpg, transcript.md,
                                         summary.json, timeline.json, batches.json, stage.json
   runs\<AAAAMMDD-HHMMSS>-<slug>\        pedido.md, objective.md, run.json, prepare.json, status.json, relatorio.md (combinado)
-    <slug-do-vídeo>\                    ledger.md, relatorio.md, prompts\batch_NNN.md, reports\batch_NNN.md
+    v<N>\                               ledger.md, relatorio.md, prompts\batch_NNN.md, reports\batch_NNN.md
   pedidos\                              pedido.md (temporário), pedido.erro.md
   roles\                                cópia dos papéis para o modo inline
   logs\  debug\  tmp\
 ```
 
+- `v<N>`: o `vid` do vídeo (`v1`, `v2`…, na ordem das entradas). Vídeo que falha no prepare fica sem pasta e
+  não renumera os outros (`videos[].out_dir`, seção 4). Um run antigo usa o slug do vídeo no lugar, e a
+  retomada mantém esse nome.
 - `<fp8>` sai do caminho, do tamanho e da data do vídeo: vídeo movido, renomeado ou editado é extraído de novo.
 - Cada estágio do cache tem a sua chave (`<h8>`): mudar o lote não reextrai frames; mudar a legenda ou os
   falantes não reextrai frames; mudar sensibilidade ou região ignorada reextrai frames e refaz os lotes.

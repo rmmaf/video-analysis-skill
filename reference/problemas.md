@@ -96,10 +96,15 @@ renomeia o pedido para `pedido.erro.md` (o `--estimar` não mexe nele). Os coman
 
 ### Mais de 80 agentes, ou "run grande demais" (mais de 800)
 
-- **Causa:** vídeo longo. Uma reunião de 55 min dá ≈ 50 lotes, ≈ 100 agentes e horas em série.
+- **Causa:** vídeo longo, vários vídeos no mesmo run ou `--curadoria lotes`, que quase dobra a conta. Por
+  vídeo, são 1 agente por lote e mais 2 (com `lotes`, 2 por lote e mais 1); com dois vídeos ou mais, o run
+  tem mais 1. Uma reunião de 55 min dá ≈ 50 lotes, ≈ 52 agentes (≈ 100 com `lotes`) e horas em série.
 - **O que fazer:** acima de 80, confirme com o usuário antes de disparar. Acima de 800, o prepare sai
   com `run_grande_demais` e o Workflow recusa (o teto dele é 1000); `--forcar` só faz o prepare aceitar.
-  Divida em runs menores, use `--trecho` no que importa, ou `--max-lotes` para testar o objetivo antes.
+  Divida em runs menores, use `--trecho` no que importa, ou `--max-lotes` para testar o objetivo antes;
+  com `--curadoria lotes`, rodar sem ela corta a conta quase pela metade. Na retomada, só `--max-lotes` e
+  `--curadoria plano` mudam a conta: sem `--curadoria`, vale a do run (um run anterior à opção volta com
+  `lotes`).
 
 ## Frames e legenda
 
@@ -231,12 +236,14 @@ renomeia o pedido para `pedido.erro.md` (o `--estimar` não mexe nele). Os coman
 ### Run interrompido: Claude Code fechado, cota, erro
 
 - **O que fazer:** `/video-analysis retomar`, para o mais recente, ou `retomar <run_id>`. A retomada é
-  pelos arquivos: o ledger diz até que lote integrou. Se o cache tiver sido apagado (`--gc`), o
-  `--resume` reconstrói os estágios com os mesmos parâmetros e pode demorar como uma extração nova.
+  pelos arquivos: recomeça no 1º lote sem relatório (`reports\batch_NNN.md`). Se o cache tiver sido
+  apagado (`--gc`), o `--resume` reconstrói os estágios com os mesmos parâmetros e pode demorar como uma
+  extração nova.
 
 ### Limite de taxa ou cota
 
-- **O que fazer:** `--paralelo 1`, `--esforco-analista medium` (ou `low`) e `--max-lotes` para testar; sem `--curadoria lotes`.
+- **O que fazer:** `--paralelo 1`, `--esforco-analista medium` (ou `low`) e `--max-lotes` para testar; sem
+  `--curadoria lotes` (na retomada, `--curadoria plano`).
 
 ### Aviso "orçamento de tokens no fim"
 

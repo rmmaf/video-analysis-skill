@@ -16,8 +16,9 @@ Mudar um parâmetro de frames muda a chave do cache: o vídeo é extraído de no
 | `--max-lotes N` | testar o objetivo antes do run inteiro | cobertura parcial, declarada no relatório |
 | `--falantes "SPEAKER_01=Nome;…"` | a legenda tem rótulos genéricos (WhisperX) e você sabe os nomes | refaz só legenda e lotes, sem reextrair frames |
 | `--paralelo N` | `1` contra limite de taxa; até 6 com muitos vídeos curtos | — |
-| `--esforco-analista medium` (ou `low`), `--esforco-curador medium` | economizar em vídeo simples, sem tela densa | medido em 14/10 (13 lotes, tela de Excel): `medium` custou ~US$ 0,7 a menos (−13%), mas teve ~5 p.p. menos fatos completos e ~3 p.p. menos precisão |
+| `--esforco-analista medium` (ou `low`) | economizar em vídeo simples, sem tela densa | medido em 14/10 (13 lotes, tela de Excel): `medium` custou ~US$ 0,7 a menos (−13%), mas teve ~5 p.p. menos fatos completos e ~3 p.p. menos precisão |
 | `--curadoria lotes` | vídeo longo em que um lote muda a leitura do seguinte (uma demonstração em várias etapas) | curador Opus antes de cada lote: ≈ 2× o custo (medido: US$ 9,9 contra 5,4 num vídeo de 13 lotes, sem ganho de recall) |
+| `--esforco-curador medium` | com `--curadoria lotes`, economizar também no curador antes de cada lote | sem `--curadoria lotes`, não muda nada: o plano e os relatórios do curador ficam sempre em `high` |
 
 `--sensibilidade` e `--ignorar-regiao` mudam a extração: os frames são extraídos de novo, e a legenda vem
 do cache. Para várias regiões, separe-as com `;` no pedido (`ignorar_regiao: 0.80,0.75,0.20,0.25;

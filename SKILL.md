@@ -1,6 +1,6 @@
 ---
 name: video-analysis
-description: 'Analisa vídeos frame a frame contra a legenda (.vtt de mesmo nome) para um objetivo dado na chamada: gravações de tela, reuniões gravadas (Teams, Zoom) e aulas com slides. Extrai só os frames únicos (mudança só do cursor não conta), alinha cada um às falas, divide em lotes e dispara um Workflow em que um curador Opus planeja os lotes e um analista Sonnet lê os frames e as falas de cada lote, em sequência; entrega um relatório por vídeo e um combinado. Use quando pedirem para analisar, resumir, auditar ou extrair passos, decisões, erros ou evidências de um vídeo (.mp4, .mkv, .mov, .webm) ou de uma pasta de vídeos, "frame a frame", "contra a legenda" ou "contra a transcrição", ou o que aparece na tela quando algo é dito, e para retomar uma análise interrompida (`retomar`). Com `setup` (`/video-analysis setup`), prepara a máquina: ffmpeg, Python, agentes, workflow e permissões. Não escreva script ad hoc de frames: use esta skill.'
+description: 'Analisa vídeos frame a frame contra a legenda (.vtt de mesmo nome) para um objetivo dado na chamada: gravações de tela, reuniões gravadas (Teams, Zoom) e aulas com slides. Extrai só os frames únicos (mudança só do cursor não conta), alinha cada um às falas, divide em lotes e dispara um Workflow em que um curador Opus planeja os lotes e um analista Sonnet lê os frames e as falas de cada lote, em sequência; entrega um relatório por vídeo e, com dois vídeos ou mais, um combinado. Use quando pedirem para analisar, resumir, auditar ou extrair passos, decisões, erros ou evidências de um vídeo (.mp4, .mkv, .mov, .webm) ou de uma pasta de vídeos, "frame a frame", "contra a legenda" ou "contra a transcrição", ou o que aparece na tela quando algo é dito, e para retomar uma análise interrompida (`retomar`). Com `setup` (`/video-analysis setup`), prepara a máquina: ffmpeg, Python, agentes, workflow e permissões. Não escreva script ad hoc de frames: use esta skill.'
 argument-hint: "<vídeo(s) ou pasta> <objetivo> [--max-lotes N] [--trecho hh:mm:ss-hh:mm:ss] | retomar [run_id] | setup"
 allowed-tools:
   - Bash(python "${CLAUDE_SKILL_DIR}/scripts/prepare.py" *)
@@ -55,9 +55,9 @@ Quando mexer em cada uma: [`reference/parametros.md`](reference/parametros.md).
 - Não repita na resposta o JSON do `prepare.py` nem os `workflow_args`.
 - Leia um `relatorio.md` só se o usuário perguntar algo que o `summary` não responde; um frame ou
   relatório de lote, só se ele o nomear. Para aprofundar um trecho, rode um run novo com `--trecho`.
-- Invocar esta skill **é** o pedido explícito de um Workflow com muitos agentes: 2 por lote e mais 1 por
-  vídeo (e mais 1 com dois vídeos ou mais). Não junte nem pule lotes para caber numa diretriz de 10
-  agentes.
+- Invocar esta skill **é** o pedido explícito de um Workflow com muitos agentes: 1 por lote e mais 2 por
+  vídeo (com `--curadoria lotes`, 2 por lote e mais 1), e mais 1 com dois vídeos ou mais. Não junte nem
+  pule lotes para caber numa diretriz de 10 agentes.
 
 ## Fluxo
 
@@ -157,9 +157,9 @@ nos arquivos do run.
 python "${CLAUDE_SKILL_DIR}/scripts/prepare.py" --resume <run_id> --papeis inline
 ```
 
-Troque `inline` pelo modo do passo 2 e acrescente `--max-lotes N` se ele pediu. Depois, os passos 5 a
-7. O Workflow pula o que já tem arquivo: o ledger registra até que lote integrou, e vídeo com
-`relatorio.md` pronto fica de fora.
+Troque `inline` pelo modo do passo 2 e acrescente `--max-lotes N` e `--curadoria plano|lotes` só se ele
+pediu cada um; sem `--curadoria`, vale a do run (um run anterior à opção volta com `lotes`). Depois, os
+passos 5 a 7. O Workflow recomeça no 1º lote sem relatório; vídeo com `relatorio.md` pronto fica de fora.
 
 ## Setup
 
@@ -176,7 +176,7 @@ python "${CLAUDE_SKILL_DIR}/verificar_ambiente.py"
 ## Arquivos
 
 Pasta central `C:\Users\digom\video-analysis\`: `cache\<slug>-<fp8>\` (legenda, frames e lotes,
-reaproveitados entre runs) · `runs\<AAAAMMDD-HHMMSS>-<slug>\` (`relatorio.md` combinado; por vídeo,
-`v1\relatorio.md`, `v2\…`, com ledger, prompts e relatórios de lote) · `pedidos\` · `roles\` · `logs\`.
-Formatos e caminhos: [`reference/contratos.md`](reference/contratos.md). Erros e avisos:
+reaproveitados entre runs) · `runs\<AAAAMMDD-HHMMSS>-<slug>\` (`relatorio.md` combinado, com 2+ vídeos;
+por vídeo, `v1\relatorio.md`, `v2\…`, com ledger, prompts e relatórios de lote) · `pedidos\` · `roles\` ·
+`logs\`. Formatos e caminhos: [`reference/contratos.md`](reference/contratos.md). Erros e avisos:
 [`reference/problemas.md`](reference/problemas.md).

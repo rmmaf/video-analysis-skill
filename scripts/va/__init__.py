@@ -208,7 +208,7 @@ BATCH_DEFAULTS = {
 
 EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"]
 ROLES_MODES = ["agents", "inline"]
-CURATION_MODES = ["plan", "batches"]  # plan: só INIT e FINAL; batches: também o NEXT antes de cada lote
+CURATION_MODES = ["plan", "batches"]  # plan: sem NEXT; batches: o NEXT antes de cada lote depois do 1º
 
 WORKFLOW_DEFAULTS = {
     "roles_mode": "inline",

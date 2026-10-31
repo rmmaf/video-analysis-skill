@@ -1,0 +1,10 @@
+# Python and pytest caches
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Excerpts of the user's real meetings: they stay on this machine only (see tests/data/vtt/README.md)
+tests/data/vtt/*.vtt
+!tests/data/vtt/edge_cases.vtt
+docs/prior-art/da_1608/alinhamento.jsonl
+docs/prior-art/da_1608/janelas.json

@@ -1,0 +1,2 @@
+# The VTT test files are byte-exact (BOM, LF, CRLF and bare CR): no line-ending conversion
+*.vtt -text

@@ -1,0 +1,211 @@
+{
+ "schema": "va.vtt-snippets/1",
+ "note": "Excerpts of the user's real VTTs: they stay on this machine only. Real snippets are byte-exact (header bytes + a contiguous cue range of the source, line endings and BOM status kept). 'cues' is the 1-based inclusive cue range in the source.",
+ "snippets": [
+  {
+   "file": "whisperx_criando_pr.vtt",
+   "source": "C:/Users/digom/Documents/solar/databricks  schema/docs-solar/02. Conteúdos/01.Interno/Datalake/Criando sua primeira PR.vtt",
+   "source_glob": "C:/Users/digom/Documents/solar/databricks  schema/docs-solar/02. Conteúdos/01.Interno/Datalake/Criando sua primeira PR.vtt",
+   "source_cues": 50,
+   "cues": [
+    1,
+    25
+   ],
+   "timing_lines": 25,
+   "bytes": 2173,
+   "newline": "LF",
+   "bom": false,
+   "encoding": "utf-8",
+   "features": "WhisperX: SPEAKER_00/SPEAKER_01 prefixes, sentences split across speakers, LF, no BOM"
+  },
+  {
+   "file": "whisperx_falante_da1608.vtt",
+   "source": "C:/Users/digom/Documents/solar/databricks  schema/docs-solar/01.Arquitetura/3.DA/Repasse - Fluxo de Carga dos DA’s-20260818_160841-Gravação de Reunião.vtt",
+   "source_glob": "C:/Users/digom/Documents/solar/databricks  schema/docs-solar/01.Arquitetura/3.DA/Repasse - Fluxo de Carga dos DA*-20260818_160841-Grava*o de Reuni*o.vtt",
+   "source_cues": 155,
+   "cues": [
+    50,
+    63
+   ],
+   "timing_lines": 14,
+   "bytes": 1581,
+   "newline": "LF",
+   "bom": false,
+   "encoding": "utf-8",
+   "features": "WhisperX with the only FALANTE_? cue on disk (cue 58), 5 speakers, 26 s cue (61); source file name is NFD + U+2019"
+  },
+  {
+   "file": "teams_dias_estoque.vtt",
+   "source": "C:/Users/digom/Documents/solar/PES/pes_arquivos/dias_estoque.vtt",
+   "source_glob": "C:/Users/digom/Documents/solar/PES/pes_arquivos/dias_estoque.vtt",
+   "source_cues": 156,
+   "cues": [
+    1,
+    25
+   ],
+   "timing_lines": 25,
+   "bytes": 3752,
+   "newline": "CRLF",
+   "bom": false,
+   "encoding": "utf-8",
+   "features": "Teams: CRLF, UUID/utt-part ids (…/9-0, …/9-1), multi-line <v …>…</v>, 5 overlaps between different speakers"
+  },
+  {
+   "file": "teams_scanntech.vtt",
+   "source": "C:/Users/digom/Downloads/call_promocoes_scanntech.vtt",
+   "source_glob": "C:/Users/digom/Downloads/call_promocoes_scanntech.vtt",
+   "source_cues": 133,
+   "cues": [
+    1,
+    25
+   ],
+   "timing_lines": 25,
+   "bytes": 3942,
+   "newline": "CRLF",
+   "bom": false,
+   "encoding": "utf-8",
+   "features": "Teams-like: CRLF, <v Name> without cue ids, numeric entities (&#233; &#231;&#245; &#39; &#201;), overlaps between speakers"
+  },
+  {
+   "file": "plain_venda_zero_clientes.vtt",
+   "source": "C:/Users/digom/Downloads/venda_zero_clientes.vtt",
+   "source_glob": "C:/Users/digom/Downloads/venda_zero_clientes.vtt",
+   "source_cues": 98,
+   "cues": [
+    1,
+    25
+   ],
+   "timing_lines": 25,
+   "bytes": 1468,
+   "newline": "LF",
+   "bom": false,
+   "encoding": "utf-8",
+   "features": "plain: no speakers, contiguous cues, LF"
+  },
+  {
+   "file": "nohours_call_promocoes_scantech.vtt",
+   "source": "C:/Users/digom/Downloads/call_promocoes_scantech.vtt",
+   "source_glob": "C:/Users/digom/Downloads/call_promocoes_scantech.vtt",
+   "source_cues": 220,
+   "cues": [
+    1,
+    25
+   ],
+   "timing_lines": 25,
+   "bytes": 2079,
+   "newline": "LF",
+   "bom": false,
+   "encoding": "utf-8",
+   "features": "no hours: MM:SS.mmm timings, LF"
+  },
+  {
+   "file": "hourswitch_treinamento_playbook.vtt",
+   "source": "C:/Users/digom/Downloads/treinamento_playbook.vtt",
+   "source_glob": "C:/Users/digom/Downloads/treinamento_playbook.vtt",
+   "source_cues": 1306,
+   "cues": [
+    962,
+    977
+   ],
+   "timing_lines": 16,
+   "bytes": 891,
+   "newline": "LF",
+   "bom": false,
+   "encoding": "utf-8",
+   "features": "MM:SS.mmm until 59:59.460, then HH:MM:SS.mmm from 01:00:00.460 (cue 970)"
+  },
+  {
+   "file": "stutter_mix_digital.vtt",
+   "source": "C:/Users/digom/Downloads/mix_digital.vtt",
+   "source_glob": "C:/Users/digom/Downloads/mix_digital.vtt",
+   "source_cues": 145,
+   "cues": [
+    94,
+    128
+   ],
+   "timing_lines": 35,
+   "bytes": 3768,
+   "newline": "LF",
+   "bom": false,
+   "encoding": "utf-8",
+   "features": "cues 97-126: 30 consecutive identical 20-100 ms cues (17:26.240-17:27.780); cue 128: 27 s / 935-char repetitive cue"
+  },
+  {
+   "file": "long_mix_digital.vtt",
+   "source": "C:/Users/digom/Downloads/mix_digital.vtt",
+   "source_glob": "C:/Users/digom/Downloads/mix_digital.vtt",
+   "source_cues": 145,
+   "cues": [
+    59,
+    61
+   ],
+   "timing_lines": 3,
+   "bytes": 3057,
+   "newline": "LF",
+   "bom": false,
+   "encoding": "utf-8",
+   "features": "cue 60: 223.7 s / 2,820-char Whisper merge (the longest on disk)"
+  },
+  {
+   "file": "long_nonmono_pes_pedido_sugerido.vtt",
+   "source": "C:/Users/digom/Downloads/pes_pedido_sugerido.vtt",
+   "source_glob": "C:/Users/digom/Downloads/pes_pedido_sugerido.vtt",
+   "source_cues": 99,
+   "cues": [
+    1,
+    16
+   ],
+   "timing_lines": 16,
+   "bytes": 2683,
+   "newline": "LF",
+   "bom": false,
+   "encoding": "utf-8",
+   "features": "cue 1: 125.88 s / 1,684 chars; cue 12: end < start (02:29.020 -> 02:27.420); cue 13 starts before cue 12 (non-monotonic)"
+  },
+  {
+   "file": "rolling_red_aderencia.vtt",
+   "source": "C:/Users/digom/Videos/red_aderencia.vtt",
+   "source_glob": "C:/Users/digom/Videos/red_aderencia.vtt",
+   "source_cues": 826,
+   "cues": [
+    1,
+    25
+   ],
+   "timing_lines": 25,
+   "bytes": 2094,
+   "newline": "LF",
+   "bom": false,
+   "encoding": "utf-8",
+   "features": "rolling caption 1->2 (prefix growth); cue 12: 175 chars in 0.82 s; cue 13: 0.02 s; cue 14: 84 chars in 0.72 s"
+  },
+  {
+   "file": "edge_cases.vtt",
+   "source": "synthetic",
+   "source_glob": null,
+   "source_cues": null,
+   "cues": null,
+   "timing_lines": 21,
+   "bytes": 1636,
+   "newline": "mixed",
+   "bom": true,
+   "encoding": "utf-8",
+   "features": "BOM, header text + Language/Kind lines, NOTE (top and between cues)/STYLE/REGION blocks, numeric and text cue ids, Teams-like id (/18-1), cue settings, <c.x>/<i>/<b>/<v.class Name>/karaoke/ruby tags, &amp; &lt; &gt; &nbsp; &lrm; &#8203;, zero-length cue, end < start, missing blank line, comma decimal and 1-digit fraction, MM:SS timing, timing without spaces around -->, SPEAKER_02:/FALANTE_?:/'A pergunta é:' (not a speaker), two voices in one cue, tag-only cue, whitespace-only payload, seconds >= 60, a CRLF block and two CR-only blocks at the end"
+  },
+  {
+   "file": "cp1252_accented.vtt",
+   "source": "synthetic: whisperx_criando_pr.vtt cues 1-6 re-encoded as cp1252",
+   "source_glob": null,
+   "source_cues": null,
+   "cues": [
+    1,
+    6
+   ],
+   "timing_lines": 6,
+   "bytes": 724,
+   "newline": "LF",
+   "bom": false,
+   "encoding": "cp1252",
+   "features": "not valid UTF-8 (fails utf-8-sig decoding); decoded as cp1252 it equals the first 6 cues of whisperx_criando_pr.vtt"
+  }
+ ]
+}

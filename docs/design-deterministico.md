@@ -1,0 +1,721 @@
+> Spec gerada por um agente de design em 2026-10-06 durante o planejamento da skill. Onde houver conflito, prevalece o "Contrato unificado" de `docs/plano.md`.
+
+> **Erratas (implementação).** Onde o texto abaixo diverge, vale isto:
+> - `summary.json`: cada linha de `batches` tem 7 elementos, `[n, first_frame, last_frame, t0, t1, n_frames, n_images]` (`n_images` = linhas de caminho de imagem do lote).
+> - Marcador de revisita: sempre ` (revisita de Fxxxx)`, também nos lotes com rótulos em inglês.
+> - Extração sincronizada (lockstep): UMA decodificação do ffmpeg com `split` depois do `fps` (ramo A cinza para o stdout, ramo B JPEG em spool), não dois decodificadores ao mesmo tempo; medições em `tests/data/calibration.md`.
+> - Padrões: os calibrados de `ALGO_VERSION = "dedup-1.1"` (`DEDUP_DEFAULTS` e `OUTPUT_DEFAULTS` em `scripts/va/__init__.py`), que substituem os de §3.6 e o `dedup-1.0` dos exemplos.
+
+I have what I need. My recommendations rest on measurements I took on this machine. I timed decode and pipe throughput, JPEG sizes and color accuracy, the `fps`-filter timestamp grid, and keyframe intervals. I also checked a survey of all 64 `.vtt` files on disk and a frame-by-frame diff of the 128-frame baseline.
+
+# Spec: `video-analysis` skill, deterministic preprocessing layer
+
+## 0. Key decisions (with evidence)
+
+| Decision | Why (measured on this machine) |
+|---|---|
+| **Two decodes run in lockstep, not one after the other.** Decoder A sends 640×360 gray rawvideo to the analyzer. Decoder B sends MJPEG at output size to a small Python buffer ("spool"). Python writes only the selected JPEGs. | On a 180 s Teams 1080p/16fps clip: gray pass 3.2–3.7 s; MJPEG@2fps pass 3.6 s. A raw RGB pipe at 1568 px costs 7.5 s, and downscaling in numpy costs 5.9 ms per frame (rejected). A single-pass "packed planes" variant took 7.1 s on Teams and 21.6 s vs two passes at 27.5 s on 60 fps, but it removes the lookahead the hot mask needs. Running both decoders at once gives roughly single-pass wall time and keeps a 30 s lookahead with bounded memory. |
+| `-skip_frame:v noref` on both decoders (input option, `:v` is required) | metric_view (High profile, B-frames): 11.7 s → 8.1 s per 120 s; Retina .mov: 9.7 s → 6.9 s per 60 s. It skips only non-reference frames, so image quality is unchanged. No effect on Teams files (Constrained Baseline). Without `:v`, the aac decoder rejects the option and ffmpeg fails. |
+| `fps=fps=S:start_time=0:round=near` as the sampling grid | showinfo confirms `pts_time = n/S` exactly on the 16 fps VFR fixture, and also with `-ss 100 -t 10` (pts restart at 0). Timestamps are VFR-safe with no stderr parsing. Sample time is t_k = range_start + k/S. |
+| No per-frame seeking and no hardware decode | Keyframe intervals are 6 s (Teams), 4 s (metric_view), ~1 s (.mov), so seeking costs about as much as decoding everything. d3d11va took ~110 s per 120 s (slower). |
+| Default sample rate 2 fps (same as the baseline); 4 fps available as an option | Decode-bound either way (gray@2 ≈ gray@4). 2 fps keeps the per-sample MJPEG and Python cost low. |
+| Output: `scale=OW:OH:flags=lanczos` then `-c:v mjpeg -q:v 3` | At 1568×882: 161 KB average (4:2:0), 192 KB with 4:4:4. Color error vs raw RGB is 1.66, so color range is correct with the default pixel format. Always below the 500 KB re-encode limit. |
+| Settle/debounce plus motion backoff | In the baseline, 58 of 127 gaps are ≤ 1 s (a mid-transition frame followed by the settled one). arq1_sharepoint kept 900 frames, about 15 frames per 11 s while scrolling a notebook. |
+| Cursor tolerance by connected components on small diffs; hot mask = windowed (±30 s), split at layout cuts, three criteria | da_1608 has a presenter cam, participant avatars with speaker rings, and a nested Teams timer. A global mask covered 0.5% of pixels and missed most of these. |
+
+**Reused from `frames.py`:**
+- rawvideo gray pipe with `flags=area` scaling;
+- comparing against the LAST KEPT frame;
+- the idea of an activity-frequency hot mask with dilation;
+- the second-pass MJPEG `image2pipe` stream split on `FFD9 FFD8`;
+- avoiding a `select=` filter with thousands of terms;
+- "interval = until the next kept frame";
+- merging a short trailing window;
+- the ProcessPool across videos.
+
+**Fixed relative to `frames.py`:**
+- the VTT regex required hours and kept `<v>` tags;
+- the generic `Name:` speaker regex misparsed sentences like "A pergunta é: …";
+- the ±3 s cue slack duplicated text across frames;
+- `low.npy` was a 1.7 GB temp file;
+- `buf += bloco` buffer growth was quadratic;
+- there was no cursor, settle, or motion handling;
+- the 0.8% area rule dropped real small changes such as a typed word.
+
+---
+
+## 1. Layout
+
+### Skill folder (`C:\Users\digom\.claude\skills\video-analysis\`)
+
+```
+SKILL.md, setup.md                         (written by the agentic-layer owner; must include the CLI snippet from §2)
+scripts\
+  prepare.py            main CLI (prepare | --resume | --estimate | --gc)          WP3
+  verificar_ambiente.py setup/check; same convention as your other skills
+                        ([OK]/[FALTA]/[AVISO], --json, exit 0/1)                    WP3
+  zoom.py               native-resolution crop of a frame from the source video     WP3
+  calibrate.py          parameter sweeps / replays / baseline comparison            WP1
+  explain.py            diagnostic panel for "why was this kept / ignored"          WP1
+  va\__init__.py        VERSION, ALGO/VTT/RENDER versions, all DEFAULTS dicts        WP0
+  va\common.py          UTF-8 console, JSON/MD I/O, time format/parse, slugify,
+                        unicode-tolerant path resolution, atomic write, as_posix    WP0
+  va\contracts.py       TypedDicts for §6 + check_frames/check_cues/check_contiguity WP0
+  va\probe.py           ffprobe → VideoInfo                                          WP1
+  va\ffmpeg_io.py       command builders, RawFrameReader, JpegStreamReader          WP1
+  va\dedup.py           Analyzer: pure numpy, no I/O                                  WP1
+  va\extract.py         run_frames_stage (lockstep A+B, spool, writes frames)       WP1
+  va\vtt.py             parse/normalize/merge/split → cues                           WP2
+  va\align.py           frame↔cue overlap                                             WP2
+  va\batching.py        batch planner                                                 WP2
+  va\render.py          batch_NNN.md/.json, transcript.md, timeline.json, batches.json WP2
+  va\sheets.py          contact sheets                                                WP2
+  va\cache.py           keys, stage dirs, stage.json, locks, GC                      WP3
+  va\discover.py        input expansion, VTT matching, candidate suggestions         WP3
+  va\runs.py            run folders, resume scan, workflow_args                      WP3
+  tests\                conftest.py, synth.py, data\vtt\*.vtt, data\baseline\*.json, test_*.py, pytest.ini
+```
+
+Scripts start with `sys.dont_write_bytecode = True`, and `pytest.ini` sets `cache_dir` under the workspace `tmp\`, so the skill folder stays clean.
+
+### Workspace
+
+Location: `VIDEO_ANALYSIS_HOME`, else `--home`, else `C:\Users\digom\video-analysis`. All generated paths are ASCII and short.
+
+```
+cache\<video_key>\                      video_key = slug + "-" + fp8   (e.g. repasse-fluxo-de-carga-20260818-160841-3fa9c2d1)
+   source.json  probe.json  last_used  .lock
+   cues-<h8>\     cues.json  stage.json
+   frames-<h8>\   F0001_000000.jpg …  frames.json  samples.csv  ffmpeg_a.log  ffmpeg_b.log  stage.json
+   batches-<h8>\  batch_001.md  batch_001.json  sheet_001.jpg …  batches.json  timeline.json
+                  transcript.md  summary.json  stage.json
+runs\<YYYYMMDD-HHMMSS>-<slug24>\
+   run.json  objective.md  status.json  prepare.json
+   v1\prompts\  v1\reports\  v1\zoom\      v2\…
+logs\    prepare-<stamp>.log / .json
+debug\   explain_*.png, calib\*.npy, regression\
+tmp\
+```
+
+**Slug rule.** NFKD, drop combining marks, drop `’‘“”`, lowercase, replace runs of `[^a-z0-9]` with `-`, cut to 24 chars at a `-`. If the stem contains `\d{8}_\d{6}` (Teams), append `-yyyymmdd-hhmmss`. If the result is empty, use `video`.
+
+**Frame file name:** `F{n:04d}_{HHMMSS of captured_at}.jpg`. IDs are 1-based; the width grows to 5 digits only if there are more than 9,999 frames. Cue IDs are `C0001…`; batch IDs are `B001…`.
+
+---
+
+## 2. CLI
+
+```
+python prepare.py INPUT [INPUT ...] [options]      # INPUT = file | folder | glob ("*" or "?" only, used only if the literal path doesn't exist)
+  --home PATH                     default: env VIDEO_ANALYSIS_HOME or %USERPROFILE%\video-analysis
+  --recursive                     search folders recursively (default: off)
+  --skip-missing                  folders: skip videos without a same-basename .vtt (default: fail before any processing)
+  --vtt PATH                      explicit escape hatch, only allowed with exactly one video
+  --vtt-offset SEC                shift all cues (default 0)
+  --speaker-names "SPEAKER_01=Lianderson;SPEAKER_03=Francisco"
+  --start T --end T               [HH:]MM:SS[.mmm] or seconds
+  --sample-fps 2   --settle 1.0   --max-settle-wait 3.0   --motion-interval 4   --motion-max-interval 30
+  --ignore-region x,y,w,h         repeatable, fractions of the displayed frame
+  --cursor-size 0.045             cursor box height as a fraction of frame height (width = 2/3 of it)
+  --sensitivity low|normal|high   threshold presets (§3.6)
+  --hot-mode windowed|off         (global exists only in calibrate.py)
+  --no-revisit
+  --max-edge 1568 (≤2000)   --jpeg-q 3 (ffmpeg qscale 2..5)
+  --batch-frames 20  --batch-text 8000  --batch-span 900  --no-soft-cuts
+  --run [NAME]                    create runs/<stamp>-<slug(NAME or first video)>/
+  --objective-file PATH | --objective "text"     (needs --run)
+  --resume RUN_DIR                no processing; per video, report the first batch without a report
+  --estimate                      ffprobe only; estimated seconds per video
+  --gc [DAYS=30]                  delete cache entries whose last_used is older than DAYS
+  --jobs 2                        videos processed in parallel (separate processes)
+  --force [all|cues|frames|batches]
+  --analyze-only                  pass A only (no JPEGs, no batches): calibration
+  --sequential                    pass A then pass B (fallback; must give identical output)
+  --debug                         keep the analysis memmap; verbose logs
+  --json-out PATH   --ascii   --quiet
+Exit codes: 0 ok · 2 input/usage (e.g. missing VTT) · 3 environment (ffmpeg missing) · 4 a video failed (others are in the JSON) · 130 interrupted
+```
+
+**Other scripts:**
+
+```
+python verificar_ambiente.py [--json] [--home PATH] [--agents video-curator,video-analyst]
+python zoom.py --frames-json PATH --frame F0042 [--region x,y,w,h] [--scale 2] [--out-dir DIR]   # prints the PNG path
+python explain.py --frames-json PATH (--frame F0042 | --sample 812 | --top-ignored 12) [--out PATH]
+python calibrate.py VIDEO [--start --end] [--set k=v ...] [--grid "k=v1,v2;k2=..."] [--truth truth.json]
+                    [--baseline times.json] [--cache-stream] [--hot-mode global|windowed]
+```
+
+**Long runs.** The Bash tool caps a command at 600 s; 1080p60 needs about 0.12–0.15× realtime. The SKILL.md snippet should therefore say:
+- `python` (never `python3`);
+- `run_in_background` whenever the `--estimate` result is above 400 s;
+- then read `<run_dir>/prepare.json`. `run_dir` is printed to stderr first, as `run_dir: …`.
+- `status.json` is refreshed every 5 s.
+
+---
+
+## 3. Frame dedup algorithm
+
+### 3.1 Pipeline per video
+
+**Probe.** Call ffprobe to get duration, displayed width/height (after SAR and rotation), fps, VFR flag, codec, `has_b_frames`, and the first video stream that is not `attached_pic`.
+
+**Analysis size:**
+- AH = min(360, floor(H/8)·8);
+- AW = round(AH·W/H/8)·8;
+- examples: 1080p → 640×360; 3024×1964 → 552×360.
+
+**Output size:** scale = min(1, max_edge / max(W, H)), then round both sides to even numbers. 1080p → 1568×882; the .mov → 1568×1018.
+
+**Decoder A:**
+```
+ffmpeg -hide_banner -nostdin -loglevel error -skip_frame:v noref [-ss S -t D] -i SRC -map 0:v:N -an -sn -dn \
+  -vf "fps=fps=2:start_time=0:round=near,scale=AW:AH:flags=area,format=gray" -f rawvideo -pix_fmt gray -
+```
+
+**Decoder B:** the same input options and the same `fps` filter, then `scale=OW:OH:flags=lanczos`, `-c:v mjpeg -q:v 3 -f image2pipe -`.
+
+**Process handling:**
+- `stdin=DEVNULL`; stderr goes to `ffmpeg_a.log` / `ffmpeg_b.log` files (never an undrained pipe);
+- `creationflags=CREATE_NO_WINDOW`;
+- `bufsize=0`, reading with `readinto` into a preallocated `memoryview`.
+
+**Lockstep loop:**
+1. Read A[r] and B[r] alternately (no deadlock: the two processes are independent).
+2. Compute pair activity for (r−1, r) immediately.
+3. Push the gray frame into the analyzer, which decides sample a = r − H with H = 30 s × S lookahead.
+4. The JPEG spool keeps samples [a − settle_pairs − 1, r], about 60–70 JPEGs (~12 MB).
+5. On commit with captured sample c, write `spool[c]` to disk as-is (no re-encode).
+6. At EOF, assert count(B) == count(A). On a mismatch, or if B dies, finish A and then run B again sequentially. Any still-missing selected sample is repaired with `-ss t -frames:v 1`.
+
+**Safety net:** if a JPEG is larger than 480 KB, re-encode it with Pillow at q=85 and mark `reencoded: true`.
+
+**Memory:** analysis ring ~16 MB, spool ~12 MB, activity ring < 2 MB. Peak RSS should stay under 400 MB.
+
+### 3.2 Comparison primitive `classify(cur, ref, active)`
+
+Used for previous-sample comparisons (P), last-kept comparisons (R) and the camera heartbeat.
+
+1. Diff without `int16` copies: `d = np.maximum(a,b) - np.minimum(a,b)` (uint8, 0.6 ms at 640×360). Then weak = d > T_lo(16) & active; strong = d > T_hi(40) & active.
+2. Fast paths:
+   - weak px = 0 → `same`;
+   - strong px > 0.3% of active px, or weak px > 5% of active px → `change`; bbox and cell map come from `np.nonzero` row/col any.
+3. Otherwise, connected components on a 4-px cell grid (90×160 at 640×360). Use either vectorized label propagation (repeated 3×3 max over active cells until stable; typically 3–8 iterations, worst case ≤ 30 × ~50 µs) or BFS over active cells (it's the implementer's choice; both are acceptable). Map each weak pixel to its component label, then get exact bboxes, pixel counts and strong counts with `np.minimum.at` / `np.maximum.at` / `np.add.at`.
+4. Drop noise components: px < 3, or (strong px < 2 and px < 0.5% of frame, i.e. 1,152 px).
+5. Cursor test, in analysis pixels: cw = ceil(0.030·AH)+1 = 12, ch = ceil(0.045·AH)+1 = 18 (≈ 49 px tall at 1080p, which covers 150% scaling plus shadow), budget = 0.6·cw·ch.
+   ```
+   cursor_like(w,h,px): px <= 2*budget and (
+       (w<=cw and h<=ch)                          # pointer, I-beam, caret, ≤ ~4 glyphs
+    or (h>=0.5*ch and w<=2*cw and h<=ch)          # old+new position merged horizontally (must be pointer-tall, not a text line)
+    or (w<=cw and h<=2*ch)                        # merged vertically
+    or (h>=0.5*ch and w<=1.6*cw and h<=1.6*ch))   # merged diagonally
+   ```
+6. Result:
+   - no components → `same`;
+   - every component cursor-like and count ≤ 3 (old pointer, new pointer, caret) → `cursor`;
+   - otherwise `change`, with frac = counted px / active px, the bbox, and the 8×8 cell map.
+
+### 3.3 Pair activity and hot mask (computed at read time; used with lookahead)
+
+**Pair activity A_r.** On the raw (unmasked, except `--ignore-region`) diff of (r−1, r), drop noise and cursor-like components. Cells are 8×8 px (80×45 grid); a cell is active if it has ≥ 4 counted weak px. e_r = active cells / all cells.
+
+**Pair classes:**
+- cut_r = e_r ≥ 0.5 and e_{r+1} < 0.2 (a big change followed by calm; continuous camera motion is never a cut);
+- small_r = e_r ≤ 0.03;
+- local_r = e_r ≤ 0.25.
+
+**Window for sample k:** pairs in [k−H, k+H] (±30 s), cut at the nearest cuts on each side. Cut pairs add zero. If the window has fewer than 20 pairs, there is no hot mask. Rolling prefix sums give three per-cell counters:
+- duty_local = local active pairs / window pairs;
+- duty_all = all active pairs / window pairs;
+- recur = small active pairs per minute.
+
+**Hot rule (with hysteresis; state resets at each cut):**
+- on if duty_local ≥ 0.5, or duty_all ≥ 0.85, or recur ≥ 8/min;
+- stays on while duty_local ≥ 0.3, or duty_all ≥ 0.6, or recur ≥ 4/min.
+
+**Post-processing:** dilate by 1 cell. Then fill the bounding box of each compact hot component (fill ratio ≥ 0.4 and bbox ≤ 25% of the frame), which completes webcam tiles.
+
+**Why each criterion:**
+
+| Criterion | Catches | Must not catch |
+|---|---|---|
+| duty_local | webcam tiles, timers, spinners, animated GIFs | scrolling (large events are excluded) |
+| duty_all ≥ 0.85 | talking heads, embedded video (continuous) | scrolling with pauses, which stays in the motion logic |
+| recur | speaker-highlight rings, avatar swaps, mic indicators | typing (2–4 hits per cell); cursor hovering (cursor components are excluded) |
+
+**Timing behaviour:**
+- With duty_on = 0.5, a centered window turns the mask on exactly when activity starts and releases it about 12 s after activity ends. There is no early masking.
+- Cuts stop the gallery-layout mask from leaking into the next screen-share segment.
+- Global (baseline-style) mode is kept only in `calibrate.py`, for an A/B comparison on the fixtures.
+
+**Camera-like segments.** When the hot fraction ≥ 0.5, compare the full frame (static ignore mask only) against REF. Every ≥ 30 s, if frac ≥ 0.10, commit kind `heartbeat`. This is the graceful degradation for real camera footage, at about 2 frames/min.
+
+### 3.4 State machine (processing sample k with mask_k = static_ignore | hot_k)
+
+```
+P = classify(G[k], G[k-1], ~mask_k);  R = classify(G[k], REF, ~mask_k)   (REF=None → R=change)
+quiet = P.cls in {same, cursor}
+if R.cls in {same, cursor}:  pending = None                     # change reverted (tooltip flash) → nothing kept
+elif pending is None:        pending = k; stable = 0
+if pending is not None and k > pending:
+    stable = stable + 1 if quiet else 0
+    if stable >= settle_pairs (= max(1, round(settle_s*S)) = 2):
+        commit(c = k - stable, start = pending, kind = "first" if no frames yet else "settled"); level = 0
+    elif t[k]-t[pending] >= max_settle_wait (3 s) and t[k]-t[last_captured] >= min(4·2^level, 30):
+        commit(c = k, start = pending, kind = "motion"); level += 1
+camera heartbeat check (§3.3)
+EOF: if pending is not None → commit(c = last, start = pending, kind = "final")
+commit(c, start, kind):
+    revisit check: classify(G[c], X, ~mask) for the last 16 kept frames within 600 s (excluding the previous one);
+    on match → same_as = X.id, file = X.file, no new JPEG
+    REF = G[c]; record change = R at c (frac, bbox, blobs, cell map); pending = None
+```
+
+**Frame 1:** `start` = range start; `captured_at` = first stable sample (skips fade-ins).
+
+**Intervals:**
+- `start` = first detection of the change (sample time);
+- `captured_at` = the representative sample;
+- `end` = next frame's `start`; the last `end` = range end, i.e. min(duration, `--end`).
+- Invariants: contiguous over [range_start, range_end], and start ≤ captured_at < end (the last frame may have captured_at ≤ end). Times are handled internally as integer milliseconds; JSON uses seconds with 3 decimals.
+
+### 3.5 Density warnings and suggested ignore regions
+
+- Warn when frames/min > 12 overall, or > 30 in any 60 s window.
+- **Suggestion:** cluster the change bboxes of kept frames that are ≤ 25% of the frame (IoU ≥ 0.5, deterministic order). If a cluster explains ≥ 30% of frames and ≥ 10 frames, suggest `--ignore-region` = cluster union bbox + 1 cell, rounded to 2 decimals.
+- Also warn about: camera-like segments; > 600 frames (estimated image tokens); VTT covering < 50% of the duration; cues past the end (maybe needs `--vtt-offset`).
+
+### 3.6 Defaults
+
+`DEDUP_DEFAULTS`:
+
+| Param | Normal | Low | High |
+|---|---|---|---|
+| t_lo / t_hi | 16 / 40 | 20 / 50 | 12 / 32 |
+| cursor_h_frac / cursor_w_frac | 0.045 / 0.030 | 0.060 / 0.040 | 0.035 / 0.024 |
+
+Same for every preset: max_cursor_blobs 3, min_blob_px 3, min_strong_px 2, weak_only_min_frac 0.005, cell_px 8, cell_active_px 4, cut 0.5/0.2, the hot thresholds above, settle 1.0, max_settle_wait 3.0, motion 4→30, heartbeat 30 s / 0.10, revisit 16 frames / 600 s.
+
+These are starting values. They get frozen after §9 calibration, and `ALGO_VERSION` is bumped.
+
+`samples.csv` (always written, ~2 MB/h) has one row per sample:
+`k,t,e,cut,local,small,hot_frac,act_frac,p_cls,p_px,p_blobs,r_cls,r_px,r_blobs,r_frac,r_bbox,state,stable,event,frame`
+
+---
+
+## 4. VTT parsing rules (`vtt.py`)
+
+### Read
+1. Decode bytes as `utf-8-sig`. If that fails, fall back to cp1252 with a warning.
+2. Normalize `\r\n` and `\r` to `\n`; NFC-normalize the text.
+3. `WEBVTT` header is optional (warn if missing). Parse a `Language:` header if present.
+
+### Blocks
+1. Split on blank or whitespace-only lines. Skip `NOTE`, `STYLE` and `REGION` blocks.
+2. Timing regex: `^\s*((?:\d+:)?\d{1,2}:\d{2}[.,]\d{1,3})\s*-->\s*((?:\d+:)?\d{1,2}:\d{2}[.,]\d{1,3})(.*)$`
+   - hours are optional and per cue (treinamento_playbook switches from `59:59.460` to `01:00:00.460`);
+   - pad fractions to the right ("5" = 500 ms); `,` is accepted;
+   - minutes or seconds ≥ 60 → warn and skip;
+   - anything after `-->` (cue settings) is ignored.
+3. A line before the timing line is the cue id (Teams `uuid/18-1` gives `utt = 18`). If a block contains a second timing line (missing blank line), split there.
+
+### Payload
+1. Speaker:
+   - `<v(?:\.[\w.-]+)?\s+([^>]+)>` → speaker. If a cue has several voices, split it into sub-cues with the same times.
+   - Else `^\s*((?:SPEAKER|FALANTE)_(?:\d{1,3}|\?))\s*:\s*`. `FALANTE_?` occurs 17 times on disk; it maps to tag `S?`.
+   - No other `Name:` heuristic.
+2. Strip every tag `<[^>]+>`, including `<c.x>`, `<i>`, `<00:00:01.000>` and ruby tags.
+3. `html.unescape` (Teams-like files use `&#233;`, `&#39;`).
+4. Remove U+200B–200F, U+202A–202E, U+2060 and U+FEFF; NBSP → space.
+5. Keep the line list (needed for rolling-caption detection), then join with a space and collapse whitespace. Drop empty cues and count them.
+
+### Times
+- If end < start: set end = start + 0.5 s and warn.
+- Minimum duration is 0.1 s; otherwise a zero-length cue on a frame boundary matches no frame.
+- Apply `--vtt-offset`.
+- Clip to the range; drop cues that start at or after the range end.
+
+### Order
+Stable sort by (start, end, source index); pes_pedido_sugerido is non-monotonic.
+
+### Merges (always same speaker, gap ≤ 0.5 s or overlapping)
+- **Identical normalized text** → one cue [min start, max end]. mix_digital has 30 consecutive cues of 20–100 ms with the same sentence.
+- **Rolling caption, prefix growth** → keep the longer text, start = first. red_aderencia: "A rede de aderência" → "A rede de aderência pesquisa".
+- **2-line scroll** (last line of the earlier cue = first line of the next) → concatenate the remainder.
+- **Different speakers are never merged.** All Teams overlaps on disk are between different speakers (110 in "PES - Comercial", 57 of them nested interjections); keep both.
+
+### Repairs (mark `approx: true`)
+- **Long cue:** duration > 15 s and text > 200 chars (Whisper merges up to 223 s). Split at `(?<=[.!?…])\s+` into chunks of about 6–10 s at the cue's own characters-per-second. If a sentence has no punctuation, cut at word boundaries. Allocate time in proportion to cumulative characters.
+- **Too fast:** more than 30 chars/s (red_aderencia has a 220-char cue lasting 0.8 s). Extend end to min(next cue start, start + chars/15).
+
+### Outputs
+- IDs `C0001…` assigned after all edits; `src` lists source indexes.
+- Speakers get tags `S1…` by first appearance, with cue count and talk seconds; `--speaker-names` renames them.
+- Language: from the header, else a stopword ratio (pt / en / es / und).
+- `style`: whisperx | teams | plain | mixed.
+
+---
+
+## 5. Alignment and batching
+
+### Alignment (integer ms)
+A cue overlaps a frame if `cue.start < frame.end and cue.end > frame.start`. Each frame gets its cues sorted by start; each cue gets the list of frames it overlaps.
+
+### Rendering rule
+- Inside a batch, a cue's full text is printed at the first frame it overlaps.
+- At later frames it appears as `↳ C0123`.
+- A cue that began before the batch's first frame is printed in full with `(cont.)`.
+
+### Batching (deterministic greedy)
+Parameters: max_frames 20, soft_min 12 (0.6×), text budget 8,000 chars of distinct cue text, max span 900 s.
+
+1. From the batch start i0, extend until adding the next frame would break one of the three limits. That position is j_limit. A batch always has at least one frame; a single frame with too much text becomes `over_budget: true`.
+2. Score each boundary candidate b in [i0+soft_min, j_limit]:
+   - +3 if frame b's change frac ≥ 0.5 (scene or layout change);
+   - +2 if no cue spans frame b's start;
+   - +1 if no cue overlaps ±1 s around it;
+   - +1 if frame b−1 lasts ≥ 30 s.
+3. Pick the highest score; on a tie, the larger b. If every score is 0, cut at j_limit.
+4. **Tail:** if the last batch has fewer than 8 frames, merge it into the previous one when the total is ≤ 25 frames (1.25×). Otherwise split the two batches' frames evenly (ceil for the first half).
+5. **Revisit frames** count toward the frame cap but add no image tokens when their original is in the same batch.
+
+**Token estimates:**
+- image tokens = ceil(w/28)·ceil(h/28): 1,792 for 1568×882, 2,072 for 1568×1018;
+- text tokens = ceil(chars/3.5).
+
+---
+
+## 6. Data contracts
+
+All JSON is UTF-8, `ensure_ascii=False`, `indent=1`, `allow_nan=False`, `\n` newlines, forward-slash absolute paths, fixed key order. Timing values appear only in `stage.json` and the stdout JSON.
+
+### frames.json
+
+```json
+{"schema":"va.frames/1","algo_version":"dedup-1.0",
+ "video":{"path":"C:/Users/digom/Documents/solar/databricks  schema/docs-solar/01.Arquitetura/3.DA/Repasse - Fluxo de Carga dos DA’s-20260818_160841-Gravação de Reunião.mp4",
+          "title":"Repasse - Fluxo de Carga dos DA’s-20260818_160841-Gravação de Reunião","key":"repasse-fluxo-de-carga-20260818-160841-3fa9c2d1",
+          "duration_s":544.512,"width":1920,"height":1080,"fps_avg":16.0,"vfr":true,"codec":"h264"},
+ "range":[0.0,544.512],"sample_fps":2.0,"n_samples":1089,"analysis_size":[640,360],"output_size":[1568,882],
+ "frames_dir":"C:/Users/digom/video-analysis/cache/repasse-fluxo-de-carga-20260818-160841-3fa9c2d1/frames-8c41d2e0",
+ "params":{"...all effective dedup+output params...":0},
+ "frames":[{"id":"F0001","file":"F0001_000000.jpg","start":0.0,"end":2.0,"captured_at":0.5,"sample":1,
+            "kind":"first","same_as":null,"change":{"frac":1.0,"bbox":[0,0,1,1],"blobs":0},
+            "hot_frac":0.0,"bytes":51392,"tokens":1792}],
+ "n_unique":97,
+ "hot_segments":[{"start":0.0,"end":544.5,"frac":0.034,"bbox":[0.83,0.11,0.17,0.17],"cells":"<base64 packbits 80x45>"}],
+ "density":{"frames_per_min":11.1,"max_per_min":26,"max_window":[180.0,240.0]},
+ "suggested_ignore":[{"region":[0.83,0.10,0.17,0.25],"explains":0.47}],"warnings":[]}
+```
+
+- `kind` ∈ first | settled | motion | heartbeat | final.
+- bbox values are fractions [x, y, w, h].
+- A new hot segment starts when the mask's Jaccard vs the current segment's mask drops below 0.8.
+
+### cues.json
+
+```json
+{"schema":"va.cues/1","parser_version":"vtt-1.0",
+ "vtt":{"path":"…/Repasse - … DA’s-20260818_160841-Gravação de Reunião.vtt","sha1":"…","style":"whisperx","language":"pt"},
+ "offset_s":0.0,
+ "stats":{"raw":155,"kept":153,"merged_dupes":0,"merged_rolling":0,"split_long":1,"extended_fast":0,"dropped_empty":0,"overlaps":0,"nonmonotonic":0},
+ "speakers":[{"tag":"S1","name":"SPEAKER_01","cues":120,"talk_s":401.2},{"tag":"S?","name":"FALANTE_?","cues":1,"talk_s":0.3}],
+ "cues":[{"id":"C0001","start":2.034,"end":3.115,"spk":"S1","text":"Aí o que acontecia?","approx":false,"src":[1],"utt":null}]}
+```
+
+### timeline.json
+
+```json
+{"frames":[{"id":"F0001","start":0.0,"end":2.0,"cues":["C0001"]}],"cue_frames":{"C0001":["F0001","F0002"]},
+ "batches":[{"id":"B001","frames":["F0001","F0020"]}]}
+```
+
+### batches.json (index)
+
+```json
+{"n_batches":6,"params":{},"batches":[{"n":1,"id":"B001","frames":["F0001","F0020"],"t":[0.0,183.5],"n_frames":20,
+ "cues":["C0001","C0042"],"chars":6100,"over_budget":false,"est_tokens":{"images":35840,"text":1743,"sheet":1568},
+ "md":"…/batch_001.md","json":"…/batch_001.json","sheet":"…/sheet_001.jpg"}]}
+```
+
+### batch_NNN.json
+
+```
+{video:{title,key,duration_s}, batch:<index entry>, prev:{id,t}|null, next:{id,t}|null,
+ speakers:[{tag,name}],
+ frames:[{id,path,start,end,captured_at,kind,same_as,cues:[...],new_cues:[...]}],
+ cues:[{id,start,end,spk,text,approx,cont}]}
+```
+
+### batch_NNN.md (LLM-facing)
+
+Labels are pt-BR when the detected language is pt, otherwise English. Every frame line carries the full absolute path in the real file; `…` below is only for brevity in this spec.
+
+```markdown
+# Lote B003 de 6 · F0041–F0060 · 00:02:54.0–00:05:17.5
+Vídeo: Repasse - Fluxo de Carga dos DA’s-20260818_160841-Gravação de Reunião · 00:09:04.5 · 1568×882
+Falantes: S1 = SPEAKER_01 · S2 = SPEAKER_02 · S3 = SPEAKER_03 · S? = FALANTE_?
+Folha de contato: C:/Users/digom/video-analysis/cache/repasse-fluxo-de-carga-20260818-160841-3fa9c2d1/batches-1b2c3d4e/sheet_003.jpg
+Anterior: B002 (00:01:12.5–00:02:54.0) · Próximo: B004 (00:05:17.5–00:06:40.0)
+Leitura: frame vale de início a fim; img = instante da imagem; fala completa na 1ª vez no lote, depois ↳ id; ≈ horário aproximado; (cont.) começou antes do lote.
+
+### F0041 · 00:02:54.0–00:02:58.5 · img 00:02:54.5
+C:/Users/digom/video-analysis/cache/repasse-fluxo-de-carga-20260818-160841-3fa9c2d1/frames-8c41d2e0/F0041_000254.jpg
+- C0061 00:02:54.6–00:02:58.7 S1: Por exemplo, se eu for rodar o fluxo agora, eu vou gerar uma lista com esses três arquivos.
+
+### F0042 · 00:02:58.5–00:03:20.5 · img 00:02:59.5
+C:/Users/digom/video-analysis/cache/repasse-fluxo-de-carga-20260818-160841-3fa9c2d1/frames-8c41d2e0/F0042_000259.jpg
+- ↳ C0061
+- C0062 00:02:59.3–00:03:03.8 S1: Seria interessante criar uma tabela na bronze com essa informação.
+- C0063 00:03:04.8–00:03:07.3 S1: Eu coloco essa informação aqui na tabela, tá?
+- C0064 00:03:08.9–00:03:09.4 S3: aqui.
+
+### F0043 · 00:03:20.5–00:03:22.0 · img 00:03:20.5 · movimento
+C:/…/frames-8c41d2e0/F0043_000320.jpg
+- C0065 00:03:20.6–00:03:21.4 S3: Deixa eu ver essa aqui.
+- C0066 00:03:21.7–00:03:21.8 S2: Não,
+
+### F0044 · 00:03:22.0–00:03:37.0 · img 00:03:23.0 · = F0042 (mesma tela, acima)
+- C0067 00:03:23.4–00:03:23.7 S?: Essa aqui.
+- C0068 00:03:29.1–00:03:36.7 S1: colunas que estão mapeadas lá no meu arquivo do dicionário, eu adiciono mais duas colunas lá em cada tabela.
+
+### F0045 · 00:03:37.0–00:03:52.5 · img 00:03:38.0
+C:/…/frames-8c41d2e0/F0045_000338.jpg
+- C0069 ≈00:03:37.8–00:03:44.1 S1: dentro do próprio notebook que são essas duas últimas colunas aqui ó data do arquivo
+```
+
+- If a revisit's original is in an earlier batch, the frame gets a path line ending in `(revisita de F0012)`.
+- A frame with no cues gets the line `- (sem fala)`.
+
+### transcript.md (read once by the curator)
+
+Consecutive cues from the same speaker form one paragraph when the gap is ≤ 1.5 s, up to 600 chars or 60 s.
+
+```
+# Transcrição · <title>
+Duração 00:09:04.5 · 153 falas · Falantes: S1 = SPEAKER_01 (78%) · S3 = SPEAKER_03 (15%) …
+[00:02:54.6 · F0041–F0042 · B003] S1: Por exemplo, … essa informação aqui na tabela, tá? (C0061–C0063)
+```
+
+### Contact sheet `sheet_NNN.jpg`
+
+- Columns: 5 if n ≤ 20, 6 if n ≤ 30, else 8. Tile width = floor((1600 − 4·(cols+1))/cols); tile height follows the source aspect; 4 px gaps.
+- A 20 px label band per tile: `F0041 02:54.5`, plus `M` (motion) or `=F0012` (revisit). Font: `C:/Windows/Fonts/consola.ttf` at 14 px, falling back to `ImageFont.load_default(size=14)`.
+- Thumbnails: `Image.draft("RGB", (2tw, 2th))` then LANCZOS `thumbnail`.
+- Saved as JPEG q=80 with `optimize=True` (deterministic).
+- A 20-frame sheet is about 1560×780, which is ≈1,568 tokens.
+
+### summary.json (per video, deterministic) and stdout JSON
+
+summary.json fields:
+- identity: title, video_path, vtt_path, video_key;
+- media: duration_s, range, resolution, fps_avg, vfr, output_size;
+- sampling and frames: sample_fps, n_samples, n_frames, n_unique, frames_per_min, kinds{};
+- text: n_cues, n_speakers, language, cue_style;
+- batches: n_batches, `batches`: `[[n,"F0001","F0020",t0,t1],…]`;
+- `est_tokens`{frames, sheets, text};
+- `paths`{frames_dir, batches_dir, frames_json, cues_json, timeline_json, transcript_md, batches_json};
+- warnings[].
+
+The stdout JSON is one line (also written to `--json-out`, `<run>/prepare.json` and `logs/`):
+
+```json
+{"ok":true,"mode":"prepare","version":"1.0.0","home":"C:/Users/digom/video-analysis","run_dir":"…","json_path":"…",
+ "videos":[{"vid":"v1","...summary fields...":0,"cache_hit":{"cues":true,"frames":false,"batches":false},"timing_s":{"frames":21.4,"batches":1.3}}],
+ "workflow_args":{
+   "run_dir":"C:/Users/digom/video-analysis/runs/20261006-153012-repasse-fluxo","stamp":"20261006-153012",
+   "objective_md":"C:/Users/digom/video-analysis/runs/20261006-153012-repasse-fluxo/objective.md","language":"pt",
+   "python":"C:/Python314/python.exe","scripts_dir":"C:/Users/digom/.claude/skills/video-analysis/scripts",
+   "naming":{"batch_md":"{batches_dir}/batch_{NNN}.md","batch_json":"{batches_dir}/batch_{NNN}.json","sheet":"{batches_dir}/sheet_{NNN}.jpg",
+             "prompt":"{video_dir}/prompts/batch_{NNN}.md","report":"{video_dir}/reports/batch_{NNN}.md"},
+   "videos":[{"vid":"v1","title":"Repasse - Fluxo de Carga dos DA’s-20260818_160841-Gravação de Reunião","duration":"00:09:04",
+              "n_frames":101,"n_batches":6,"start_batch":1,"done":false,
+              "batches_dir":"C:/Users/digom/video-analysis/cache/…/batches-1b2c3d4e","transcript_md":"…/transcript.md",
+              "frames_json":"…/frames-8c41d2e0/frames.json","video_dir":"C:/Users/digom/video-analysis/runs/20261006-153012-repasse-fluxo/v1",
+              "b":[[0.0,183.5,20],[183.5,301.0,20]]}]},
+ "errors":[],"warnings":[]}
+```
+
+`workflow_args` is compact on purpose: the main agent has to pass it verbatim to the Workflow tool, and Workflow scripts have no filesystem access. Path templates replace per-batch path lists.
+
+### run.json
+
+argv, created (local ISO time), home, params (all four default groups after overrides), language, objective_md, and per video: vid, title, paths, video_key, the stage dirs for cues/frames/batches, n_frames, n_batches. It also holds a copy of `workflow_args`.
+
+---
+
+## 7. Caching and invalidation
+
+**Keys:**
+- video fp8 = sha1(NFC.casefold(str(resolved_path)) | size | mtime_ns)[:8];
+- `cues-<h8>` = sha1(vtt bytes, VTT_VERSION, cue params, offset, speaker names);
+- `frames-<h8>` = sha1(video_key, range, sample_fps, dedup params, output params, ALGO_VERSION);
+- `batches-<h8>` = sha1(frames key, cues key, batch params, RENDER_VERSION, labels language).
+
+So changing batch size never re-extracts frames. The ffmpeg version is recorded in `stage.json` but is not part of the key.
+
+**Validity:** a stage is valid only if its `stage.json` exists with `"status":"complete"` and a matching key. For frames, every listed JPEG must also exist (a `stat` check). If the directory exists without a valid `stage.json`, delete it and rebuild.
+
+**Ownership:**
+- Stage functions (WP1/WP2) write their content files only.
+- `cache.py` (WP3) writes `stage.json` last, atomically (tmp file + `os.replace`).
+- Completed stage directories are never overwritten; new parameters always produce a new directory.
+
+**Lock:** `cache/<key>/.lock` created with `O_CREAT|O_EXCL`, carrying a pid and a heartbeat mtime refreshed every 30 s. It's stale after 10 min without a heartbeat. A second process waits, polling every 2 s up to 30 min.
+
+**Other:**
+- `--force` rebuilds the named stage and everything downstream.
+- `last_used` is touched on every use; `--gc DAYS` deletes whole `video_key` directories older than that and prints the space freed.
+- `--resume` also rebuilds missing stage directories from the params stored in `run.json`. This is deterministic, so existing reports stay valid.
+
+---
+
+## 8. Windows pitfalls checklist
+
+1. Always `python` or `sys.executable`; never `python3` (WindowsApps stub).
+2. First thing in every script: `sys.stdout/stderr.reconfigure(encoding="utf-8", errors="replace")`. Open every file with `encoding="utf-8"` and write with `newline="\n"`. Provide `--ascii` for consoles that re-decode stdout; PowerShell decodes native output with `[Console]::OutputEncoding`, so recommend running via the Bash tool.
+3. Use pathlib everywhere and subprocess with **argument lists** (never `shell=True` or string commands); ffmpeg receives the UTF-16 command line correctly. Never put source paths inside filter strings.
+4. Unicode-tolerant resolution: walk each path component; if the literal name doesn't exist, scan the folder for an entry whose NFC.casefold matches. This handles Mac NFD names, `’`, and accents. Glob only when `*` or `?` is present and the literal path is missing. `[PES] …` names exist, so square brackets never trigger globbing.
+5. Same-basename VTT: scan the directory once and require an exact NFC.casefold stem match with a `.vtt` extension. On failure, list candidates in the same folder: stems that are a prefix of the video stem (like "Indicador PES.vtt" next to "Indicador PES-20260610_150844-Gravação de Reunião.mp4") plus `difflib` ratio ≥ 0.6. Print a `Rename-Item -LiteralPath '…' -NewName '…'` suggestion; never rename automatically.
+6. Never `os.kill(pid, 0)` on Windows: it calls TerminateProcess. Use heartbeat locks.
+7. ffmpeg options: `-nostdin` + `stdin=DEVNULL`; stderr to a file or a draining thread, never an undrained PIPE; `CREATE_NO_WINDOW`; kill children in `finally`; `-skip_frame:v` (not `-skip_frame`); `-map 0:v:N -an -sn -dn`.
+8. File and folder locks from antivirus, the indexer, or an image viewer the user has open: use marker files instead of folder renames; retry deletes with backoff; `shutil.rmtree(onexc=…)` that clears the read-only bit (3.14: `onerror` is deprecated).
+9. Multiprocessing uses spawn: keep the `__main__` guard, top-level worker functions in `va/`, and plain-data arguments.
+10. MAX_PATH: generated paths stay ≤ ~130 chars; warn if a source path is longer than 240.
+11. JSON and MD use forward slashes, which avoids escaping. Store the on-disk path as-is (it may be NFD) and use an NFC `title` for display.
+12. numpy 2 promotion rules: uint8 − uint8 wraps around, so use the max/min absdiff or explicit casts.
+13. No locale-dependent formatting; use `time.perf_counter` for timings, which stay out of deterministic files; sort everything by NFC.casefold (scandir order isn't guaranteed).
+14. Git Bash path conversion of `/…` arguments: document `MSYS_NO_PATHCONV=1` if it happens.
+15. The Bash tool timeout (max 600 s) applies: use `--estimate` and background runs, with `status.json` for polling.
+
+---
+
+## 9. Tests and calibration
+
+### Synthetic videos (`tests/synth.py`)
+
+- **Method.** Render frames with Pillow at 1280×720/30 fps (seeded `default_rng` for noise) and pipe them into `ffmpeg -f rawvideo … -c:v libx264 -preset veryfast -crf 28 -g 180 -bf 0 -pix_fmt yuv420p`. Add a `-bf 2` variant (exercises noref skipping) and a VFR variant (`-vf mpdecimate -fps_mode vfr`). Ground truth goes to `truth.json`, plus a matching `.vtt`.
+- **Why not pure lavfi:** this deviates from your lavfi suggestion. Pillow gives exact ground truth, cursor and caret sprites without `drawtext` font-escaping problems, and is far easier to maintain. lavfi is still used for the camera scenario (`testsrc2`) and for the environment check's smoke test.
+- **Caching:** videos are cached per session and scenario version.
+
+**Scenarios and acceptance** (tolerance ±1.0 s at 2 fps; "+N" means extra frames allowed):
+
+| Scenario | Expected |
+|---|---|
+| `cursor_only` 20 s: pointer wandering, caret blinking at 530 ms, pointer nudged 30 px | exactly 1 frame |
+| `typing` 25 s: 40 chars at 5 chars/s, then delete and retype | 1–4 frames during typing; settled frame ≤ 1.5 s after typing stops; content diff vs the reference render < 3 |
+| `slides_cam` 90 s: slides at 0/20/45/70 s, a bullet at 30 s, cam corner 20%×20%, laser dot | frames at {0,20,30,45,70}, +1 |
+| `meeting_layouts` 120 s: screen share (changes at 10/25 s, speaker-ring toggles every 4 s, webcam tile) → gallery at 40 s → screen share at 80 s, with changes at 90/105 s inside the former webcam tile area | {0,10,25,40,80,90,105}, +3; 90/105 must be detected (no mask leak) |
+| `scroll` 40 s: 15 s continuous scroll | ≤ 5 frames in [5,22], all `motion` except the last; settled frame at ~21 s |
+| `transient` 20 s: tooltip 0.3 s; dropdown at 10–13 s; per-second clock | frames at 10 and 13 only; clock produces none |
+| `small_changes` 20 s | one-digit change NOT kept (documented); 2-word change (≥ 40 px) kept |
+| `camera` 60 s | ≤ 4 frames, `heartbeat` kind, camera-like warning |
+| VFR variant of `slides_cam` | same times; n_samples = floor(2·duration) ± 1 |
+
+### Unit tests (no ffmpeg)
+
+- **Analyzer** on synthetic numpy frames: classify paths, the cursor predicate table, settle/motion/backoff, revisit, hysteresis, cut-split windows, heartbeat.
+- **VTT:** snippets copied into `tests/data/vtt/`:
+  - WhisperX from "Criando sua primeira PR" plus the `FALANTE_?` line from da_1608;
+  - Teams from dias_estoque (CRLF, UUID ids, multi-line `<v>`, overlaps between speakers);
+  - scanntech (`<v>` without ids, `&#233;`);
+  - venda_zero_clientes (plain);
+  - call_promocoes_scantech (no hours);
+  - the treinamento_playbook 59:59 → 1:00:00 switch;
+  - mix_digital 17:26 (stutter);
+  - pes_pedido_sugerido (125 s cue, non-monotonic);
+  - red_aderencia (rolling caption, 220 chars in 0.8 s);
+  - a synthetic edge file: BOM, NOTE/STYLE/REGION, settings, `<c>`/`<i>`/karaoke tags, `&nbsp;`/`&lrm;`, zero-length cue, end < start, missing blank line, CR-only, a cp1252 copy.
+- **Alignment:** boundary equality excluded on both sides, zero-length cue on a boundary, nested overlaps, a cue spanning a batch boundary (`(cont.)`), frames without cues, range clipping.
+- **Batching:** exact multiples, tail merge, tail split above 25, text budget, a single frame over budget, soft-cut choice and tie-break, span limit.
+- **Golden test:** `batch_001.md` and `transcript.md` must match byte for byte on a hand-written fixture.
+
+### Real fixtures (`@pytest.mark.real`)
+
+Paths live in `tests/fixtures.json` with globs (needed for the curly apostrophe). Tests skip if a file is missing.
+
+| Fixture | Acceptance |
+|---|---|
+| **Regression: Repasse…160841** (baseline 128 frames) | Store the 128 baseline times in `tests/data/baseline/da_1608.json` (WP0 does this now; the Temp scratchpad can be cleaned at any time), plus a `sig` flag per frame: change vs the previous baseline JPEG ≥ 2% of the area left of x = 0.83, at 640×360 with \|Δ\| > 16. Accept 50 ≤ n ≤ 128 and recall of significant baseline frames ≥ 90% within ±2 s. Write `debug/regression/da_1608.md` with thumbnails of unmatched frames from either side for manual review. |
+| venda_zero_clientes | 98 raw cues; contiguity holds; output 1568×882; every JPEG ≤ 500 KB; ≤ 15 frames/min |
+| dias_estoque | ≥ 2 speakers in the legend; overlapping cues present in the md |
+| Criando sua primeira PR.mov | analysis 552×360, output 1568×1018; ≤ 20 frames/min |
+| red_aderencia (optional) | rolling captions merged; fast cues marked approx |
+
+**Performance (`@pytest.mark.slow`):**
+- First measure a reference decode, D = `ffmpeg -skip_frame:v noref -i X -an -vf fps=2,scale=640:360,format=gray -f null -` (about 8.1 s per 120 s on metric_view).
+- metric_view cold run ≤ 1.8·D + 15 s, and ≤ 0.15× realtime (~250 s).
+- Teams 1080p16 (da_1608) ≤ 0.06× realtime (≤ 33 s).
+- Warm cache ≤ 2 s per video; batch-only rebuild ≤ 10 s per 1,000 frames; peak RSS ≤ 400 MB (via ctypes `GetProcessMemoryInfo`).
+- The old 0.07× target can't be met for 1080p60, because measured pure decode is already about 0.07–0.1×.
+
+**Determinism:**
+- `meeting_layouts` and venda_zero_clientes are run twice with `--force all`; lockstep is compared against `--sequential`, and `--jobs 1` against `--jobs 2`.
+- These must be byte-identical: frames.json, cues.json, timeline.json, batches.json, batch_*.md/json, transcript.md, summary.json, and the sha256 of every frame JPEG and sheet.
+- Excluded: `stage.json` and the stdout `timing_s`.
+
+### Calibration loop
+
+1. Tune thresholds until every synthetic acceptance row passes. Also require zero false changes on static segments at CRF 28 and 32.
+2. On the five real fixtures, run `calibrate.py --cache-stream` to replay parameter grids without decoding again. Review:
+   - contact sheets of kept frames;
+   - `explain.py` panels for all motion frames and the 10 smallest-change kept frames (likely false positives);
+   - `explain.py --top-ignored 12`: the largest diffs classified as cursor/same (likely false negatives).
+3. A/B `--hot-mode global` against windowed on da_1608 and dias_estoque: frame counts, plus manual checking of masked content.
+4. Freeze the defaults in `va/__init__.py`, bump `ALGO_VERSION`, record the measurements in `tests/data/calibration.md`.
+
+---
+
+## 10. Work packages
+
+**WP0 (lead, ~1 h, before splitting the work)**
+- Write `va/__init__.py`: versions and the DEDUP/OUTPUT/CUES/BATCH defaults.
+- Write `va/common.py` with these signatures: `setup_console()`, `write_json(path, obj)`, `read_json`, `write_text`, `fmt_hms(t, dec=1)`, `fmt_hhmmss_compact(t)`, `parse_time(str)`, `slugify(stem)`, `resolve_unicode_path(p)`, `as_posix(p)`, `atomic_write_bytes(path, b)`.
+- Write `va/contracts.py` from §6, with `check_frames`, `check_cues`, `check_contiguity`.
+- Copy the baseline data and the VTT snippets into `tests/data`.
+
+**WP1: frame engine (largest)**
+- Files: `probe.py`, `ffmpeg_io.py`, `dedup.py`, `extract.py`, `calibrate.py`, `explain.py`, `tests/synth.py`, plus the dedup/extract/regression/performance/determinism tests.
+- Interfaces:
+  - `probe_video(path) -> VideoInfo`
+  - `run_frames_stage(src: VideoSource, info: VideoInfo, params: dict, out_dir: Path, progress: Callable[[dict], None]) -> dict` (writes JPEGs, frames.json, samples.csv, logs; returns the frames.json dict)
+  - `Analyzer(params, analysis_size).push(gray) -> list[Decision]` and `.finish()`
+
+**WP2: text, timeline and batches**
+- Files: `vtt.py`, `align.py`, `batching.py`, `render.py`, `sheets.py` plus their tests. Tests use hand-made frames.json files and tiny Pillow JPEGs; no ffmpeg dependency.
+- Interfaces:
+  - `run_cues_stage(vtt_path, params, out_dir, duration_s) -> dict`
+  - `run_batches_stage(frames: dict, cues: dict, params: dict, out_dir: Path, meta: dict) -> dict` (returns the batches index plus the summary fragment)
+
+**WP3: CLI and infrastructure**
+- Files: `cache.py`, `discover.py`, `runs.py`, `prepare.py`, `verificar_ambiente.py`, `zoom.py` plus tests that monkeypatch the stage functions (tricky file names created in tmp: NFD, `’`, double spaces, `[PES]`).
+- It owns stage directories, `stage.json`, locks, the stdout JSON, `workflow_args`, `--resume`, `--estimate`, `--gc`, progress formatting and exit codes.
+
+**Integration (lead or WP1 after merging)**
+- End-to-end runs on the fixtures, the calibration loop (§9), freezing the defaults, and the CLI snippet for SKILL.md.
+
+---
+
+## 11. Risks and open questions
+
+1. **Cursor tolerance hides tiny real changes.** A single digit or ≤ 4 glyphs is classified as cursor. It's by design and partly mitigated by accumulation against the last kept frame. `--sensitivity high` lowers it.
+2. **Gray-only diffs miss same-brightness color swaps.** A red↔green status with equal brightness is invisible; a status icon whose shape also changes is still caught. A chroma channel could be added later if needed.
+3. **Hot mask on long screen-content animations** (e.g., a dashboard auto-refreshing for minutes) can mask that area. That is visible in `hot_segments` and warnings, and `--hot-mode off` turns it off.
+4. **Lockstep count mismatch** on unusual files (broken timestamps or edit lists) falls back to sequential B plus seek repair. It is covered by the determinism test (lockstep vs sequential).
+5. **Performance is decode-bound.** 4K/Retina 60 fps costs about 0.12–0.2× realtime, so background runs are required. There is no mid-stage checkpoint: a killed extraction restarts the frames stage.
+6. **Whisper timing heuristics** (split, extend) are approximate and flagged `≈`. Teams transcripts that start late are handled with `--vtt-offset`.
+7. **Open questions:**
+   - Do you accept the `--vtt` escape hatch alongside the strict same-basename rule?
+   - What are the agent file names for `verificar_ambiente.py` to check (placeholder `video-curator.md`, `video-analyst.md`)?
+   - pt-BR md labels by default? (proposed: follow the detected language)
+   - Revisit frames on by default? (proposed: yes)
+   - Is 2 fps with 1.0 s settle the right default for fast demos, or should the default be 4 fps with 0.5 s?
+   - Should `zoom.py` seek the source video (chosen; needs the video to stay in place), or should native-resolution frames also be cached?
+8. **Baseline data in Temp may be cleaned at any time.** WP0 must copy the da_1608 times and significance flags and the per-video baseline numbers right away.
+
+### Critical files for implementation
+- C:\Users\digom\.claude\skills\video-analysis\scripts\va\dedup.py (new: classify, cursor test, hot mask, state machine)
+- C:\Users\digom\.claude\skills\video-analysis\scripts\va\extract.py (new: lockstep decoders A and B, JPEG spool, frames.json)
+- C:\Users\digom\.claude\skills\video-analysis\scripts\va\vtt.py (new: parser, merges, repairs)
+- C:\Users\digom\.claude\skills\video-analysis\scripts\prepare.py (new: CLI, cache, runs, workflow_args)
+- C:\Users\digom\AppData\Local\Temp\claude\C--Users-digom-Documents-solar-databricks--schema\cd2c1414-3ebd-4b7c-a607-fbbe8a10608f\scratchpad\frames.py (prior art and baseline outputs under `videos\da_1608\`; copy out before Temp cleanup)

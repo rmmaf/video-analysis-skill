@@ -1,0 +1,911 @@
+> Spec gerada por um agente de design em 2026-10-06 durante o planejamento da skill. Onde houver conflito, prevalece o "Contrato unificado" de `docs/plano.md`.
+
+# `video-analysis`: design spec for the agentic orchestration layer
+
+This is a read-only design. Nothing was created or changed. Prior art and conventions I checked:
+
+- `C:\Users\digom\AppData\Local\Temp\claude\C--Users-digom-Documents-solar-databricks--schema\cd2c1414-3ebd-4b7c-a607-fbbe8a10608f\scratchpad\wf_videos.js`, `wf_videos_run.js`, `wf_videos_complemento.js`, `consolidar_videos.py`, `preparar_janelas.py`, `frames.py`, `rodar_frames.log`
+- `C:\Users\digom\.claude\skills\ingestao-adf\SKILL.md`, `setup.md` and `verificar_ambiente.py`
+- `C:\Users\digom\.claude\settings.json`, which has no `permissions` block yet
+- the fixture `C:\Users\digom\Downloads\venda_zero_clientes.mp4`: 7:21, 1920×1080, 98 cues, **no speaker labels**
+- Node v24.16, Python 3.14.5 and ffmpeg 8.1 are all installed.
+
+**What the prior art teaches**
+
+- **Analysts skipped frames in big windows.** Windows of 50 frames run on Sonnet with medium effort left frames unopened. A second "complemento" workflow had to re-run 20 windows, each missing 17 to 38 frames. So batches should be about 20 frames, the script should check the frame count, and the retry should be a "complement" retry.
+- **Quota was a real limit.** The old run switched to `sonnet`/`medium` "para não estourar a cota de tokens".
+- **The ECONOMIA block worked.** It asked for blocks of 8 to 10 parallel Reads, no re-reading, and a single line for participant-grid frames. The analyst role reuses it.
+- **Long videos produce many frames.** A 55-minute meeting gave 1,001 distinct frames; a 100-minute one gave 2,056. Sequential cost and time on long videos is the main risk (§11).
+- **Big returns are avoidable.** The old flow returned large objects through the journal and merged them with Python. The new flow writes files and returns tiny status objects.
+
+---
+
+## 0. Key decisions
+
+1. **The main agent only launches and reports.** It parses the request, writes `pedido.md`, runs `prepare.py`, calls `Workflow(scriptPath, args)`, then presents the returned summaries. It never reads frames, batch files, transcripts, prompts, the ledger or batch reports.
+2. **Each video runs as one strict sequence:**
+   - INIT (curator, Opus): plan, ledger and prompt 1.
+   - For each batch n: analyst (Sonnet) reads frames and cues and writes a report; then curator NEXT (Opus) updates the ledger and writes prompt n+1.
+   - FINAL (Opus) writes the video's `report.md`.
+   - Videos run in parallel through a pool (default 3). CROSS (Opus) runs when there are 2 or more video reports.
+3. **Every hand-off goes through files** in `runs/<run_id>/<slug>/`. Agents return small schema-validated JSON. The whole workflow return stays under about 1.5k tokens.
+4. **Two role files, two ways to load them.** The canonical role files live in the skill's `agents/` folder.
+   - `agents` mode uses `agentType`.
+   - `inline` mode uses the default workflow subagent with an explicit model and a preamble that says "leia seu papel em `<roles_dir>/…md`".
+   - The per-call prompts are the same in both modes.
+5. **Frame integrity is checked twice.**
+   - The analyst returns `frames_seen` and `frames_missing`. The script compares them with `batch_frames[n-1]` from the args. On a mismatch it runs one complement retry; if that also fails, the batch becomes a partial or failed gap.
+   - When curator NEXT integrates a report, it also checks that the per-frame table covers every frame (`coverage[]`). This is an adversarial check that costs no extra agent.
+6. **Resume works from files** (`prepare.py --resume`). The ledger header `Integrado até o lote: NNN` makes every curator step idempotent. `resumeFromRunId` is not relied on.
+7. **Effort per role:** INIT `high`, NEXT `medium`, FINAL and CROSS `high`, analyst `medium`.
+8. **Size budgets:**
+   - batch prompt ≤ 450 words
+   - batch report ≤ 1,000 words per ~20 frames
+   - ledger ≤ 1,500 words
+   - `report.md` ≤ 2,500 words
+   - `summary` ≤ 120 words
+
+### File map
+
+Skill folder, `C:\Users\digom\.claude\skills\video-analysis\` (my layer, plus `scripts/` from the deterministic layer):
+
+| file | contents |
+|---|---|
+| `SKILL.md` | entry point |
+| `setup.md` | setup procedure |
+| `verificar_ambiente.py` | at the root, matching the user's existing skills |
+| `agents\video-analysis-curator.md` | canonical curator role |
+| `agents\video-analysis-analyst.md` | canonical analyst role |
+| `workflow\video-analysis.js` | the Workflow script |
+| `reference\sem-workflow.md`, `reference\problemas.md`, `reference\contratos.md` | fallback loop, troubleshooting, contracts |
+| `scripts\prepare.py` | deterministic layer |
+| `scripts\ambiente.py` | shared checks, used by `prepare.py` and `verificar_ambiente.py` |
+| `tests\harness.mjs`, `tests\fixtures\*.json`, `tests\check_run.py` | tests |
+
+Workspace, `C:\Users\digom\video-analysis\`:
+
+| path | contents |
+|---|---|
+| `cache\<slug>-<hash8>\` | deterministic outputs; agents only read here |
+| `runs\<run_id>\` | `objective.md`, `run.json`, `pedido.md`, combined `report.md` |
+| `runs\<run_id>\<slug>\` | `ledger.md`, `report.md`, `prompts\`, `reports\` |
+| `pedidos\pedido.md` | temporary; consumed by `prepare.py` |
+| `roles\` | role copies, refreshed by `prepare.py` on every run |
+| `logs\` | `prepare.py` progress logs |
+
+---
+
+## 1. Contract with the deterministic layer
+
+### 1.1 `workflow_args` (schema_version 1)
+
+```json
+{
+  "schema_version": 1,
+  "run_id": "20261006-153012-venda-zero-clientes",
+  "run_dir": "C:/Users/digom/video-analysis/runs/20261006-153012-venda-zero-clientes",
+  "objective_path": "C:/Users/digom/video-analysis/runs/20261006-153012-venda-zero-clientes/objective.md",
+  "roles_dir": "C:/Users/digom/video-analysis/roles",
+  "roles_mode": "inline",
+  "language": "pt-BR",
+  "options": { "max_batches": 2, "max_parallel_videos": 3, "analyst_effort": "medium", "curator_effort": "medium" },
+  "combined_exists": false,
+  "videos": [{
+    "slug": "venda-zero-clientes",
+    "cache_dir": "C:/Users/digom/video-analysis/cache/venda-zero-clientes-1a2b3c4d",
+    "out_dir": "C:/Users/digom/video-analysis/runs/20261006-153012-venda-zero-clientes/venda-zero-clientes",
+    "duration": "00:07:21", "n_frames": 86,
+    "batch_frames": [20, 22, 21, 23],
+    "start_batch": 1, "ledger_exists": false, "start_prompt_exists": false, "final_exists": false
+  }]
+}
+```
+
+### 1.2 `prepare.py` stdout
+
+`prepare.py` prints one JSON object as the last stdout line. Exit codes: 0 ok, 2 user error, 1 crash.
+
+```json
+{"status":"ok","run_id":"…","run_dir":"…",
+ "videos":[{"slug":"venda-zero-clientes","duration":"00:07:21","frames":86,"batches":4,"cache":"novo","warnings":[]}],
+ "estimate":{"batches":4,"agents":9},"env":{"permissions_ok":true,"agents_current":false},"warnings":[],
+ "script_path":"C:/Users/digom/.claude/skills/video-analysis/workflow/video-analysis.js",
+ "workflow_args":{…}}
+```
+
+On error: `{"status":"erro","erro":"video_nao_encontrado","detalhe":"…"}`.
+
+### 1.3 Changes I need from the deterministic layer (please relay)
+
+**Paths and interface**
+
+- **DL-1. Forward-slash absolute paths everywhere.** Use `C:/Users/...` in `workflow_args`, `summary.json` and `batch_NNN.md`. The main agent copies the args JSON into a tool call, and backslashes would need escaping, which is error-prone.
+- **DL-2. Input through a request file.**
+  - New run: `--pedido <md>`; that one file carries the videos, the objective and the options.
+  - Resume: `--resume <run_id|run_dir|ultimo> [--papeis X] [--max-lotes N]`.
+  - `pedido.md` has fixed headings (`# videos`, `# objetivo`, `# opcoes`; format in §6).
+  - The file is always consumed: moved into the run dir on success, renamed `pedido.erro.md` on failure. This keeps the next Write from failing because the file already exists.
+  - Recognised options: `papeis`, `max_lotes`, `paralelo`, `esforco_analista`, `idioma`, `trecho`.
+- **DL-3. stdout is only the JSON** in §1.2. Progress goes to `logs/prepare-<run_id>.log`.
+- **DL-4. `workflow_args` exactly as in §1.1**, with the resume fields defined in DL-11.
+
+**Run folder and roles**
+
+- **DL-5. Run folder scaffolding.**
+  - Create `objective.md` with three sections: `# Objetivo (literal)`, `# Opções`, `# Vídeos`.
+  - Create `run.json` (a snapshot of the args and options, used by resume).
+  - Create `<slug>/prompts/` and `<slug>/reports/`.
+  - Slugs are ASCII, at most 40 characters, and deduplicated with `-2`.
+- **DL-6. Role copies.**
+  - On every run, copy the skill's `agents/*.md` into `<workspace>/roles/`. Inline agents can then read their role inside the already-allowed workspace, with no extra permission rule for the skill folder.
+  - `env.agents_current` is true when the copies in `~/.claude/agents/` are byte-identical to the skill's copies.
+  - If `papeis: agents` was requested but the installed copies are not current, downgrade to `inline` and add a warning.
+
+**Data files**
+
+- **DL-7. `summary.json` fields.**
+  - Video level: `duration`, `resolution`, `n_frames`, `n_cues`, `has_speakers`, `vtt_found`.
+  - A `batches[]` list: `{index, start, end, n_frames, first_frame, last_frame, n_cues}`. INIT maps the transcript to batches with this.
+- **DL-8. Contact sheets.**
+  - Thumbnails carry the frame id and start time burned in, legible at 14 px or more.
+  - Size about 1,200×1,000 px or smaller (≈1.5k tokens).
+  - Optional `contact/overview.jpg`: one thumbnail per batch labelled `NNN · hh:mm:ss`, sampled if there are more than 40 batches. INIT needs it for silent screen recordings.
+- **DL-9. Batch sizing.**
+  - Target 20 frames (12 to 28), hard maximum 40. Reasons: Sonnet reliability, the 100-images-per-request limit, and keeping a batch under about 20 MB.
+  - Prefer cutting at the largest time gap or scene change.
+- **DL-10. `transcript.md`.**
+  - Merge consecutive cues from the same speaker into paragraphs, each starting with `[hh:mm:ss]`. This gives fewer lines and fewer tokens.
+  - Write "sem legenda" when there is no `.vtt`.
+- **DL-16. `batch_NNN.md` content.**
+  - A header with batch number, interval, frame-id range and frame count.
+  - Per frame: id, absolute path, interval, and its cues (each cue once, with timestamp and speaker when known).
+  - Frame ids are global per video: `F0001…`.
+
+**Resume and guards**
+
+- **DL-11. Resume semantics.**
+  - `start_batch` is the first batch (up to `last` for the current `max_batches`) that has no `reports/batch_NNN.md`.
+  - No `ledger.md`: move `prompts/` and `reports/` into `_descartado/` and set `start_batch=1`.
+  - If `report.md` exists and work remains, rename it `report.anterior.md`. Do the same for the run-root `report.md` when any video will run. FINAL and CROSS can then write without a Read-before-Write.
+  - `final_exists` is true only when `report.md` exists and `start_batch > last`.
+  - `start_prompt_exists` means `prompts/batch_{start}.md` exists.
+- **DL-12. Size guard.** Compute `estimate.agents = Σ(R+2) + (videos>1)` (R+1 when resuming with a ledger: no INIT; with `curation: batches`, `Σ(2·R+1)`), where R is the number of batches left to analyse for that video. Refuse above 800 (`erro: run_grande_demais`) unless `--forcar` is given.
+- **DL-13. `env.permissions_ok`.** Parse `~/.claude/settings.json` for allow rules that cover the workspace, through `scripts/ambiente.py`.
+- **DL-14. Missing `.vtt`.** Warn and continue.
+- **DL-15. Optional `trecho`.** Keep only batches that overlap the time range, with frame ids unchanged.
+
+---
+
+## 2. Runtime flow (main agent)
+
+1. **Parse.** Split `ARGUMENTS` into video or folder paths, options and the objective (the rest, kept verbatim).
+   - Ask only if the objective is missing: one question with two example objectives.
+   - Also ask if no video path can be identified.
+2. **Pick the roles mode.** Use `agents` if `video-analysis-curator` and `video-analysis-analyst` both appear in the Agent tool's list of agent types; otherwise use `inline`.
+3. **Write the request.** Use the Write tool to create `C:\Users\digom\video-analysis\pedidos\pedido.md` with the videos, the objective and `papeis:`. This avoids all shell quoting of paths with spaces and objectives with quotes.
+4. **Prepare.** Run `python "${CLAUDE_SKILL_DIR}/scripts/prepare.py" --pedido "C:/Users/digom/video-analysis/pedidos/pedido.md"` with the **Bash** tool and a timeout of 600000.
+   - Use background mode for a folder or more than one video.
+   - On `status: erro`, report it in one sentence.
+   - If `env.permissions_ok` is false, warn and offer setup.
+   - If `estimate.agents` is above 80, state the batches, agents and rough duration (about 4 minutes per batch, videos in parallel), then ask before continuing.
+5. **Launch.** Call `Workflow({scriptPath: <script_path>, args: <workflow_args as a JSON object>})`.
+   - Load the tool with `ToolSearch select:Workflow` if it is deferred.
+   - Reply in 3 lines or fewer: run_id, batches, agents, run folder, "aviso quando terminar". End the turn and do not poll.
+6. **Present.** When the notification arrives, show per video: status, batches, frames, `summary`, report path and up to 3 warnings. Show `combined` if present.
+
+**Token rules for the main agent.** Never Read frames, contact sheets, `batches/`, `frames.json`, `cues.json`, `timeline.json`, `transcript.md`, `prompts/`, `ledger.md` or `reports/`. Never run ffmpeg or write ad-hoc frame scripts. Never echo the prepare JSON or the args. Read a `report.md` only when the user asks something the summary does not answer; read a single frame or batch report only when the user names it. For "go deeper on a stretch", start a new run with `--trecho`, which reuses the cache.
+
+---
+
+## 3. The Workflow script (`workflow\video-analysis.js`)
+
+### 3.1 Rules that apply throughout
+
+- **Roles mode.** `agents` passes `agentType`, `model` and `effort` explicitly, so it does not matter which of frontmatter or call options wins. `inline` uses no `agentType`, prepends the preamble, and passes `model` and `effort`.
+- **Retries.** Every agent gets at most 2 attempts.
+  - Analyst: the second attempt is a complement retry (read the existing report, open the missing frames, rewrite).
+  - Curator: the second attempt gets the `AGAIN` note.
+- **Breakers.** Two batches in a row where the curator failed, or two batches in a row where the analyst failed, stop that video. The usual cause is systemic (permissions, unreadable role file). The files stay for resume.
+- **Failure gaps.** A failed curator NEXT means the analyst gets the contingency prompt. Failed or partial batches stay in `pending`, so the next NEXT (or FINAL) is told about them.
+- **Progress display.** Phases are static (`Plano`, `Lotes`, `Relatório`, `Síntese`) and always set through `opts.phase`, because videos run concurrently. Labels look like `análise · <slug> 3/7`, with `· 2ª` on retries.
+- **Workflow constraints.** No Date or Math.random, no filesystem, and `meta` is a pure literal.
+
+### 3.2 Script (close to final)
+
+```js
+export const meta = {
+  name: 'video-analysis',
+  description: 'Analisa vídeos em lotes sequenciais: curador Opus escreve o prompt de cada lote, analista Sonnet lê frames e falas; relatório por vídeo e combinado',
+  whenToUse: 'Só pela skill video-analysis, com os workflow_args impressos por prepare.py',
+  phases: [
+    { title: 'Plano', detail: 'curador lê objetivo e transcrição; grava ledger e prompt do lote 1', model: 'opus' },
+    { title: 'Lotes', detail: 'por vídeo, em sequência: analista (sonnet), depois curador (opus) do lote seguinte' },
+    { title: 'Relatório', detail: 'report.md de cada vídeo', model: 'opus' },
+    { title: 'Síntese', detail: 'report.md combinado quando há 2+ vídeos', model: 'opus' },
+  ],
+}
+
+const A = typeof args === 'string' ? JSON.parse(args) : args
+{
+  const bad = []
+  if (!A || typeof A !== 'object') bad.push('args')
+  else {
+    if (A.schema_version !== 1) bad.push('schema_version')
+    for (const k of ['run_id', 'run_dir', 'objective_path', 'roles_dir', 'language']) if (!A[k]) bad.push(k)
+    if (!Array.isArray(A.videos) || !A.videos.length) bad.push('videos')
+    else A.videos.forEach((v, i) => {
+      for (const k of ['slug', 'cache_dir', 'out_dir']) if (!v[k]) bad.push(`videos[${i}].${k}`)
+      if (!Array.isArray(v.batch_frames) || !v.batch_frames.length || v.batch_frames.some(n => !(n > 0))) bad.push(`videos[${i}].batch_frames`)
+    })
+  }
+  if (bad.length) throw new Error(`workflow_args inválido (${bad.join(', ')}): rode prepare.py e passe workflow_args como objeto JSON, sem editar`)
+}
+
+const O = A.options || {}
+const MODE = A.roles_mode === 'agents' ? 'agents' : 'inline'
+const PAR = Math.max(1, Math.min(6, Number(O.max_parallel_videos) || 3))
+const MAXB = Number(O.max_batches) > 0 ? Number(O.max_batches) : Infinity
+const LV = ['low', 'medium', 'high', 'xhigh', 'max']
+const eff = (x, d) => (LV.includes(x) ? x : d)
+const EFF = { init: 'high', next: eff(O.curator_effort, 'medium'), final: 'high', cross: 'high', analyst: eff(O.analyst_effort, 'medium') }
+const ROLE = {
+  curator: { type: 'video-analysis-curator', model: 'opus', file: `${A.roles_dir}/video-analysis-curator.md` },
+  analyst: { type: 'video-analysis-analyst', model: 'sonnet', file: `${A.roles_dir}/video-analysis-analyst.md` },
+}
+
+const STR = { type: 'string' }, STRS = { type: 'array', items: { type: 'string' } }
+const S_INIT = { type: 'object', required: ['status', 'ledger_path', 'prompt_path', 'video_type', 'focus'], properties: {
+  status: { type: 'string', enum: ['ok', 'failed'] }, ledger_path: STR, prompt_path: STR,
+  video_type: { type: 'string', enum: ['screen', 'meeting', 'slides', 'mixed', 'other'] },
+  focus: { type: 'string', description: 'foco do lote 1, 1 frase' }, warnings: STRS } }
+const S_NEXT = { type: 'object', required: ['status', 'integrated_through', 'coverage', 'prompt_path', 'focus'], properties: {
+  status: { type: 'string', enum: ['ok', 'failed'] },
+  integrated_through: { type: 'integer', description: 'último lote cujo relatório está integrado ao ledger' },
+  coverage: { type: 'array', description: 'um item por relatório integrado nesta chamada', items: { type: 'object', required: ['batch', 'state'],
+    properties: { batch: { type: 'integer' }, state: { type: 'string', enum: ['complete', 'incomplete', 'missing'] } } } },
+  prompt_path: STR, focus: { type: 'string', description: 'foco do lote preparado, 1 frase' },
+  carried: { type: 'string', description: 'o que foi passado adiante, ≤ 25 palavras' }, warnings: STRS } }
+const S_ANALYST = { type: 'object', required: ['status', 'report_path', 'frames_seen', 'frames_missing', 'notable'], properties: {
+  status: { type: 'string', enum: ['ok', 'partial', 'failed'] }, report_path: STR,
+  frames_seen: { type: 'integer', description: 'quantos frames DO LOTE você abriu com Read' },
+  frames_missing: { type: 'array', items: { type: 'string' }, description: 'ids dos frames do lote que você não abriu' },
+  notable: { type: 'string', description: 'o mais relevante para o objetivo neste lote, ≤ 2 frases, sem dado sensível' }, warnings: STRS } }
+const S_FINAL = { type: 'object', required: ['status', 'report_path', 'answered', 'summary'], properties: {
+  status: { type: 'string', enum: ['ok', 'partial', 'failed'] }, report_path: STR,
+  answered: { type: 'string', enum: ['yes', 'partly', 'no'] },
+  summary: { type: 'string', description: 'resposta direta ao objetivo, ≤ 120 palavras' }, gaps: STRS } }
+
+const pad = n => String(n).padStart(3, '0')
+const tagOf = s => (s.length > 24 ? s.slice(0, 23) + '…' : s)
+const norm = s => String(s || '').replace(/\\/g, '/').toLowerCase()
+const lastOf = v => Math.min(v.batch_frames.length, MAXB)
+let calls = 0
+
+function call(role, prompt, o) {
+  const r = ROLE[role]
+  const opts = { label: o.label, phase: o.phase, schema: o.schema, model: r.model, effort: o.effort }
+  let text = prompt
+  if (MODE === 'agents') opts.agentType = r.type
+  else text = `Antes de qualquer outra ação, leia com Read o arquivo ${r.file}. Ele define seu papel e suas regras: siga-o como suas instruções de sistema (ignore o bloco entre --- no topo). Se não conseguir lê-lo, devolva status "failed" com warnings ["papel ilegível"].\n\n${prompt}`
+  calls++
+  return agent(text, opts)
+}
+async function twice(make, ok) {
+  for (let k = 0; k < 2; k++) { const r = await make(k); if (r && ok(r)) return r }
+  return null
+}
+const AGAIN = '\n\nSEGUNDA TENTATIVA: a anterior falhou. Se algum arquivo de saída já existir, leia-o antes de sobrescrever (o Write exige) e complete o que faltar.'
+
+function pathsOf(v) {
+  const c = v.cache_dir, o = v.out_dir
+  return {
+    ledger: `${o}/ledger.md`, final: `${o}/report.md`, reports: `${o}/reports`,
+    prompt: n => `${o}/prompts/batch_${pad(n)}.md`, report: n => `${o}/reports/batch_${pad(n)}.md`,
+    timeline: n => `${c}/batches/batch_${pad(n)}.md`, contact: n => `${c}/contact/batch_${pad(n)}.jpg`,
+    overview: `${c}/contact/overview.jpg`, summary: `${c}/summary.json`, transcript: `${c}/transcript.md`,
+  }
+}
+
+const initPrompt = (v, P, B, last) => [
+  'MODO: INIT',
+  `Vídeo: ${v.slug} · ${v.duration || '?'} · ${B} lotes${last < B ? ` (este run analisa só os lotes 1–${last}; planeje todos e marque os demais como fora deste run)` : ''}`,
+  `Objetivo (literal) e opções: ${A.objective_path}`,
+  `Resumo do vídeo e dos lotes: ${P.summary}`,
+  `Transcrição: ${P.transcript}`,
+  `Visão geral (se existir): ${P.overview}`,
+  `Lote 1: linha do tempo ${P.timeline(1)} · prancha ${P.contact(1)} · ${v.batch_frames[0]} frames`,
+  `Idioma dos relatórios: ${A.language}`,
+  `Grave: ledger em ${P.ledger}; depois o prompt do lote 1 em ${P.prompt(1)}.`,
+].join('\n')
+
+const stateText = p => p.state === 'ok' ? `ok, ${p.seen}/${p.expected} frames`
+  : p.state === 'partial' ? `PARCIAL, ${p.seen}/${p.expected} frames` : 'FALHOU, sem relatório confiável'
+
+function nextPrompt(v, P, n, last, pending, resumed) {
+  const L = ['MODO: NEXT', `Vídeo: ${v.slug} · preparar o lote ${n}/${last}${n === last ? ' (último deste run)' : ''}`,
+    `Objetivo: ${A.objective_path}`, `Ledger: ${P.ledger}`]
+  if (pending.length) {
+    L.push('Relatórios a integrar:')
+    for (const p of pending) L.push(`- lote ${pad(p.n)}: ${stateText(p)} → ${P.report(p.n)}${p.state === 'failed' ? ` (falas do trecho: ${P.timeline(p.n)})` : ''}`)
+  }
+  if (n > 1 && (resumed || !pending.length)) L.push(`Confira "Integrado até" no ledger e integre os relatórios existentes em ${P.reports} até o lote ${pad(n - 1)}.`)
+  L.push(`Próximo lote: linha do tempo ${P.timeline(n)} · prancha ${P.contact(n)} · ${v.batch_frames[n - 1]} frames`,
+    `Grave: ledger atualizado em ${P.ledger}; depois o prompt em ${P.prompt(n)}.`)
+  return L.join('\n')
+}
+
+function analystPrompt(v, P, n, last, curated) {
+  const L = curated
+    ? [`Lote ${n}/${last} do vídeo ${v.slug}.`, `Prompt do curador: ${P.prompt(n)} (leia primeiro e siga).`]
+    : [`Lote ${n}/${last} do vídeo ${v.slug}. Não há prompt do curador para este lote: siga o contrato padrão do seu papel.`,
+       `Objetivo: ${A.objective_path}. Contexto: seções 4 e 5 de ${P.ledger}, se existir.`]
+  L.push(`Linha do tempo: ${P.timeline(n)}`, `Relatório: grave em ${P.report(n)}`,
+    `Frames do lote: ${v.batch_frames[n - 1]} · Idioma do relatório: ${A.language}`)
+  return L.join('\n')
+}
+const analystAgain = (r, expected, path) => `\n\nSEGUNDA TENTATIVA. A anterior ${r
+  ? `abriu ${r.frames_seen} de ${expected} frames${(r.frames_missing || []).length ? ` (faltaram: ${r.frames_missing.join(', ')})` : ''}`
+  : 'não terminou'}. Se ${path} existir, leia-o antes de sobrescrever; abra os frames que faltaram (na dúvida, todos) e grave o relatório completo.`
+
+const finalPrompt = (v, P, B, last, res, pending) => [
+  'MODO: FINAL',
+  `Vídeo: ${v.slug} · lotes analisados: ${res.planned} de ${B}${res.planned < B ? ' (cobertura parcial: diga isso no relatório)' : ''}`,
+  `Objetivo: ${A.objective_path}`, `Ledger: ${P.ledger}`,
+  `Relatórios de lote: ${P.reports}/batch_001.md … batch_${pad(last)}.md`,
+  `Ainda não integrados ao ledger (neste run): ${pending.length ? pending.map(p => `${pad(p.n)} (${p.state})`).join(', ') : 'nenhum'}; confira também "Integrado até".`,
+  `Parciais: ${res.partial.join(', ') || 'nenhum'} · Falhos: ${res.failed.join(', ') || 'nenhum'}`,
+  `Transcrição (consulta pontual): ${P.transcript}`, `Idioma: ${A.language}`,
+  `Grave o relatório final em ${P.final}.`,
+].join('\n')
+
+const crossPrompt = reps => ['MODO: CROSS', `Run: ${A.run_id}`, `Objetivo: ${A.objective_path}`, 'Relatórios por vídeo:',
+  ...reps.map(r => `- ${r.slug}: ${r.report_path} (${r.status})`),
+  `Idioma: ${A.language}`, `Grave o relatório combinado em ${A.run_dir}/report.md.`].join('\n')
+
+async function analyze(v, P, n, last, curated, tag) {
+  const expected = v.batch_frames[n - 1]
+  const base = analystPrompt(v, P, n, last, curated)
+  const good = r => r && r.status !== 'failed' && r.frames_seen >= expected && !(r.frames_missing || []).length
+  const opts = k => ({ label: `análise · ${tag} ${n}/${last}${k ? ' · 2ª' : ''}`, phase: 'Lotes', schema: S_ANALYST, effort: EFF.analyst })
+  const out = (r, state) => ({ n, state, expected, seen: r ? Math.min(r.frames_seen, expected) : 0,
+    notable: (r && r.notable) || '', path_ok: !r || norm(r.report_path) === norm(P.report(n)) })
+  const r1 = await call('analyst', base, opts(0))
+  if (good(r1)) return out(r1, 'ok')
+  log(`${tag} ${n}/${last}: ${r1 ? `${r1.frames_seen}/${expected} frames, ${r1.status}` : 'analista sem resposta'}; repetindo`)
+  const r2 = await call('analyst', base + analystAgain(r1, expected, P.report(n)), opts(1))
+  if (good(r2)) return out(r2, 'ok')
+  const best = [r2, r1].filter(r => r && r.status !== 'failed' && r.frames_seen > 0).sort((a, b) => b.frames_seen - a.frames_seen)[0]
+  return best ? out(best, 'partial') : out(null, 'failed')
+}
+
+function demote(res, b, state) {
+  const to = state === 'missing' ? 'failed' : 'partial'
+  for (const k of ['ok', 'partial']) { const i = res[k].indexOf(b); if (i >= 0 && k !== to) { res[k].splice(i, 1); res[to].push(b) } }
+}
+
+async function runVideo(v) {
+  const P = pathsOf(v), B = v.batch_frames.length, last = lastOf(v), tag = tagOf(v.slug)
+  const res = { slug: v.slug, status: 'ok', report_path: null, summary: null, answered: null,
+    total: B, planned: last, from: 1, ok: [], partial: [], failed: [], seen: 0, expected: 0, warnings: [] }
+  if (v.final_exists) return { ...res, status: 'skipped', report_path: P.final }
+  if (last < B) log(`${tag}: modo teste, lotes 1–${last} de ${B}`)
+  const start = v.ledger_exists ? Math.max(1, Number(v.start_batch) || 1) : 1
+  res.from = start
+  let ready, pending = [], resumed = v.ledger_exists && start > 1, curFail = 0, anaFail = 0
+
+  if (!v.ledger_exists) {
+    const r = await twice(k => call('curator', initPrompt(v, P, B, last) + (k ? AGAIN : ''),
+      { label: `plano · ${tag}${k ? ' · 2ª' : ''}`, phase: 'Plano', schema: S_INIT, effort: EFF.init }), r => r.status === 'ok')
+    if (!r) { res.status = 'failed'; res.warnings.push('plano (INIT) falhou duas vezes'); return res }
+    ready = true
+    log(`${tag}: plano pronto (${r.video_type}); lote 1: ${r.focus}`)
+  } else ready = !!v.start_prompt_exists
+
+  for (let n = start; n <= last; n++) {
+    if (budget.total && budget.remaining() < 80000) { res.warnings.push(`orçamento de tokens no fim: parou antes do lote ${n}`); res.planned = n - 1; break }
+    let curated = ready
+    ready = false
+    if (!curated) {
+      const r = await twice(k => call('curator', nextPrompt(v, P, n, last, pending, resumed) + (k ? AGAIN : ''),
+        { label: `curadoria · ${tag} ${n}/${last}${k ? ' · 2ª' : ''}`, phase: 'Lotes', schema: S_NEXT, effort: EFF.next }), r => r.status === 'ok')
+      if (r) {
+        curated = true; pending = []; resumed = false; curFail = 0
+        for (const c of r.coverage || []) if (c.state !== 'complete') { demote(res, c.batch, c.state); res.warnings.push(`lote ${c.batch}: relatório ${c.state === 'missing' ? 'ausente' : 'incompleto'}`) }
+        if (r.integrated_through < n - 1) res.warnings.push(`ledger integrado só até o lote ${r.integrated_through} ao preparar o ${n}`)
+      } else {
+        res.warnings.push(`curadoria do lote ${n} falhou: prompt de contingência`)
+        if (++curFail >= 2) { res.status = 'failed'; res.warnings.push('curador falhou em 2 lotes seguidos: vídeo interrompido'); return res }
+      }
+    }
+    const a = await analyze(v, P, n, last, curated, tag)
+    res[a.state].push(n); res.seen += a.seen; res.expected += a.expected
+    if (!a.path_ok) res.warnings.push(`lote ${n}: analista informou outro caminho de relatório`)
+    pending.push(a)
+    log(`${tag} ${n}/${last} ${a.state} ${a.seen}/${a.expected}${a.notable ? ' — ' + a.notable.slice(0, 140) : ''}`)
+    if (a.state === 'failed') { if (++anaFail >= 2) { res.status = 'failed'; res.warnings.push('analista falhou em 2 lotes seguidos: vídeo interrompido'); return res } }
+    else anaFail = 0
+  }
+
+  const fin = await twice(k => call('curator', finalPrompt(v, P, B, last, res, pending) + (k ? AGAIN : ''),
+    { label: `relatório · ${tag}${k ? ' · 2ª' : ''}`, phase: 'Relatório', schema: S_FINAL, effort: EFF.final }), r => r.status !== 'failed')
+  if (!fin) { res.status = 'failed'; res.warnings.push('relatório final falhou duas vezes: rode /video-analysis retomar'); return res }
+  Object.assign(res, { report_path: fin.report_path || P.final, summary: fin.summary, answered: fin.answered })
+  if (res.partial.length || res.failed.length || fin.status === 'partial' || res.planned < B) res.status = 'partial'
+  return res
+}
+
+const remaining = v => (v.final_exists ? 0 : Math.max(0, lastOf(v) - (v.ledger_exists ? Math.max(1, Number(v.start_batch) || 1) : 1) + 1))
+const planned = A.videos.reduce((s, v) => s + (v.final_exists ? 0 : 2 * remaining(v) + 1), 0) + (A.videos.length > 1 ? 1 : 0)
+log(`run ${A.run_id}: ${A.videos.length} vídeo(s), ~${planned} agentes, papéis ${MODE}, até ${PAR} vídeo(s) em paralelo`)
+if (planned > 800) throw new Error(`run grande demais (~${planned} agentes; teto do Workflow 1000): divida em runs menores ou use max_batches/trecho`)
+
+const queue = A.videos.map((v, i) => ({ v, i }))
+const results = new Array(A.videos.length)
+await parallel(Array.from({ length: Math.min(PAR, queue.length) }, () => async () => {
+  while (queue.length) {
+    const { v, i } = queue.shift()
+    try { results[i] = await runVideo(v) }
+    catch (e) { results[i] = { slug: v.slug, status: 'failed', warnings: [`erro: ${(e && e.message) || e}`] } }
+  }
+}))
+const R = results.map((r, i) => r || { slug: A.videos[i].slug, status: 'failed', warnings: ['não executado'] })
+
+let combined = null
+const reps = R.filter(r => r.report_path && r.status !== 'failed')
+if (reps.length > 1 && !A.combined_exists) {
+  const c = await twice(k => call('curator', crossPrompt(reps) + (k ? AGAIN : ''),
+    { label: `síntese${k ? ' · 2ª' : ''}`, phase: 'Síntese', schema: S_FINAL, effort: EFF.cross }), r => r.status !== 'failed')
+  combined = c ? { report_path: c.report_path || `${A.run_dir}/report.md`, answered: c.answered, summary: c.summary } : { error: 'síntese falhou duas vezes' }
+}
+let spent = null
+try { spent = budget.spent() } catch (e) {}
+return {
+  run_id: A.run_id, run_dir: A.run_dir, roles_mode: MODE, agents: calls, output_tokens: spent,
+  videos: R.map(r => ({ slug: r.slug, status: r.status, report_path: r.report_path || null, answered: r.answered || null, summary: r.summary || null,
+    batches: r.total ? { total: r.total, planned: r.planned, from: r.from, ok: r.ok.length, partial: r.partial, failed: r.failed } : null,
+    frames: r.expected ? `${r.seen}/${r.expected}` : null, warnings: (r.warnings || []).slice(0, 6) })),
+  combined,
+}
+```
+
+### 3.3 Resume cases
+
+| ledger | start_batch | start_prompt_exists | what the script does |
+|---|---|---|---|
+| no | — | — | INIT, then from batch 1 |
+| yes | k | yes | analyst k runs directly |
+| yes | k | no | NEXT k ("confira Integrado até"), then analyst k |
+| yes | last+1 | — | FINAL only |
+
+`final_exists` skips the video.
+
+---
+
+## 4. Curator agent: `agents\video-analysis-curator.md`
+
+### 4.1 Frontmatter
+
+```yaml
+---
+name: video-analysis-curator
+description: Curador da skill video-analysis (uso interno). Planeja a análise de um vídeo, escreve o prompt de cada lote para o analista, mantém o ledger com o contexto acumulado e escreve o relatório final. Não use fora da skill video-analysis.
+tools: Read, Write, Edit, Grep
+model: opus
+effort: high
+maxTurns: 40
+omitClaudeMd: true
+color: purple
+---
+```
+
+I added `Grep` beyond your list. It lets FINAL and CROSS search `reports/` and long transcripts instead of reading whole files.
+
+### 4.2 System prompt outline (pt-BR, target ≈ 2.5 to 3k tokens)
+
+1. **Seu papel.** "Você planeja e conduz a análise de um vídeo em lotes. Quem abre os frames em resolução cheia é o analista (Sonnet), que só executa o prompt que você escreve: ele não vê o ledger nem os lotes anteriores, só o que você puser no prompt. Seu critério é sempre o objetivo do usuário. Contexto demais custa em todos os lotes seguintes; contexto de menos faz o analista errar referências ('esse relatório', 'aquela tela')."
+2. **Ambiente e limites.**
+   - Windows, caminhos absolutos com "/".
+   - Ferramentas Read (texto e imagem), Write, Edit e Grep; não há shell.
+   - O cache é só leitura; grave só os arquivos indicados na chamada.
+   - Write sobre arquivo existente exige Read antes.
+   - Leia vários arquivos na mesma resposta.
+   - A primeira linha da chamada diz o MODO.
+3. **INIT.** Read in parallel: objective, `summary.json`, `transcript.md` (in parts if over 2,000 lines), `overview.jpg` if present, `batch_001.md` and the contact sheet for batch 1. Then:
+   1. Classify the video type.
+   2. Interpret the objective: deliverables, success criteria, what `report.md` must contain. Decide ambiguities and record the assumption ("ninguém responde perguntas durante o run").
+   3. Segment the transcript into topics and map them to batches using the `summary.json` intervals. With no speech, use the overview and contact sheets.
+   4. Write a focus plan per batch.
+   5. Write the report contract: adjustments to the analyst's default contract.
+   6. Write the ledger, **then** prompt 1.
+
+   Return: `status`, `ledger_path`, `prompt_path`, `video_type`, `focus`, `warnings`.
+4. **NEXT.** Read in parallel: ledger, the reports to integrate, the next batch's timeline and its contact sheet. Then:
+   1. Check `Integrado até` and integrate only later batches. If the ledger already covers them, write only the prompt (idempotent on resume).
+   2. For each report: judge `coverage` (does the table cover every frame of the batch?). Fold findings in with `[lote · hh:mm:ss · Fxxxx]` references. Update context, open threads, gaps and the remaining plan if the video went somewhere else. Update the log.
+   3. Trim: whatever does not change how the next batches will be read goes; old findings merge; respect the budgets.
+   4. Write the **whole ledger** (Write), then the prompt.
+   - **FALHOU:** record a gap. Read the cues from the failed batch's timeline and add the essentials to the context marked "(só fala)". In the next prompt, say the previous stretch had no visual analysis and ask for a more detailed description of the first frame.
+   - **PARCIAL:** integrate what exists and list the missing frames in Lacunas. If any is essential, add up to 2 of them as reference frames in the next prompt.
+
+   Return: `status`, `integrated_through`, `coverage`, `prompt_path`, `focus`, `carried`, `warnings`.
+5. **FINAL.** Integrate the reports not yet in the ledger, without rewriting the ledger.
+   - For specific evidence, Grep `reports/` and the transcript before opening files. With 6 batches or fewer, all reports may be read.
+   - Write `report.md` in the format the user asked for; otherwise use the default (§4.5).
+   - `summary` is ≤ 120 words and goes to the user as is.
+   - `status: partial` when gaps affect the answer.
+6. **CROSS.** Read the objective and each video's `report.md`. Write the combined report: the answer across all videos, comparison, contradictions, and where each thing is (`vídeo · hh:mm:ss`). ≤ 1,500 words. Batch reports are opened only to settle a contradiction.
+7. **Ledger:** template in §4.3.
+8. **Prompt do analista:** template and rules in §4.4.
+9. **Prancha de contato.** "Serve para planejar: tipo de tela, transições, onde há texto denso, frames só de grade. Não descreva frames nem afirme conteúdo a partir da miniatura: o analista verá em resolução cheia. Aponte ids e tempos ('F0047–F0052: tabela — leia os nomes das colunas')."
+10. **Tipos de vídeo:**
+    - **tela:** ações passo a passo, estado da interface, valores e comandos digitados, mensagens de erro, resultado.
+    - **reunião:** mapa de falantes, tela compartilhada × grade, decisões, pendências e responsáveis, divergência fala×tela; grade sem tela = uma linha.
+    - **aula/slides:** título e pontos de cada slide, o que o apresentador acrescenta, demonstrações, perguntas.
+11. **Conduta.**
+    - Fidelidade: inferência marcada.
+    - Dados sensíveis: nunca copiar senha, token, chave, connection string, CPF, telefone ou e-mail pessoal; registrar só que apareceu e onde.
+    - Pessoas: papel; nome só para falante ou decisão.
+12. **O que devolver.** O objeto do StructuredOutput. "Se essa ferramenta não existir, responda com uma única linha JSON com os mesmos campos" (needed for the fallback mode).
+
+### 4.3 Ledger template (≤ 1,500 words total)
+
+```markdown
+# Ledger · {slug}
+Integrado até o lote: {NNN} de {BBB} · Tipo: {tela|reunião|aula/slides|misto} · Idioma: {pt-BR}
+
+## 1. Objetivo interpretado            (≤ 120 palavras: entregáveis, critérios, o que o report.md precisa conter, suposições)
+## 2. Mapa e plano                      (≤ 25 palavras por linha; agrupe lotes contíguos de mesmo assunto)
+| lotes | intervalo | assunto provável | foco | estado (pendente/feito/parcial/falhou/fora do run) |
+## 3. Contrato do relatório de lote     (≤ 80 palavras: ajustes ao contrato padrão, repetidos em todo prompt)
+## 4. Contexto acumulado                (≤ 300: falantes e papéis, sistemas e telas, estado em andamento, nomes corretos)
+## 5. Fios abertos                      (≤ 150: pergunta → lote provável)
+## 6. Achados consolidados              (≤ 500: por tema, cada um com [lote · hh:mm:ss · Fxxxx]; funda os antigos)
+## 7. Lacunas                           (≤ 80: lotes falhos/parciais, frames faltantes, ilegíveis)
+## 8. Log de curadoria                  (últimos 6 lotes, 1 linha: foco, passou, cortou; antes: 1 parágrafo ≤ 60)
+```
+
+### 4.4 Analyst prompt template and rules
+
+```markdown
+# Lote {NNN} de {BBB} · {slug} · {início}–{fim}
+Linha do tempo (frames, intervalos e falas): `{caminho absoluto de batch_NNN.md}`
+## Objetivo deste lote        (1–3 frases ligadas ao objetivo geral)
+## O que você precisa saber   (≤ 150 palavras: quem é quem, nomes corretos, estado em andamento — só o que muda a leitura)
+## Foco                       (3–6 itens: onde olhar por id/tempo; o que tratar em uma linha)
+## Perguntas                  (Q1…Qk, 2 ≤ k ≤ 6, respondíveis neste lote)
+## Formato                    (Contrato padrão + ajustes da seção 3 do ledger + específico do lote; limite de palavras)
+## Frames de referência       (opcional, ≤ 2, de lotes anteriores, com o porquê)
+```
+
+Rules, in pt-BR in the role file:
+
+1. Nunca copie a linha do tempo, as falas ou a lista de frames: cite o caminho.
+2. Não descreva frames.
+3. O contexto entra só se mudar a leitura do lote.
+4. Fios abertos só quando o plano diz que este lote pode resolvê-los.
+5. Exija `[Fxxxx · hh:mm:ss]` em cada afirmação.
+6. Mesmo contrato em todos os lotes, porque o FINAL depende de relatórios comparáveis.
+7. ≤ 450 palavras.
+8. Idioma do run.
+
+### 4.5 Default `report.md` (FINAL)
+
+The header carries the objective in one line, plus coverage (`lotes x/B · frames a/b · lacunas n`). Sections, in order:
+
+1. Resposta ao objetivo (5 to 15 lines)
+2. Achados principais, with `[hh:mm:ss · Fxxxx]` and the batch report
+3. Linha do tempo resumida, as a table (trecho, assunto, tela, fala)
+4. The sections the objective calls for: passo a passo, decisões e pendências, erros, slides
+5. Lacunas e incertezas
+6. Índice dos lotes (lote, intervalo, link)
+
+---
+
+## 5. Analyst agent: `agents\video-analysis-analyst.md`
+
+### 5.1 Frontmatter
+
+```yaml
+---
+name: video-analysis-analyst
+description: Analista de lote da skill video-analysis (uso interno). Executa o prompt do curador: lê a linha do tempo, abre todos os frames do lote e grava o relatório. Não use fora da skill video-analysis.
+tools: Read, Write
+model: sonnet
+effort: medium
+maxTurns: 24
+omitClaudeMd: true
+color: cyan
+---
+```
+
+### 5.2 System prompt outline (pt-BR, ≈ 1.5 to 2k tokens)
+
+1. **Papel.** "Você analisa um lote de frames contra as falas do trecho e grava um relatório. Quem decide o foco é o curador; você executa com fidelidade. O que precisa saber do passado está no prompt."
+2. **Ambiente.**
+   - Use só Read e Write: não rode comandos nem crie scripts. This also holds in inline mode, where more tools exist.
+   - Grave só o relatório.
+   - Write sobre arquivo existente exige Read antes.
+   - "Se o prompt do curador e a chamada divergirem em caminho ou número de frames, vale a chamada."
+3. **Passos.**
+   1. Read the curator's prompt and the timeline in the same response. Contingency mode: read the objective and sections 4 and 5 of the ledger.
+   2. "Abra TODOS os frames listados, na ordem, em blocos de 8 a 10 Reads em paralelo por resposta. Não pule nem reabra. Frames de referência são extras e não contam em frames_seen."
+   3. "Cada frame é uma tela distinta (mudança só do cursor já foi removida); o intervalo é quanto tempo ela ficou." For each frame: what on screen matters for the focus, and how it relates to the cues in its interval.
+   4. Answer the questions.
+   5. Write the report.
+   6. Return the status.
+4. **Contrato padrão** (template below).
+5. **Fidelidade.**
+   - Only what is seen or heard; inference marked "(inferência)".
+   - Cite `[Fxxxx · hh:mm:ss]` everywhere.
+   - The subtitles are automatic: when the screen shows the correct name, use it and record the correction.
+   - Illegible text is "ilegível", never filled in from outside knowledge.
+   - Unlabelled speaker: identify from the screen and mark it as inference.
+6. **Dados sensíveis:** never write the value; record that it appeared, in which frame and at what time, in Alertas and in `warnings`.
+7. **Economia.**
+   - Dense report; quote the subtitles only briefly.
+   - Consecutive frames with no relevant difference become one row `F0042–F0045`.
+   - "grade, sem tela".
+   - ≤ 1,000 words per ~20 frames unless the prompt says otherwise.
+8. **Devolver.**
+   - `status`: `ok` | `partial` (a frame missing, or illegible text that affects the focus) | `failed` (could not write the report).
+   - `report_path`, `frames_seen`, `frames_missing` (`[]` if none), `notable` (≤ 2 sentences), `warnings`.
+   - Without StructuredOutput, one JSON line with the same fields.
+
+### 5.3 Default report contract
+
+```markdown
+# Lote {NNN} · {slug} · {início}–{fim} · F{a}–F{b} ({n} frames)
+## 1. Linha do tempo
+| frame | intervalo | tela | fala (falante: resumo; trecho literal curto) | relação |
+  relação ∈ confirma · complementa · diverge · só tela · só fala; linha ≤ 35 palavras
+## 2. Respostas          Q1. … — [F0042 · 00:03:12]
+## 3. Achados para o objetivo   - achado — evidência (tela/fala) [Fxxxx · hh:mm:ss] — confiança alta/média/baixa
+## 4. Para levar adiante  (≤ 8 itens: estado, nomes, decisões, pendências)
+## 5. Incertezas e correções  (ilegível, ambíguo; "transcrito" → "correto" [Fxxxx])
+## 6. Alertas  (dado sensível sem o valor; frames com problema)
+```
+
+---
+
+## 6. SKILL.md and reference files
+
+### 6.1 Frontmatter
+
+The description is 954 characters (counted with `len`).
+
+```yaml
+---
+name: video-analysis
+description: Analisa vídeos frame a frame contra as legendas (.vtt de mesmo nome) para um objetivo dado na chamada: gravações de tela, reuniões gravadas (Teams, Zoom) e aulas com slides. Extrai os frames únicos (mudança só do cursor não conta), alinha cada frame às falas, divide em lotes e dispara um Workflow em que um curador Opus escreve o prompt de cada lote e um analista Sonnet lê frames e falas, em sequência, levando o contexto adiante; entrega um relatório por vídeo e um combinado. Use quando pedirem para analisar, resumir, auditar ou extrair passos, decisões, erros ou evidências de um vídeo (.mp4, .mkv, .mov, .webm) ou de uma pasta de vídeos, "frame a frame", "contra a legenda" ou "contra a transcrição", ou o que aparece na tela quando algo é dito, e para retomar uma análise interrompida (`retomar`). Com `setup` (`/video-analysis setup`), prepara a máquina: ffmpeg, Python, agentes e permissões. Não escreva script ad hoc de frames: use esta skill.
+argument-hint: "<vídeo(s) ou pasta> <objetivo> [--max-lotes N] | retomar [run_id] | setup"
+allowed-tools:
+  - Bash(python "${CLAUDE_SKILL_DIR}/scripts/prepare.py" *)
+  - Bash(python "${CLAUDE_SKILL_DIR}/verificar_ambiente.py" *)
+  - Write(~/video-analysis/pedidos/*)
+---
+```
+
+### 6.2 Body sections (pt-BR, target ≤ 180 lines)
+
+1. **`# Análise de vídeo frame a frame contra a legenda`.** Three lines on what the skill does, then the golden rule: "**Você não lê o vídeo.** Quem abre frame, lote, transcrição e relatório de lote são os agentes do Workflow. Você prepara, dispara e apresenta."
+2. **`## Comandos`.**
+   - A table: `/video-analysis <vídeo(s)|pasta> <objetivo> [opções]`; `/video-analysis retomar [run_id]` (without an id, the most recent run); `/video-analysis setup` ("siga setup.md e não faça mais nada nesta chamada").
+   - Note that the argument arrives as `ARGUMENTS:`, following the existing convention.
+   - Options table: `--max-lotes N`, `--trecho hh:mm:ss-hh:mm:ss`, `--paralelo N` (default 3), `--esforco-analista low|medium|high`, `--papeis agents|inline`, `--idioma xx`.
+3. **`## Economia de tokens (vale para você)`.** The rules from §2, plus: "Invocar esta skill é o pedido explícito de um Workflow com muitos agentes (2 por lote, mais 2 por vídeo). Não junte nem pule lotes para caber em 10 agentes."
+4. **`## Fluxo`.** Steps 1 to 6 from §2.
+   - Step 3 shows the request file:
+
+     ```
+     # videos
+     <um caminho por linha>
+
+     # objetivo
+     <texto do usuário, literal>
+
+     # opcoes
+     papeis: agents|inline
+     <só as opções dadas>
+     ```
+
+     "Se o arquivo existir, leia antes (o Write exige)."
+   - Step 4: "com a ferramenta **Bash** (é ela que a skill pré-aprova)", then `python "${CLAUDE_SKILL_DIR}/scripts/prepare.py" --pedido "C:/Users/digom/video-analysis/pedidos/pedido.md"`, followed by the checks (erro, permissions, more than 80 agents, warnings).
+   - Step 5: "Chame a ferramenta Workflow com `scriptPath` = `script_path` e `args` = o objeto `workflow_args`, como objeto JSON, não como string, sem editar. Sem a ferramenta nesta sessão (nem por `ToolSearch select:Workflow`): siga [reference/sem-workflow.md](reference/sem-workflow.md)."
+   - Step 6 gives the presentation template:
+
+     ```
+     **<slug>** — <status> · lotes ok/planejados · frames vistos/esperados
+     <summary>
+     Relatório: <report_path>
+     ```
+
+     Then `combined`. "`partial` em modo teste é cobertura parcial, não erro." For `failed`, offer `retomar`. End by offering to open a report or start a `--trecho` run.
+5. **`## Retomar`.** `python "${CLAUDE_SKILL_DIR}/scripts/prepare.py" --resume <run_id|ultimo> --papeis <modo> [--max-lotes N]`, then steps 4 to 6. "O Workflow pula o que já tem arquivo."
+6. **`## Arquivos`.** The workspace map in three lines, with links to `reference/contratos.md` and `reference/problemas.md`.
+
+### 6.3 Reference files
+
+**`reference\sem-workflow.md`** (the fallback; loaded only when Workflow is missing):
+
+- Same loop, driven with the Agent tool: INIT, then for n from 1 to last, [NEXT n if n > 1] then analyst n, then FINAL; CROSS if 2 or more reports. Sequential per video. For multiple videos, one Agent call per video in the same message.
+- Exact calls:
+
+  ```
+  Agent({ description: "plano <slug>", subagent_type: "video-analysis-curator" /* inline: "general-purpose" */, model: "opus" /* se o parâmetro existir */, prompt: <preâmbulo só no inline> + <texto do modo, idêntico ao do workflow> + RODAPÉ })
+  ```
+
+  `RODAPÉ` = "Não há StructuredOutput nesta chamada: ao terminar, responda só com uma linha JSON com os campos …" (field list per mode, matching the schemas).
+- Checks: `frames_seen == batch_frames[n-1]` and `frames_missing == []`, otherwise one retry with the second-attempt note. Failed or partial batches go into the next NEXT prompt.
+- Token rules: do not Read any files. Keep only a compact table (lote, estado, frames). Each Agent result is one JSON line.
+- All 7 prompt templates (INIT, NEXT, analyst, contingency, analyst retry, FINAL, CROSS) copied from §3.2.
+- Warning: in inline mode without a `model` parameter, analysts would run on the session model (Opus). Run setup and restart first for long jobs.
+
+**`reference\problemas.md`** (symptom → cause → action):
+
+- A permission prompt for every file: rules missing or wrong; run setup.
+- `agentType` not found: agents not loaded in this session; use `--papeis inline` or restart.
+- `prepare.py` errors (`ffmpeg_ausente`, `video_nao_encontrado` — use quotes, `vtt_ausente`).
+- "file has not been read": an old `pedido.md`; read it, then overwrite.
+- Partial or failed batches: see Lacunas; redo with a `--trecho` run.
+- Interrupted run: `retomar`.
+- `run_grande_demais`: split the run, or use `--max-lotes` / `--trecho`.
+- Rate limits: `--paralelo 1`, `--esforco-analista low`.
+- Vague objective: reformulate it; extraction is cached.
+
+**`reference\contratos.md`:** §1.1, §1.2, the JS schemas, the return shape and the file layout, written out verbatim.
+
+---
+
+## 7. Permissions and setup
+
+### 7.1 `~/.claude/settings.json` snippet
+
+Adding this needs the user's explicit OK. Setup also prints it.
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Read(~/video-analysis/**)", "Edit(~/video-analysis/**)", "Write(~/video-analysis/**)",
+      "Read(//c/Users/digom/video-analysis/**)", "Edit(//c/Users/digom/video-analysis/**)", "Write(//c/Users/digom/video-analysis/**)"
+    ]
+  }
+}
+```
+
+- Windows paths are normalised to `/c/Users/...`, and `//` marks an absolute rule.
+- `Edit` already covers all file-editing tools; `Write` is a harmless extra.
+- Keep both forms until test step 9.2 shows which one works, then drop the other if you like.
+- Merge into the existing JSON, keeping `enabledPlugins` and the rest.
+
+### 7.2 `/video-analysis setup`
+
+Follows the `ingestao-adf` style, with each step tagged "você executa" or "a pessoa faz".
+
+`verificar_ambiente.py [--json] [--instalar-agentes] [--aplicar-permissoes]` checks:
+
+| check | result if missing |
+|---|---|
+| `python` 3.10+ | [FALTA] |
+| `ffmpeg` and `ffprobe` on PATH | [FALTA] (`winget install Gyan.FFmpeg`) |
+| imports from the deterministic layer's requirements | [FALTA] (`python -m pip install -r …` after a yes) |
+| workspace folders exist and are writable | created on demand |
+| **permission rules** (via `scripts/ambiente.py`) | [FALTA], because otherwise every frame read prompts |
+| **agents**: `~/.claude/agents/video-analysis-*.md` identical to the skill copies | [AVISO] only, since inline mode works |
+
+- Exit 0 means ready.
+- `--aplicar-permissoes` backs up to `settings.json.bak-<data>` and merges the rules. Run it only after the user's "sim".
+- `--instalar-agentes` creates `C:\Users\digom\.claude\agents\` and copies the 2 role files.
+- **Restart caveat (pt-BR):** "Agente novo em `~/.claude/agents` só é carregado quando o Claude Code abre. Depois de instalar, feche e abra o Claude Code; até lá a skill roda no modo inline, que funciona igual, gastando um pouco mais por agente." Add: if permission prompts continue after editing settings, restart.
+
+---
+
+## 8. Test plan
+
+1. **Static checks and control flow:** `node "C:/Users/digom/.claude/skills/video-analysis/tests/harness.mjs"`.
+   - **meta is a pure literal:** strip string literals, then only keys, braces, brackets, commas, numbers and booleans may remain.
+   - **Body compiles** inside `new AsyncFunction('args','agent','parallel','pipeline','log','phase','budget','workflow', body)`. Plain `node --check` cannot be used because of the top-level `return`.
+   - **Forbidden-API lint:** `Date.now|Math.random|new Date()|require(|import |process.|fs.`. During execution, patch `Date.now` and `Math.random` to throw.
+   - **Mocks:** `agent` driven by a scenario table; `parallel = t => Promise.all(t.map(f => Promise.resolve().then(f).catch(() => null)))`.
+   - **Scenarios and what they must show:**
+     - **happy path:** order INIT, A1, N2, A2, …, FINAL.
+     - **analyst short of frames:** the second prompt contains "SEGUNDA TENTATIVA" and the missing ids.
+     - **NEXT returns null twice:** a contingency analyst prompt, and the next NEXT lists 2 pending reports including the FALHOU line.
+     - **two NEXT failures in a row:** the video stops.
+     - **resume** (ledger present, start 3, no prompt): no INIT, and the first call is NEXT 3 with "Integrado até".
+     - **`final_exists`:** skipped.
+     - **3 videos with PAR 2:** never more than 2 concurrent.
+     - **CROSS:** only with 2 or more reports.
+     - **size guard:** throws above 800.
+     - **roles mode:** `agents` passes `agentType`, `model` and `effort`; `inline` passes no `agentType` and has the preamble.
+     - **return shape:** matches.
+2. **Inline dry run in the current session, after setup:**
+   - `/video-analysis C:\Users\digom\Downloads\venda_zero_clientes.mp4 Explique o indicador "venda zero clientes": o que é pedido, de onde vem cada dado citado e o que aparece na tela quando cada fonte é mencionada --max-lotes 2 --papeis inline`
+   - Expect 5 agents (INIT, A1, N2, A2, FINAL) and **no permission prompts**. If prompts appear, the rule syntax is wrong; this is a blocker.
+   - Then run `python "C:/Users/digom/.claude/skills/video-analysis/tests/check_run.py" <run_dir>`. It checks:
+     - **ledger:** exists, `Integrado até o lote: 001`, ≤ 1,500 words, plan table present.
+     - **prompts:** reference the absolute `batch_NNN.md` path; **no copying** (no cue line of 8 or more words from `batch_NNN.md` appears verbatim; at most 6 frame ids); ≤ 450 words.
+     - **reports:** each contains every frame id of its batch, directly or as a range.
+     - **`report.md`:** has "Resposta ao objetivo" and "Cobertura: lotes 2/B".
+     - **workflow return:** `frames` equals the expected count, `status: partial` because of test mode.
+   - Then judge by hand whether the ledger evolves sensibly between INIT and N2 and whether the final report answers the objective.
+3. **Resume:** `/video-analysis retomar ultimo --max-lotes 4`. Expect no INIT, NEXT 3 with "Integrado até", the old `report.md` renamed to `report.anterior.md`, and a new FINAL.
+4. **Kill test:** start a full run, stop it during batch 2, then `retomar`. Nothing finished is re-run.
+5. **New session after restart:** the agent types are listed. Run `--max-lotes 2 --papeis agents` and check:
+   - `agentType` resolves;
+   - StructuredOutput works with the `Read, Write` allowlist;
+   - `model` and `effort` options are accepted together with `agentType`;
+   - `omitClaudeMd` is honoured.
+   - Compare tokens (the return's `output_tokens` and `/workflows`) against the inline run. Then do one full fixture run, and optionally a meeting recording such as the 22-minute ARQ1 SharePoint video, to judge quality.
+6. **Fallback:** "use o modo sem Workflow" with `--max-lotes 1`.
+
+---
+
+## 9. Work packages for parallel Opus implementers
+
+Give each package the relevant sections of this spec verbatim.
+
+| WP | Deliverables | Inputs | Acceptance |
+|---|---|---|---|
+| A | `workflow\video-analysis.js`, `tests\harness.mjs`, `tests\fixtures\args_{happy,resume,multi}.json` | §1.1, §3 | harness all PASS; constraint lint clean |
+| B | `agents\video-analysis-curator.md` | §4 + per-call prompt formats in §3.2 | ≈ 3k tokens or less; 4 modes; ledger and prompt templates; JSON fields equal the schemas |
+| C | `agents\video-analysis-analyst.md` | §5 | ≈ 2k tokens or less; contract; JSON fields equal `S_ANALYST` |
+| D | `SKILL.md`, `reference\sem-workflow.md`, `reference\problemas.md`, `reference\contratos.md` | §1, §2, §3.2 templates, §6 | ≤ 180 lines; description ≤ 1,024 chars; fallback templates byte-equal to WP-A's builders |
+| E | `setup.md`, `verificar_ambiente.py`, `scripts\ambiente.py` | §7 + deterministic deps | follows `ingestao-adf` conventions; `--json`, `--instalar-agentes`, `--aplicar-permissoes` with backup |
+| F (last) | `tests\check_run.py`, then test steps 2 to 6 | everything, plus the finished deterministic layer | checks pass; findings fed back to B and C |
+
+A through E can run in parallel; this spec freezes the interfaces. F must wait for them and for the deterministic layer.
+
+---
+
+## 10. Rough token economics
+
+These are estimates, not measurements.
+
+- **Per ~20-frame batch.** Each 1568×882 frame is about 1,792 tokens, so 20 frames are about 36k.
+  - Analyst (Sonnet): about 41k fresh input, about 3 to 4k output, plus cheap cache re-reads.
+  - Curator NEXT (Opus): about 11k input (role, ledger, report, timeline, contact sheet) and about 3k written plus thinking. That output is the dominant curation cost.
+- **Fixture:** an estimated 80 to 120 unique frames, so 4 to 6 batches and 9 to 13 agents.
+- **55-minute meeting with the old dedup:** 1,001 frames, about 50 batches, about 101 agents, roughly 3 to 4 hours sequential.
+
+---
+
+## 11. Risks and open questions
+
+### Risks
+
+- **R1.** `agentType` combined with `model`, `effort` and `schema`, and StructuredOutput with a tools allowlist, are unverified. Test step 5.
+- **R2. Windows permission rule syntax.** If it is wrong, hundreds of prompts follow. `env.permissions_ok` and the SKILL warning mitigate this; test step 2.
+- **R3. Substitution and quoting.** The exact form `${CLAUDE_SKILL_DIR}` takes on Windows (backslashes?) and whether a quoted `allowed-tools` pattern matches the command. If not, the user approves once with "don't ask again". Also verify that a YAML list is accepted for `allowed-tools`.
+- **R4.** Write requires a prior Read for existing files. Handled by the DL-11 renames and the second-attempt notes.
+- **R5.** `resumeFromRunId` may not hit its cache when videos run concurrently. File-based resume is the primary path.
+- **R6. Long videos are slow and costly.** See v2 knobs below.
+- **R7.** The analyst could report `frames_seen` dishonestly. The curator's coverage audit and `check_run` mitigate it.
+- **R8.** The curator could carry too much context or copy the timeline. Budgets and `check_run` mitigate it.
+- **R9.** In fallback inline mode without an Agent `model` parameter, analysts run on Opus.
+- **R10. Inline mode has extra overhead per agent:** the default subagent prompt, about 250 deferred MCP tool names, and any CLAUDE.md in the cwd. So setup and restart early.
+- **R11.** The 1000-agent cap; guarded at 800.
+- **R12.** Unknown support for advanced JSON Schema keywords. The schemas use only type, enum, items, required and description.
+- **R13.** Rate limits; the default parallelism is 3.
+- **R14.** Transcripts without speaker labels, like the fixture. The roles infer speakers from the screen and mark it.
+
+### Open questions for the user
+
+1. Accept `Grep` for the curator? I recommend yes.
+2. Is 80 agents the right threshold for asking before launching?
+3. Which v2 knobs to prioritise:
+   - **relevance coverage** (`cobertura: relevante`): the curator skips batches unrelated to the objective and writes stub reports so resume still works. Probably the biggest saver on long meetings with narrow objectives.
+   - **curation stride 2** on homogeneous stretches.
+   - **parallel chapters** for long single videos.
+   - **a zoom tool**, which needs original-resolution frames and a Bash allow rule.
+4. Keep FINAL on Opus as specified, or move it to Sonnet to save cost?
+5. Batch target of 20 frames (DL-9)?
+6. Package the skill as a plugin later, so the agents register automatically with no copy-and-restart?
+7. If an objective references external files, should `prepare.py` copy them into `runs/<id>/anexos/` so agents can read them without extra permissions?
+
+### Critical Files for Implementation
+- C:\Users\digom\.claude\skills\video-analysis\workflow\video-analysis.js
+- C:\Users\digom\.claude\skills\video-analysis\agents\video-analysis-curator.md
+- C:\Users\digom\.claude\skills\video-analysis\agents\video-analysis-analyst.md
+- C:\Users\digom\.claude\skills\video-analysis\SKILL.md
+- C:\Users\digom\.claude\skills\video-analysis\scripts\prepare.py (the deterministic-layer interface: DL-1 to DL-16)

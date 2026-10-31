@@ -1,0 +1,18 @@
+{
+ "schema_version": 1,
+ "run_id": "20261006-153012-venda-zero-clientes",
+ "run_dir": "C:/Users/digom/video-analysis/runs/20261006-153012-venda-zero-clientes",
+ "objective_path": "C:/Users/digom/video-analysis/runs/20261006-153012-venda-zero-clientes/objective.md",
+ "roles_dir": "C:/Users/digom/video-analysis/roles",
+ "roles_mode": "inline",
+ "language": "pt-BR",
+ "options": {"max_batches": 4, "max_parallel_videos": 3, "analyst_effort": "high", "curator_effort": "high", "curation": "batches"},
+ "combined_exists": false,
+ "videos": [
+  {"slug": "venda-zero-clientes", "title": "venda_zero_clientes", "duration": "00:07:21", "n_frames": 98,
+   "batches_dir": "C:/Users/digom/video-analysis/cache/venda-zero-clientes-1a2b3c4d/batches-5e6f7a8b",
+   "out_dir": "C:/Users/digom/video-analysis/runs/20261006-153012-venda-zero-clientes/venda-zero-clientes",
+   "batch_images": [20, 18, 19, 20, 17],
+   "start_batch": 3, "ledger_exists": true, "start_prompt_exists": false, "final_exists": false}
+ ]
+}

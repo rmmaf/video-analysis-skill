@@ -1,0 +1,26 @@
+{
+ "schema_version": 1,
+ "run_id": "20261006-160000-tres-videos",
+ "run_dir": "C:/Users/digom/video-analysis/runs/20261006-160000-tres-videos",
+ "objective_path": "C:/Users/digom/video-analysis/runs/20261006-160000-tres-videos/objective.md",
+ "roles_dir": "C:/Users/digom/video-analysis/roles",
+ "roles_mode": "agents",
+ "language": "pt-BR",
+ "options": {"max_batches": null, "max_parallel_videos": 2, "analyst_effort": "high", "curator_effort": "high", "curation": "batches"},
+ "combined_exists": false,
+ "videos": [
+  {"slug": "repasse-fluxo-de-carga-20260818-160841", "title": "Repasse - Fluxo de Carga dos DA’s-20260818_160841-Gravação de Reunião",
+   "duration": "00:09:04", "n_frames": 41,
+   "batches_dir": "C:/Users/digom/video-analysis/cache/repasse-fluxo-de-carga-20260818-160841-3fa9c2d1/batches-1b2c3d4e",
+   "out_dir": "C:/Users/digom/video-analysis/runs/20261006-160000-tres-videos/repasse-fluxo-de-carga-20260818-160841",
+   "batch_images": [20, 19], "start_batch": 1, "ledger_exists": false, "start_prompt_exists": false, "final_exists": false},
+  {"slug": "dias-estoque", "title": "dias_estoque", "duration": "00:12:40", "n_frames": 40,
+   "batches_dir": "C:/Users/digom/video-analysis/cache/dias-estoque-9a8b7c6d/batches-0f1e2d3c",
+   "out_dir": "C:/Users/digom/video-analysis/runs/20261006-160000-tres-videos/dias-estoque",
+   "batch_images": [18, 21], "start_batch": 1, "ledger_exists": false, "start_prompt_exists": false, "final_exists": false},
+  {"slug": "criando-sua-primeira-pr", "title": "Criando sua primeira PR", "duration": "00:05:02", "n_frames": 39,
+   "batches_dir": "C:/Users/digom/video-analysis/cache/criando-sua-primeira-pr-5d6e7f80/batches-a1b2c3d4",
+   "out_dir": "C:/Users/digom/video-analysis/runs/20261006-160000-tres-videos/criando-sua-primeira-pr",
+   "batch_images": [20, 17], "start_batch": 1, "ledger_exists": false, "start_prompt_exists": false, "final_exists": false}
+ ]
+}

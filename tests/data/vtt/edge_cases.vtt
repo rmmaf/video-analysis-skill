@@ -1,0 +1,79 @@
+﻿WEBVTT - casos de borda (sintético)
+Language: pt-BR
+Kind: captions
+
+NOTE
+Bloco de comentário com
+várias linhas: deve ser ignorado.
+
+STYLE
+::cue(.amarelo) { color: yellow; }
+
+REGION
+id:fala
+width:40%
+lines:3
+
+1
+00:00:01.000 --> 00:00:03.000 align:start position:10% line:0 size:50% region:fala
+<c.amarelo>Configuração</c> com <i>itálico</i> e <b>negrito</b>
+
+2
+00:00:03.000 --> 00:00:05.000
+Karaokê <00:00:03.500>palavra <00:00:04.000>por <00:00:04.500>palavra
+
+voz-com-classe
+00:00:05.000 --> 00:00:07.000
+<v.alto Maria Silva>Voz com classe</v> &amp; entidade &lt;tag&gt;
+
+00:00:07.000 --> 00:00:09.000
+Espaço&nbsp;duro e marca&lrm; invisível&#8203;zero
+
+00:00:10.000 --> 00:00:10.000
+Duração zero
+
+00:00:13.000 --> 00:00:12.000
+Fim antes
+
+00:00:14.000 --> 00:00:16.000
+Primeira sem linha em branco
+00:00:16.000 --> 00:00:18.000
+Segunda colada na anterior
+
+00:00:18,500 --> 00:00:20,5
+Vírgula e fração curta
+
+NOTE comentário no meio dos cues
+
+00:21.000 --> 00:23.000
+Sem horas
+
+00:00:23.000-->00:00:25.000
+SPEAKER_02: Falante WhisperX
+
+00:00:25.000 --> 00:00:27.000
+FALANTE_?: Falante desconhecido
+
+fb880527-bb44-4f32-aeeb-3f4677659927/18-1
+00:00:27.000 --> 00:00:29.000
+A pergunta é: isto não é falante
+
+00:00:29.000 --> 00:00:31.000
+<v Ana>Primeira voz</v> <v Bruno>Segunda voz</v>
+
+00:00:31.000 --> 00:00:33.000
+<ruby>漢<rt>kan</rt></ruby> rubi
+
+00:00:33.000 --> 00:00:35.000
+<i></i>
+
+00:00:35.000 --> 00:00:36.000
+   
+
+00:01:61.000 --> 00:01:62.000
+Segundos inválidos
+
+00:00:37.000 --> 00:00:39.000
+Linha CRLF
+
+00:00:39.000 --> 00:00:41.000Linha só CR um00:00:41.000 --> 00:00:43.000Linha só CR dois

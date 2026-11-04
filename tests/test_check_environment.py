@@ -264,6 +264,7 @@ def test_old_names_still_work(sandbox, tools_ok, capsys):
     r = subprocess.run([sys.executable, "-B", str(SKILL / "verificar_ambiente.py"), "--json"], capture_output=True,
                        env=env, timeout=120)
     data = json.loads(r.stdout.decode("utf-8"))
+    assert list(data) == ["ready", "home", "claude_home", "actions", "items"]        # the new output, not the old one
     assert data["claude_home"] == chome.as_posix() and [i["id"] for i in data["items"]][0] == "python"
     assert {i["id"]: i["state"] for i in data["items"]}["agents"] == "ok"
     assert r.returncode == (0 if data["ready"] else 1)

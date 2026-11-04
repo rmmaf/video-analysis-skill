@@ -1,5 +1,6 @@
-"""Old name of check_environment.py (before the rename): runs it with the same arguments, so older
-instructions and scripts keep working."""
+"""Old name of check_environment.py (before the rename): runs it with the same arguments, including
+--instalar-agentes and --aplicar-permissoes, and returns its exit code. The output is the new one:
+[MISSING]/[WARN] and, with --json, the English keys (ready, items, state...)."""
 import runpy
 import sys
 from pathlib import Path

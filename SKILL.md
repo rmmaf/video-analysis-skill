@@ -5,6 +5,7 @@ argument-hint: "<video(s) or folder> <objective> [--max-lotes N] [--trecho hh:mm
 allowed-tools:
   - Bash(python "${CLAUDE_SKILL_DIR}/scripts/prepare.py" *)
   - Bash(python "${CLAUDE_SKILL_DIR}/verificar_ambiente.py" *)
+  - Write(~/video-analysis/requests/*)
   - Write(~/video-analysis/pedidos/*)
 ---
 
@@ -32,19 +33,19 @@ ledger and batch reports are opened by the Workflow's agents. You prepare, launc
 The argument reaches the end of the skill as `ARGUMENTS: …`. A request to "configure", "install" or
 "prepare" the skill is also `setup`; if it interrupted an analysis, offer to resume it at the end.
 
-| option | in `pedido.md` | effect |
+| option | in `request.md` | effect |
 |---|---|---|
-| `--max-lotes N` | `max_lotes` | test mode: only batches 1–N of each video |
-| `--trecho hh:mm:ss-hh:mm:ss` | `trecho` | only that segment, with its own batches over the cache of the whole video |
-| `--paralelo N` | `paralelo` | videos in parallel (default 3); `1` against rate limits |
-| `--esforco-analista low\|medium\|high` | `esforco_analista` | effort of the Sonnet analyst (default `high`; `medium` costs ~13% less and makes the answers less complete) |
-| `--curadoria plano\|lotes` | `curadoria` | `lotes`: curator before each batch, carrying the context forward (≈ 2× the cost; default `plano`) |
-| `--esforco-curador low\|medium\|high` | `esforco_curador` | effort of the Opus curator in the batches, only with `--curadoria lotes` (default `high`) |
-| `--papeis agents\|inline` | `papeis` | forces the roles mode (without the option, step 2 applies) |
-| `--idioma xx` | `idioma` | language of the reports (default: that of the objective; when in doubt, `pt-BR`) |
-| `--falantes "SPEAKER_01=Name;…"` | `falantes` | real names of the speakers in the subtitles |
-| `--sensibilidade low\|normal\|high` | `sensibilidade` | `high` catches smaller changes (more frames); `low`, the opposite |
-| `--ignorar-regiao x,y,w,h` | `ignorar_regiao` | region (fractions of the frame) left out of the comparison: webcam, clock |
+| `--max-lotes N` | `max_batches` | test mode: only batches 1–N of each video |
+| `--trecho hh:mm:ss-hh:mm:ss` | `range` | only that segment, with its own batches over the cache of the whole video |
+| `--paralelo N` | `parallel` | videos in parallel (default 3); `1` against rate limits |
+| `--esforco-analista low\|medium\|high` | `analyst_effort` | effort of the Sonnet analyst (default `high`; `medium` costs ~13% less and makes the answers less complete) |
+| `--curadoria plano\|lotes` | `curation: plan\|batches` | `lotes`: curator before each batch, carrying the context forward (≈ 2× the cost; default `plano`) |
+| `--esforco-curador low\|medium\|high` | `curator_effort` | effort of the Opus curator in the batches, only with `--curadoria lotes` (default `high`) |
+| `--papeis agents\|inline` | `roles` | forces the roles mode (without the option, step 2 applies) |
+| `--idioma xx` | `language` | language of the reports (default: that of the objective; when in doubt, `pt-BR`) |
+| `--falantes "SPEAKER_01=Name;…"` | `speakers` | real names of the speakers in the subtitles |
+| `--sensibilidade low\|normal\|high` | `sensitivity` | `high` catches smaller changes (more frames); `low`, the opposite |
+| `--ignorar-regiao x,y,w,h` | `ignore_region` | region (fractions of the frame) left out of the comparison: webcam, clock |
 
 When to change each one: [`reference/parametros.md`](reference/parametros.md).
 
@@ -69,28 +70,28 @@ When to change each one: [`reference/parametros.md`](reference/parametros.md).
 2. **Roles.** `agents` if `video-analysis-curator` and `video-analysis-analyst` appear in the list of
    available agent types; otherwise `inline`, which works the same and spends a little more per agent.
    The user's `--papeis` option prevails.
-3. **Request.** With Write, save `C:\Users\digom\video-analysis\pedidos\pedido.md`; if the file exists,
+3. **Request.** With Write, save `C:\Users\digom\video-analysis\requests\request.md`; if the file exists,
    read it first (Write requires it). The objective goes in verbatim, with quotes and line breaks: nothing
-   goes through the shell. In `# opcoes`: `papeis` always, `idioma` if the objective is not in
-   Portuguese, and only the other options given.
+   goes through the shell. In `# options`, with the keys of the table above: `roles` always, `language` if
+   the objective is not in Portuguese, and only the other options given.
 
    ```
    # videos
    C:/Users/digom/Downloads/venda_zero_clientes.mp4
 
-   # objetivo
+   # objective
    <the user's text, verbatim>
 
-   # opcoes
-   papeis: inline
-   max_lotes: 2
+   # options
+   roles: inline
+   max_batches: 2
    ```
 
 4. **Estimate**, with the **Bash** tool (it is the one the skill pre-approves; do not use PowerShell or
    `python3`):
 
    ```bash
-   python "${CLAUDE_SKILL_DIR}/scripts/prepare.py" --pedido "C:/Users/digom/video-analysis/pedidos/pedido.md" --estimar
+   python "${CLAUDE_SKILL_DIR}/scripts/prepare.py" --request "C:/Users/digom/video-analysis/requests/request.md" --estimar
    ```
 
    The estimate does not consume the request; an error here is handled as in step 5. If
@@ -110,13 +111,13 @@ When to change each one: [`reference/parametros.md`](reference/parametros.md).
      - `1` internal error of `prepare.py`: give the `detail` and the log in `logs\`; do not try to work
        around it.
 
-     An error in step 5 (not in 4) renames the request to `pedido.erro.md`: to retry, write it again.
+     An error in step 5 (not in 4) renames the request to `request.error.md`: to retry, write it again.
    - `env.permissions_ok: false` → warn that every frame read will ask for permission and offer the
      setup before launching.
    - `estimate.agents` above 80 → give the batches, the agents and the approximate duration (≈ 4 min per
      batch, in series within the video, videos in parallel) and ask before going on.
    - a high-density warning with a suggested region to ignore → offer to repeat with
-     `ignorar_regiao: x,y,w,h` in a new request (fewer frames, lower cost).
+     `ignore_region: x,y,w,h` in a new request (fewer frames, lower cost).
 
    Gather into a single question whatever needs an answer. A warning that needs no answer fits in one of
    the 3 lines of step 6. Other errors and warnings: [`reference/problemas.md`](reference/problemas.md).
@@ -185,6 +186,6 @@ python "${CLAUDE_SKILL_DIR}/verificar_ambiente.py"
 
 Central folder `C:\Users\digom\video-analysis\`: `cache\<slug>-<fp8>\` (subtitles, frames and batches,
 reused across runs) · `runs\<YYYYMMDD-HHMMSS>-<slug>\` (combined `relatorio.md`, with 2+ videos; per
-video, `v1\relatorio.md`, `v2\…`, with ledger, prompts and batch reports) · `pedidos\` · `roles\` ·
+video, `v1\relatorio.md`, `v2\…`, with ledger, prompts and batch reports) · `requests\` · `roles\` ·
 `logs\`. Formats and paths: [`reference/contratos.md`](reference/contratos.md). Errors and warnings:
 [`reference/problemas.md`](reference/problemas.md).

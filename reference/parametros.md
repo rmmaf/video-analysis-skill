@@ -23,7 +23,7 @@ again.
 
 `--sensibilidade` and `--ignorar-regiao` change the extraction: the frames are extracted again, and the
 subtitles come from the cache. For several regions, separate them with `;` in the request
-(`ignorar_regiao: 0.80,0.75,0.20,0.25; 0.00,0.00,0.20,0.06`). The other parameters on this page exist only
+(`ignore_region: 0.80,0.75,0.20,0.25; 0.00,0.00,0.20,0.06`). The other parameters on this page exist only
 on the `prepare.py` command line, for manual use and calibration; the skill does not pass them.
 
 **Region in fractions.** `x,y` is the top-left corner and `w,h` the width and the height, from 0 to 1
@@ -129,7 +129,7 @@ shape is detected.
   against the number of frames.
 - **Labels** of `batch_NNN.md` come out in the language detected in the subtitles (pt-BR or English); the
   suffix of a revisit's image line is always ` (revisita de Fxxxx)`. The reports come out in the
-  request's `idioma`. Full format in [`contratos.md`](contratos.md), section 4.
+  request's `language`. Full format in [`contratos.md`](contratos.md), section 4.
 
 ## Density warnings and the suggested region
 
@@ -140,7 +140,7 @@ subtitles they come from are redone):
 - **Density**, above 12 frames/min in the video or 30 in any one minute:
   `high density: 14.2 frames/min in the video (limit 12); suggested region to ignore: 0.80,0.75,0.20,0.25
   (explains 45% of the frames)`, or, without a region,
-  `…; no recurring region to ignore (if there are redundant frames: sensibilidade low)`.
+  `…; no recurring region to ignore (if there are redundant frames: sensitivity low)`.
 - **Region suggestion:** `prepare.py` groups the change boxes of the kept frames that take up at most 25%
   of the frame. If a group explains at least 30% of the frames and at least 10 frames, it suggests
   ignoring the union of those boxes plus one cell, with 2 decimal places. It is the typical case of a
@@ -157,10 +157,10 @@ subtitles they come from are redone):
 
 | change | redoes | reuses |
 |---|---|---|
-| new objective, `max_lotes`, `paralelo`, efforts, `idioma`, `papeis` | only the agents | the whole cache |
-| `trecho` | the batches of the segment | frames and subtitles of the whole video |
-| `falantes`, edited subtitles | subtitles and batches | frames |
-| `sensibilidade`, `ignorar_regiao` | frames and batches | subtitles |
+| new objective, `max_batches`, `parallel`, efforts, `language`, `roles` | only the agents | the whole cache |
+| `range` | the batches of the segment | frames and subtitles of the whole video |
+| `speakers`, edited subtitles | subtitles and batches | frames |
+| `sensitivity`, `ignore_region` | frames and batches | subtitles |
 | video moved, renamed or edited | everything (another cache key) | — |
 
 ## Diagnostics (manual use, by a person)

@@ -470,6 +470,6 @@ def test_workflow_and_workspace_defaults():
     assert (w["analyst_effort"], w["curator_effort"], w["max_parallel_videos"]) == ("high", "high", 3)
     assert w["curation"] == "plan" and w["curation"] in va.CURATION_MODES
     assert w["analyst_effort"] in va.EFFORT_LEVELS and w["roles_mode"] in va.ROLES_MODES
-    assert set(va.WORKSPACE_DIRS) == {"cache", "runs", "pedidos", "roles", "logs", "debug", "tmp"}
+    assert set(va.WORKSPACE_DIRS) == {"cache", "runs", "requests", "roles", "logs", "debug", "tmp"}
     assert va.WORKSPACE_ENV == "VIDEO_ANALYSIS_HOME"
     assert va.EXIT_CODES == {"ok": 0, "input": 2, "environment": 3, "video_failed": 4, "interrupted": 130}

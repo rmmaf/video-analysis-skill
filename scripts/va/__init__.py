@@ -230,7 +230,7 @@ WORKSPACE_DEFAULT_NAME = "video-analysis"   # %USERPROFILE%\video-analysis
 WORKSPACE_DIRS = {
     "cache": "cache",
     "runs": "runs",
-    "pedidos": "pedidos",
+    "requests": "requests",          # the request being prepared (pedidos before the rename)
     "roles": "roles",
     "logs": "logs",
     "debug": "debug",

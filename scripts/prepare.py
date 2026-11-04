@@ -2,8 +2,8 @@
 """Deterministic preparation for the video-analysis skill: unique frames, subtitles, batches and workflow_args.
 
 From the skill (always the Bash tool, always ``python``, never ``python3``):
-    python prepare.py --pedido "C:/Users/digom/video-analysis/pedidos/pedido.md" --estimar
-    python prepare.py --pedido "C:/Users/digom/video-analysis/pedidos/pedido.md"
+    python prepare.py --request "C:/Users/digom/video-analysis/requests/request.md" --estimar
+    python prepare.py --request "C:/Users/digom/video-analysis/requests/request.md"
     python prepare.py --resume <run_id|run_dir|ultimo> [--papeis agents|inline] [--max-lotes N] [--curadoria plano|lotes]
 Manual use:
     python prepare.py INPUT [INPUT ...] [--objective-file MD | --objective "text"] [--run [NAME]] [options]
@@ -75,7 +75,8 @@ def build_parser() -> argparse.ArgumentParser:
                 formatter_class=argparse.RawDescriptionHelpFormatter, epilog="\n".join(__doc__.splitlines()[1:]))
     p.add_argument("inputs", nargs="*", metavar="INPUT", help="video, folder or wildcard (* and ?) — manual use")
     m = p.add_argument_group("mode")
-    m.add_argument("--pedido", metavar="MD", help="pedido.md with # videos, # objetivo and # opcoes (the skill's input)")
+    m.add_argument("--request", "--pedido", dest="request", metavar="MD",
+                   help="request.md with # videos, # objective and # options (the skill's input; --pedido is the old name)")
     m.add_argument("--estimar", "--estimate", dest="estimate", action="store_true",
                    help="ffprobe and cache only: estimates the time; does not consume the request or create a run")
     m.add_argument("--resume", "--retomar", dest="resume", metavar="RUN", help="run_id, run folder or ultimo")
@@ -150,7 +151,7 @@ class Ctx:
         self.quiet = False
         self.debug = False
         self.stderr_on = False
-        self.pedido: Path | None = None
+        self.request: Path | None = None
         self.consume = False
         self.partial_run = False
         self.status: "Status | None" = None
@@ -280,18 +281,18 @@ class Status:
 # --- inputs and options -------------------------------------------------------------------------------
 
 def gather(ctx: Ctx, args) -> tuple[list[str], str | None, dict]:
-    if args.pedido:
-        ctx.pedido = Path(os.path.abspath(args.pedido))
-        ctx.consume = not args.estimate  # any later failure renames it to pedido.erro.md
+    if args.request:
+        ctx.request = Path(os.path.abspath(args.request))
+        ctx.consume = not args.estimate  # any later failure renames it to request.error.md
         if args.inputs:
-            raise Fail("uso_invalido", "use --pedido or direct inputs (INPUT…), not both")
+            raise Fail("uso_invalido", "use --request or direct inputs (INPUT…), not both")
         if args.objective or args.objective_file:
-            raise Fail("uso_invalido", "with --pedido, the objective comes from the '# objetivo' section")
-        ped = runs.read_pedido(ctx.pedido)
-        entries, objective, raw = ped["videos"], ped["objective"], dict(ped["options"])
+            raise Fail("uso_invalido", "with --request, the objective comes from the '# objective' section")
+        req = runs.read_request(ctx.request)
+        entries, objective, raw = req["videos"], req["objective"], dict(req["options"])
     else:
         if not args.inputs:
-            raise Fail("uso_invalido", "provide --pedido <md>, videos (INPUT…), --resume <run> or --gc")
+            raise Fail("uso_invalido", "provide --request <md>, videos (INPUT…), --resume <run> or --gc")
         entries, raw = list(args.inputs), {}
         objective = None
         if args.objective_file:
@@ -324,7 +325,7 @@ def _num(args, name: str, lo: float, hi: float, label: str) -> float | None:
 
 
 def stage_overrides(args, opts: dict) -> dict:
-    """User overrides per stage: pedido options plus the manual flags of design §2."""
+    """User overrides per stage: request options plus the manual flags of design §2."""
     fr: dict = {}
     cu: dict = {}
     ba: dict = {}
@@ -501,7 +502,7 @@ def roles_and_env(ctx: Ctx, requested: str) -> tuple[str, dict]:
     mode = requested
     if requested == "agents" and not agents["current"]:
         mode = "inline"
-        ctx.warnings.append("papeis: agents requested, but the copies in ~/.claude/agents are not identical to the skill's "
+        ctx.warnings.append("roles (--papeis): agents requested, but the copies in ~/.claude/agents are not identical to the skill's "
                             f"({agents['detail']}); using inline. Run /video-analysis setup and reopen Claude Code")
     return mode, env
 
@@ -510,7 +511,7 @@ def guard(ctx: Ctx, agents: int, forcar: bool, **extra) -> None:
     limit = WORKFLOW_DEFAULTS["max_agents"]
     if agents > limit and not forcar:
         raise Fail("run_grande_demais", f"~{agents} estimated agents (limit {limit}; the Workflow refuses above that): "
-                   "split into smaller runs, use trecho or max_lotes", **extra)
+                   "split into smaller runs, use range (--trecho) or max_batches (--max-lotes)", **extra)
     if agents > limit:
         ctx.warnings.append(f"~{agents} agents (--forcar): the Workflow refuses more than {limit} agents; split the run "
                             "(--trecho/--max-lotes or fewer videos) before launching")
@@ -615,7 +616,7 @@ def check_args(wargs: dict) -> None:
 
 def run_gc(ctx: Ctx, args) -> int:
     ctx.mode = "gc"
-    if args.inputs or args.pedido or args.resume or args.estimate:
+    if args.inputs or args.request or args.resume or args.estimate:
         raise Fail("uso_invalido", "--gc runs alone")
     if args.gc < 0:
         raise Fail("opcao_invalida", "--gc: DAYS must be 0 or more")
@@ -637,7 +638,7 @@ def run_prepare(ctx: Ctx, args) -> int:
         opts = runs.normalize_options(raw)
     except runs.RunError as exc:
         raise Fail(exc.code, exc.detail) from None
-    make_run = not estimate and (ctx.pedido is not None or objective is not None or args.run is not None)
+    make_run = not estimate and (ctx.request is not None or objective is not None or args.run is not None)
     if args.run is not None and objective is None and not estimate:
         raise Fail("objetivo_ausente", "--run needs --objective-file or --objective")
     ensure_home(ctx)
@@ -792,7 +793,7 @@ def run_prepare(ctx: Ctx, args) -> int:
     run_doc = {
         "schema": "va.run/1", "version": va.VERSION, "run_id": ctx.run_id, "run_dir": as_posix(ctx.run_dir),
         "created": cache.iso_now(), "argv": sys.argv[1:], "home": as_posix(ctx.home),
-        "pedido": as_posix(ctx.run_dir / "pedido.md") if ctx.pedido else None,
+        "request": as_posix(ctx.run_dir / runs.REQUEST_MD) if ctx.request else None,
         "objective_md": as_posix(ctx.run_dir / "objective.md"), "objective": objective, "language": language,
         "options": {**wopts, "roles_mode_requested": requested, "roles_mode": roles_mode, "trecho": trecho},
         "overrides": overrides, "params": params,
@@ -810,7 +811,7 @@ def run_prepare(ctx: Ctx, args) -> int:
     ok = not errors
     ctx.partial_run = not ok
     if ok and ctx.consume:
-        runs.consume_pedido(ctx.pedido, ctx.run_dir, ok=True)
+        runs.consume_request(ctx.request, ctx.run_dir, ok=True)
         ctx.consume = False
     ctx.log(f"done in {ctx.elapsed():.1f} s: {n_batches} batch(es), ~{agents} agent(s), roles {roles_mode}")
     if ctx.status:
@@ -824,7 +825,7 @@ def run_prepare(ctx: Ctx, args) -> int:
 
 
 class _Partial(Exception):
-    """Exit 4 with a usable run: the envelope is ready; the pedido still counts as failed."""
+    """Exit 4 with a usable run: the envelope is ready; the request still counts as failed."""
 
     def __init__(self, env: dict):
         super().__init__("partial")
@@ -881,8 +882,8 @@ def finish_estimate(ctx: Ctx, args, items: list[dict], errors: list[dict], wopts
 
 def run_resume(ctx: Ctx, args) -> int:
     ctx.mode = "resume"
-    if args.pedido or args.inputs or args.estimate or args.force:
-        raise Fail("uso_invalido", "--resume does not accept --pedido, inputs, --estimar or --force")
+    if args.request or args.inputs or args.estimate or args.force:
+        raise Fail("uso_invalido", "--resume does not accept --request, inputs, --estimar or --force")
     ensure_home(ctx)
     try:
         run_dir = runs.find_run(ctx.home, args.resume)
@@ -1056,9 +1057,9 @@ def _consume_failed(ctx: Ctx) -> None:
         with contextlib.suppress(Exception):
             ctx.status.finish("erro")
         ctx.status = None
-    if ctx.consume and ctx.pedido is not None:
+    if ctx.consume and ctx.request is not None:
         with contextlib.suppress(OSError):
-            runs.consume_pedido(ctx.pedido, ctx.run_dir, ok=False, copy_to_run=ctx.partial_run)
+            runs.consume_request(ctx.request, ctx.run_dir, ok=False, copy_to_run=ctx.partial_run)
         ctx.consume = False
 
 

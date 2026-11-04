@@ -7,9 +7,10 @@ video in which each finding points to the frame and the time that support it.
 
 **Version 1.0.0** · Windows · Python 3.10+ · ffmpeg · Claude Code with the Workflow tool
 
-The command-line options, the keys of the request file (`pedido.md`), the `retomar` keyword and the names
-of the run files stay in Portuguese, because they are the skill's interface. Reports are written in the
-language of the objective (`--idioma` overrides it; pt-BR when in doubt).
+The request file (`request.md`) is in English and still accepts the Portuguese names of the earlier version
+(`pedido.md`, `# objetivo`, `# opcoes`, `max_lotes`…). The command-line options, the `retomar` keyword and
+the names of the run files stay in Portuguese, because they are the skill's interface. Reports are written
+in the language of the objective (`--idioma` overrides it; pt-BR when in doubt).
 
 ## Overview
 
@@ -40,7 +41,7 @@ The skill has two layers.
 
 ```mermaid
 flowchart TD
-    A["Call to /video-analysis"] --> B["pedido.md<br/>videos, objective and options"]
+    A["Call to /video-analysis"] --> B["request.md<br/>videos, objective and options"]
     B --> C["prepare.py<br/>unique frames, subtitles, alignment and batches"]
     C --> D[("cache per video")]
     C --> E["Workflow"]
@@ -165,7 +166,7 @@ When to change each one and what it costs: [`reference/parametros.md`](reference
 ├── runs\<YYYYMMDD-HHMMSS>-<slug>\
 │   ├── relatorio.md                 combined report, with 2+ videos
 │   └── v1\                          the video's relatorio.md, ledger.md, prompts\ and reports\
-├── pedidos\                         request of the analysis in progress
+├── requests\                        request of the analysis in progress
 ├── roles\                           copy of the roles for inline mode
 └── logs\
 ```

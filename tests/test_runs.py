@@ -261,6 +261,22 @@ def test_consume_request_with_the_old_name(tmp_path):
     assert R.consume_request(other, None, ok=False) == ped_dir / "meu pedido.error.md"
 
 
+def test_old_function_names_still_work(tmp_path):
+    """parse_pedido, read_pedido and consume_pedido, the names of before the rename, still import and
+    are the new functions."""
+    from va.runs import consume_pedido, parse_pedido, read_pedido
+    assert parse_pedido is R.parse_request and read_pedido is R.read_request and consume_pedido is R.consume_request
+    assert {"parse_pedido", "read_pedido", "consume_pedido"} <= set(R.__all__)
+    assert parse_pedido(LEGACY_REQUEST) == R.parse_request(REQUEST)
+    ped_dir, run = tmp_path / "pedidos", tmp_path / "runs" / "r1"
+    ped_dir.mkdir()
+    run.mkdir(parents=True)
+    p = ped_dir / "pedido.md"
+    p.write_text(LEGACY_REQUEST, encoding="utf-8")
+    assert read_pedido(p)["options"]["papeis"] == "inline"
+    assert consume_pedido(p, run, ok=True) == run / "request.md" and not p.exists()
+
+
 # --- resume -------------------------------------------------------------------------------------------
 
 def _out(tmp_path, *, ledger=False, reports=(), prompts=(), report=False, legacy=False):

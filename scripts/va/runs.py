@@ -17,6 +17,8 @@ contract items 1-4; design-agentico DL-2, DL-5, DL-6, DL-11, DL-12).
 - ``consume_request``: success -> ``<run_dir>/request.md``; failure -> ``request.error.md``
   (``pedido.erro.md`` for a request still named ``pedido.md``), replacing an older one, so the next
   Write of the request never needs a Read first.
+- ``parse_pedido``, ``read_pedido`` and ``consume_pedido``: the names of before the rename, kept as
+  aliases for scripts that import them.
 """
 from __future__ import annotations
 
@@ -37,6 +39,7 @@ __all__ = [
     "objective_markdown", "parse_request", "read_request", "resume_combined", "resume_video", "run_slug",
     "scaffold_video",
     "unique_slugs", "workflow_options", "parse_regions", "parse_trecho", "parse_speakers", "fold",
+    "consume_pedido", "parse_pedido", "read_pedido",
 ]
 
 MAX_SLUG = 40
@@ -454,6 +457,12 @@ def consume_request(request: str | os.PathLike, run_dir: str | os.PathLike | Non
     dst = src.with_name(f"{src.stem}{tag}{src.suffix or '.md'}")
     _move(src, dst)
     return dst
+
+
+# the names of before the rename, kept for scripts that import them
+parse_pedido = parse_request
+read_pedido = read_request
+consume_pedido = consume_request
 
 
 # --- resume (DL-11) -----------------------------------------------------------------------------------

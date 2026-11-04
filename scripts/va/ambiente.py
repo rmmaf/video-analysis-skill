@@ -1,5 +1,5 @@
 """Environment checks shared by prepare.py and verificar_ambiente.py (design-agentico §7, DL-6,
-DL-13; plan, "Permissões e setup").
+DL-13; plan, "Permissions and setup").
 
 - Runtime: Python >= 3.10, ffmpeg and ffprobe on PATH, numpy and Pillow importable.
 - Workspace: the central folder and its subfolders exist (created on demand) and accept writes.

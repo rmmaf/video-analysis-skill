@@ -1,6 +1,6 @@
 # Contracts: request, prepare, workflow_args, schemas, return and folders
 
-Source of truth: the "Contrato unificado" section of `docs/plano.md`. The schemas and the return hold as
+Source of truth: the "Unified contract" section of `docs/plano.md`. The schemas and the return hold as
 they are in `workflow/video-analysis.js`; this page repeats them for reference. Every path in JSON and in
 the generated `.md` files is absolute and uses `/` (`C:/Users/digom/...`).
 

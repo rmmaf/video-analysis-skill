@@ -262,7 +262,7 @@ Symptoms, causes and fixes, including permissions, agents and Workflow:
 
 ## Next steps
 
-Out of scope for version 1, according to the [plan](docs/plano.md) (in Portuguese):
+Out of scope for version 1, according to the [plan](docs/plano.md):
 
 - coverage by relevance: the curator skips batches unrelated to the objective, the biggest gain in long meetings;
 - curation every 2 batches in homogeneous segments;
@@ -294,9 +294,9 @@ following ones.
 | [`reference/parametros.md`](reference/parametros.md) | what each parameter does and when to change it |
 | [`reference/problemas.md`](reference/problemas.md) | symptom, cause and what to do |
 | [`reference/sem-workflow.md`](reference/sem-workflow.md) | the same loop with the Agent tool, without Workflow |
-| [`docs/plano.md`](docs/plano.md) (in Portuguese) | plan, architecture and implementation errata |
-| [`docs/design-deterministico.md`](docs/design-deterministico.md) | specification of the deterministic layer (in English) |
-| [`docs/design-agentico.md`](docs/design-agentico.md) | specification of the agentic layer (in English) |
+| [`docs/plano.md`](docs/plano.md) | plan, architecture and implementation errata |
+| [`docs/design-deterministico.md`](docs/design-deterministico.md) | specification of the deterministic layer |
+| [`docs/design-agentico.md`](docs/design-agentico.md) | specification of the agentic layer |
 | [`tests/data/calibration.md`](tests/data/calibration.md) | measurements that calibrated the parameters |
 
 ## Repository structure

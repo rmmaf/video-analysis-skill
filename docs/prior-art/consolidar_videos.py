@@ -1,4 +1,4 @@
-"""Junta janela e verificador de cada janela de vídeo a partir do journal do workflow."""
+"""Joins window and verifier of each video window from the workflow journal."""
 import json, sys
 from pathlib import Path
 
@@ -54,4 +54,4 @@ for w in indice:
 (SCR / "videos" / "artefatos_vistos.json").write_text(json.dumps(artefatos, ensure_ascii=False, indent=1), encoding="utf8")
 for k, s in stats.items():
     print(k, s)
-print("itens:", len(itens), "| janelas sem resultado:", faltando)
+print("items:", len(itens), "| windows without a result:", faltando)

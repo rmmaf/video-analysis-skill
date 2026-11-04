@@ -1,4 +1,4 @@
-"""Data contracts of the video-analysis skill (spec section 6 + plan "Contrato unificado").
+"""Data contracts of the video-analysis skill (spec section 6 + plan "Unified contract").
 
 TypedDicts document the JSON shapes (key order in the files follows the field order here).
 Validators return a list of error strings; an empty list means the document is valid.

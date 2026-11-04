@@ -1,7 +1,7 @@
-"""Extrai os frames distintos de um vídeo a 2 fps e alinha cada um à transcrição .vtt.
+"""Extracts the distinct frames of a video at 2 fps and aligns each one to the .vtt transcript.
 
-Uso: python frames.py <slug> <video> <vtt>
-Grava em scratchpad/videos/<slug>/: frames/*.jpg (resolução cheia), alinhamento.jsonl, janelas.json, resumo.json
+Usage: python frames.py <slug> <video> <vtt>
+Writes to scratchpad/videos/<slug>/: frames/*.jpg (full resolution), alinhamento.jsonl, janelas.json, resumo.json
 """
 import json, re, subprocess, sys, time
 from pathlib import Path
@@ -9,10 +9,10 @@ import numpy as np
 
 SCR = Path(__file__).resolve().parent
 FPS = 2
-W, H = 480, 270            # escala de decisão; os frames salvos ficam em 1920x1080
-LIMIAR_PIXEL = 18          # diferença de cinza que conta como mudança
-FRACAO_MUDANCA = float(__import__("os").environ.get("FRACAO", "0.008"))  # fração dos pixels fora da máscara que precisa mudar
-FREQ_QUENTE = 0.15         # pixel que muda em >15% dos pares de frames (webcam, animação) é ignorado
+W, H = 480, 270            # decision scale; the saved frames stay at 1920x1080
+LIMIAR_PIXEL = 18          # gray-level difference that counts as a change
+FRACAO_MUDANCA = float(__import__("os").environ.get("FRACAO", "0.008"))  # fraction of the pixels outside the mask that must change
+FREQ_QUENTE = 0.15         # a pixel that changes in >15% of the frame pairs (webcam, animation) is ignored
 JANELA_FRAMES, JANELA_SEG, SOBREPOSICAO = 50, 600, 30
 
 
@@ -53,14 +53,14 @@ def main(slug, video, vtt):
         low[n] = np.frombuffer(b, np.uint8).reshape(H, W); n += 1
     proc.wait()
     low = low[:n]
-    # máscara do que muda o tempo todo
+    # mask of what changes all the time
     freq = np.zeros((H, W), np.float32)
     for i in range(1, n, 256):
         a = low[i - 1:min(i + 256, n)].astype(np.int16)
         freq += (np.abs(np.diff(a, axis=0)) > LIMIAR_PIXEL).sum(axis=0)
     freq /= max(n - 1, 1)
     quente = freq > FREQ_QUENTE
-    for _ in range(3):  # dilata a máscara
+    for _ in range(3):  # dilate the mask
         quente = quente | np.roll(quente, 1, 0) | np.roll(quente, -1, 0) | np.roll(quente, 1, 1) | np.roll(quente, -1, 1)
     frio = ~quente; n_frio = max(int(frio.sum()), 1)
     manter, ultimo = [0], low[0].astype(np.int16)
@@ -68,8 +68,8 @@ def main(slug, video, vtt):
         atual = low[i].astype(np.int16)
         if ((np.abs(atual - ultimo) > LIMIAR_PIXEL) & frio).sum() / n_frio > FRACAO_MUDANCA:
             manter.append(i); ultimo = atual
-    # segunda decodificação, em resolução cheia e JPEG; guarda só os frames mantidos.
-    # (select= com milhares de termos estoura o parser de expressão do ffmpeg)
+    # second decode, at full resolution and as JPEG; saves only the kept frames.
+    # (select= with thousands of terms overflows the ffmpeg expression parser)
     for f in (base / "frames").glob("*.jpg"):
         f.unlink()
     nomes = {i: f"f{idx:04d}_{ts(i / FPS).replace(':', '')}.jpg" for idx, i in enumerate(manter)}
@@ -92,11 +92,11 @@ def main(slug, video, vtt):
         (base / "frames" / nomes[k]).write_bytes(buf); gravados += 1
     proc.wait()
     if gravados != len(manter):
-        print(f"AVISO {slug}: {gravados} jpg para {len(manter)} frames mantidos ({k + 1} decodificados)", flush=True)
+        print(f"WARNING {slug}: {gravados} jpg for {len(manter)} kept frames ({k + 1} decoded)", flush=True)
     frames = [{"frame": nomes[i], "t": i / FPS} for i in manter if (base / "frames" / nomes[i]).exists()]
     for k, fr in enumerate(frames):
         fr["t_fim"] = frames[k + 1]["t"] if k + 1 < len(frames) else dur
-    # alinhamento
+    # alignment
     cues = ler_vtt(vtt); j = 0
     for c in cues:
         while j + 1 < len(frames) and frames[j + 1]["t"] <= c["ini"]:
@@ -108,7 +108,7 @@ def main(slug, video, vtt):
             fh.write(json.dumps({**fr, "inicio": ts(fr["t"]), "fim": ts(fr["t_fim"]),
                                  "falas": [f"[{ts(c['ini'])}] {c['falante']}: {c['texto']}" for c in falas]},
                                 ensure_ascii=False) + "\n")
-    # janelas para os agentes
+    # windows for the agents
     janelas, atual = [], []
     for fr in frames:
         if atual and (len(atual) >= JANELA_FRAMES or fr["t"] - atual[0]["t"] >= JANELA_SEG):

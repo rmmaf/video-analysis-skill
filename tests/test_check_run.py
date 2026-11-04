@@ -134,7 +134,7 @@ def make_run(tmp_path: Path, *, run_json: bool = True, ledger_hdr: str = "Integr
 
 def table(capsys) -> dict[str, list[str]]:
     out = capsys.readouterr().out.splitlines()
-    return {level: [ln for ln in out if ln.startswith(level)] for level in ("FAIL", "WARN")}
+    return {level: [ln for ln in out if ln.startswith(level)] for level in ("FAIL", "AVISO")}
 
 
 def fails(capsys) -> list[str]:
@@ -187,7 +187,7 @@ def test_batch_format_outside_the_contract_fails(tmp_path, capsys):
     tl.write_text(tl.read_text(encoding="utf-8").replace(" (revisita de F0002)", ""), encoding="utf-8")
     assert check_run.main([str(run_dir)]) == 1
     bad = fails(capsys)
-    assert len(bad) == 1 and "batch.format" in bad[0] and "teste 002" in bad[0] and "F0006" in bad[0], bad
+    assert len(bad) == 1 and "lote.formato" in bad[0] and "teste 002" in bad[0] and "F0006" in bad[0], bad
 
 
 def test_good_run_passes_with_and_without_return(tmp_path, capsys):
@@ -196,7 +196,7 @@ def test_good_run_passes_with_and_without_return(tmp_path, capsys):
     assert check_run.main([str(run_dir), "--return", ret()]) == 0, fails(capsys)
     assert check_run.main([str(run_dir), "--return", ret(frames=None, start=3)]) == 0  # resume with the FINAL only
     t = table(capsys)
-    assert not t["FAIL"] and not t["WARN"], t
+    assert not t["FAIL"] and not t["AVISO"], t
 
 
 def test_prompt_that_copies_a_cue_or_lists_frames_fails(tmp_path, capsys):
@@ -205,7 +205,7 @@ def test_prompt_that_copies_a_cue_or_lists_frames_fails(tmp_path, capsys):
                           foco2="- Ele diz: então quando o pedido entra depois da meia noite ele só aparece depois.")
     assert check_run.main([str(run_dir)]) == 1
     bad = fails(capsys)
-    assert any("prompt.cue_copy" in ln and "teste 002" in ln and "C0005 (12 words)" in ln for ln in bad), bad
+    assert any("prompt.copia_fala" in ln and "teste 002" in ln and "C0005 (12 words)" in ln for ln in bad), bad
     assert any("prompt.ids" in ln and "teste 001" in ln and "17 frame references" in ln for ln in bad), bad
     assert len(bad) == 2, bad
 
@@ -217,20 +217,20 @@ def test_short_quote_and_ids_above_the_role_are_warn(tmp_path, capsys):
     assert check_run.main([str(run_dir)]) == 0
     t = table(capsys)
     assert not t["FAIL"], t
-    assert any("prompt.ids" in ln and "teste 001" in ln and "10 frame references" in ln for ln in t["WARN"]), t
-    assert any("prompt.cue_copy" in ln and "teste 002" in ln and "C0005 (8 words)" in ln for ln in t["WARN"]), t
-    assert len(t["WARN"]) == 2, t
+    assert any("prompt.ids" in ln and "teste 001" in ln and "10 frame references" in ln for ln in t["AVISO"]), t
+    assert any("prompt.copia_fala" in ln and "teste 002" in ln and "C0005 (8 words)" in ln for ln in t["AVISO"]), t
+    assert len(t["AVISO"]) == 2, t
 
 
 def test_word_budget_has_warn_before_fail(tmp_path, capsys):
     run_dir, _ = make_run(tmp_path, foco2="- " + "detalhe " * 430)
     assert check_run.main([str(run_dir)]) == 0
     t = table(capsys)
-    assert not t["FAIL"] and any("prompt.words" in ln and "teste 002" in ln for ln in t["WARN"]), t
+    assert not t["FAIL"] and any("prompt.palavras" in ln and "teste 002" in ln for ln in t["AVISO"]), t
     run_dir2, _ = make_run(tmp_path / "b", foco2="- " + "detalhe " * 700)
     assert check_run.main([str(run_dir2)]) == 1
     bad = fails(capsys)
-    assert len(bad) == 1 and "prompt.words" in bad[0] and "teste 002" in bad[0], bad
+    assert len(bad) == 1 and "prompt.palavras" in bad[0] and "teste 002" in bad[0], bad
 
 
 def test_copied_cues_separates_short_quote_from_copy():
@@ -246,7 +246,7 @@ def test_report_missing_a_frame_fails_and_a_range_covers(tmp_path, capsys):
     run_dir, _ = make_run(tmp_path, rows2="| F0005 | 00:00:40 | tabela | S1: corte | confirma |\n| F0007 | 00:01:00 | fim | S1: despedida | confirma |")
     assert check_run.main([str(run_dir)]) == 1
     bad = fails(capsys)
-    assert len(bad) == 1 and "report.frames" in bad[0] and "F0006" in bad[0], bad
+    assert len(bad) == 1 and "relatorio.frames" in bad[0] and "F0006" in bad[0], bad
     run_dir2, _ = make_run(tmp_path / "b", rows2="| F0005–F0007 | 00:00:40–00:01:10 | tabela e fim | S1: corte | confirma |")
     assert check_run.main([str(run_dir2)]) == 0, fails(capsys)
 
@@ -255,7 +255,7 @@ def test_malformed_ledger_and_divergent_return_fail(tmp_path, capsys):
     run_dir, _ = make_run(tmp_path, ledger_hdr="Integrado até o lote: 001")
     assert check_run.main([str(run_dir), "--return", ret(frames="5/6", status="ok")]) == 1
     bad = " ".join(fails(capsys))
-    for check in ("ledger.integrated", "return.frames", "return.status", "final.frames"):
+    for check in ("ledger.integrado", "retorno.frames", "retorno.status", "final.frames"):
         assert check in bad, bad
 
 
@@ -266,13 +266,13 @@ def test_plan_curation_accepts_ledger_000_and_only_the_prompt_of_batch_1(tmp_pat
     assert check_run.main([str(run_dir)]) == 0, fails(capsys)
     assert check_run.main([str(run_dir), "--return", ret()]) == 0, fails(capsys)
     t = table(capsys)
-    assert not t["FAIL"] and not t["WARN"], t
+    assert not t["FAIL"] and not t["AVISO"], t
     run_dir2, _ = make_run(tmp_path / "b", curation="plan")  # ledger at 001: NEXT before resuming as plan
     assert check_run.main([str(run_dir2)]) == 0, fails(capsys)
     run_dir3, _ = make_run(tmp_path / "c", curation="plan", ledger_hdr="Integrado até o lote: 003 de 003")
     assert check_run.main([str(run_dir3)]) == 1
     bad = fails(capsys)
-    assert len(bad) == 1 and "ledger.integrated" in bad[0] and "expected 000–002 de 003" in bad[0], bad
+    assert len(bad) == 1 and "ledger.integrado" in bad[0] and "expected 000–002 de 003" in bad[0], bad
 
 
 def test_plan_curation_requires_the_prompt_of_batch_1_and_checks_the_others_that_exist(tmp_path, capsys):
@@ -281,12 +281,12 @@ def test_plan_curation_requires_the_prompt_of_batch_1_and_checks_the_others_that
         (Path(wa["videos"][0]["out_dir"]) / "prompts" / f"batch_00{n}.md").unlink()
     assert check_run.main([str(run_dir)]) == 1
     bad = fails(capsys)
-    assert len(bad) == 1 and "prompt.exists" in bad[0] and "teste 001" in bad[0], bad
+    assert len(bad) == 1 and "prompt.existe" in bad[0] and "teste 001" in bad[0], bad
     run_dir2, _ = make_run(tmp_path / "b", curation="plan", ledger_hdr="Integrado até o lote: 000 de 003",
                            foco2="- Ele diz: então quando o pedido entra depois da meia noite ele só aparece depois.")
     assert check_run.main([str(run_dir2)]) == 1
     bad = fails(capsys)
-    assert len(bad) == 1 and "prompt.cue_copy" in bad[0] and "teste 002" in bad[0], bad
+    assert len(bad) == 1 and "prompt.copia_fala" in bad[0] and "teste 002" in bad[0], bad
 
 
 def test_batches_curation_or_no_key_requires_integrated_ledger_and_all_prompts(tmp_path, capsys):
@@ -296,8 +296,8 @@ def test_batches_curation_or_no_key_requires_integrated_ledger_and_all_prompts(t
         (Path(wa["videos"][0]["out_dir"]) / "prompts" / "batch_002.md").unlink()
         assert check_run.main([str(run_dir)]) == 1
         bad = fails(capsys)
-        assert any("ledger.integrated" in ln and "expected 001 de 003" in ln for ln in bad), (cur, bad)
-        assert any("prompt.exists" in ln and "teste 002" in ln for ln in bad), (cur, bad)
+        assert any("ledger.integrado" in ln and "expected 001 de 003" in ln for ln in bad), (cur, bad)
+        assert any("prompt.existe" in ln and "teste 002" in ln for ln in bad), (cur, bad)
         assert len(bad) == 2, (cur, bad)
 
 
@@ -308,7 +308,7 @@ def test_final_report_only_with_the_new_name(tmp_path, capsys):
     (out / "relatorio.md").rename(out / "report.md")
     assert check_run.main([str(run_dir)]) == 1
     bad = fails(capsys)
-    assert len(bad) == 1 and "final.exists" in bad[0] and "relatorio.md" in bad[0], bad
+    assert len(bad) == 1 and "final.existe" in bad[0] and "relatorio.md" in bad[0], bad
 
 
 def test_args_by_flag_and_usage_error(tmp_path, capsys):

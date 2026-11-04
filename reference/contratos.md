@@ -258,7 +258,7 @@ C:/Users/digom/video-analysis/cache/<slug>-<fp8>/frames-<h8>/F0054_000851.jpg (r
 - **`Falantes:`** lists only who speaks in the batch. **`Folha de contato:`** (in English, `Contact sheet:`)
   is the curator's contact sheet; the analyst does not open it and it never counts as an image.
 - Cues: `≈` = approximate time; `(cont.)` = began before the batch; `↳ C0141` = already printed above;
-  `- (sem fala)`. `tests/check_run.py` checks this format (`batch.format`).
+  `- (sem fala)`. `tests/check_run.py` checks this format (`lote.formato`).
 
 **Ledger.** The second line starts with `Integrado até o lote: NNN de BBB` (`000` after the INIT). A batch
 that failed also counts as integrated, recorded as a gap. It is this header that makes each step of the

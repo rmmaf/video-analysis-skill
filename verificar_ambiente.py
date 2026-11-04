@@ -33,12 +33,12 @@ from va import ambiente  # noqa: E402
 from va.common import as_posix, setup_console, workspace_home  # noqa: E402
 
 STEPS = {
-    "python": "1-tools", "ffmpeg": "1-tools", "ffprobe": "1-tools",
-    "numpy": "2-libraries", "pillow": "2-libraries",
-    "pasta-central": "3-central folder",
-    "agentes": "4-agents", "instalar-agentes": "4-agents",
-    "workflow": "4-agents", "instalar-workflow": "4-agents",
-    "permissoes": "5-permissions", "aplicar-permissoes": "5-permissions",
+    "python": "1-ferramentas", "ffmpeg": "1-ferramentas", "ffprobe": "1-ferramentas",
+    "numpy": "2-bibliotecas", "pillow": "2-bibliotecas",
+    "pasta-central": "3-pasta central",
+    "agentes": "4-agentes", "instalar-agentes": "4-agentes",
+    "workflow": "4-agentes", "instalar-workflow": "4-agentes",
+    "permissoes": "5-permissões", "aplicar-permissoes": "5-permissões",
 }
 LABEL = {"ok": "[OK]   ", "falta": "[FALTA]", "aviso": "[AVISO]"}
 # The Workflow keeps in memory, per session, the saved workflow it has already read: once the file is

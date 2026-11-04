@@ -10,7 +10,7 @@ when --return is given. The curation is options.curation: plan (the prepare.py d
 (--curadoria lotes, with the NEXT before each batch after the 1st); without the key, batches, because the
 run predates the option and had the NEXT.
 
-Checks (one line each: PASS, WARN or FAIL; only FAIL fails the run):
+Checks (one line each: PASS, AVISO or FAIL; only FAIL fails the run):
   args        the run_dir of the args is the folder being checked
   batch       images: image lines of batch_NNN.md = batch_images[n-1]. format: the contract of
               scripts/va/render.py: the image line is only the absolute path, with "/", of a .jpg, plus
@@ -23,9 +23,9 @@ Checks (one line each: PASS, WARN or FAIL; only FAIL fails the run):
               nobody rewrites the ledger); words (budget 1,500); plan table (header with "lotes")
   prompt      exists (with plan, only the one of batch 1 is required; those of the other batches are
               checked if they exist); cites the absolute path of batch_NNN.md; copied cue: 8 to 11
-              consecutive words of a cue of the batch = short quote (WARN), 12 or more, or the whole cue =
+              consecutive words of a cue of the batch = short quote (AVISO), 12 or more, or the whole cue =
               copy (FAIL); references to frames, with a range F0041–F0045 counting as 1: up to 8 (the 3–6
-              Foco items and up to 2 reference frames of the curator role), up to 16 WARN, above FAIL
+              Foco items and up to 2 reference frames of the curator role), up to 16 AVISO, above FAIL
               (copied frame list); words (budget 450)
   report      cites every frame of the batch, one by one or inside a range (F0042–F0045)
   final       <out_dir>/relatorio.md has "Resposta ao objetivo" and "Cobertura: lotes x/B" with x = last;
@@ -33,8 +33,8 @@ Checks (one line each: PASS, WARN or FAIL; only FAIL fails the run):
   combined    <run_dir>/relatorio.md when there are 2+ videos
   return      (--return) frames seen = expected; status ≠ failed; partial when planned < total
 
-Word budgets: up to the limit, PASS; up to 1.5 times the limit, WARN; above, FAIL.
-Exit code: 0 no FAIL (there may be WARN) · 1 some check failed · 2 usage error.
+Word budgets: up to the limit, PASS; up to 1.5 times the limit, AVISO; above, FAIL.
+Exit code: 0 no FAIL (there may be AVISO) · 1 some check failed · 2 usage error.
 """
 from __future__ import annotations
 
@@ -48,14 +48,14 @@ import re  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
+PASS, AVISO, FAIL = "PASS", "AVISO", "FAIL"
 FINAL_MD = "relatorio.md"   # final report, per video and combined (never report.md: the harness blocks subagents)
 MAX_LEDGER_WORDS = 1500
 MAX_PROMPT_WORDS = 450
-SOFT_FACTOR = 1.5      # budget exceeded up to 1.5x: WARN; above: FAIL
+SOFT_FACTOR = 1.5      # budget exceeded up to 1.5x: AVISO; above: FAIL
 MAX_FRAME_REFS = 8     # curator role: Foco with 3-6 items by id/time + up to 2 reference frames
 HARD_FRAME_REFS = 16   # above this the prompt is listing the frames of the batch
-COPY_WORDS = 8         # 8+ consecutive words of a cue: short quote (WARN)
+COPY_WORDS = 8         # 8+ consecutive words of a cue: short quote (AVISO)
 HARD_COPY_WORDS = 12   # 12+ consecutive words, or the whole cue (with 8+ words): copy (FAIL)
 
 FRAME_HDR = re.compile(r"^###\s+(F\d{4,5})\b(.*)$")
@@ -275,7 +275,7 @@ class Checker:
 
     def budget(self, value: int, limit: int, check: str, target: str, unit: str) -> None:
         hard = int(limit * SOFT_FACTOR)
-        level = PASS if value <= limit else WARN if value <= hard else FAIL
+        level = PASS if value <= limit else AVISO if value <= hard else FAIL
         self.add_level(level, check, target, f"{value} {unit} · budget {limit} (FAIL above {hard})")
 
     def count(self, level: str) -> int:
@@ -290,7 +290,7 @@ class Checker:
         w2 = max([len("TARGET")] + [len(r.target) for r in self.rows])
         out = [f"{'RESULT':6}  {'CHECK':{w1}}  {'TARGET':{w2}}  DETAIL"]
         out += [f"{r.level:6}  {r.check:{w1}}  {r.target:{w2}}  {r.detail}" for r in self.rows]
-        out.append(f"\n{len(self.rows)} checks: {self.count(PASS)} PASS, {self.count(WARN)} WARN, {self.failed} FAIL")
+        out.append(f"\n{len(self.rows)} checks: {self.count(PASS)} PASS, {self.count(AVISO)} AVISO, {self.failed} FAIL")
         return "\n".join(out)
 
 
@@ -310,69 +310,69 @@ def check_video(chk: Checker, wa: dict, v: dict, rv: dict | None) -> None:
     for n in range(1, last + 1):
         tl = bdir / f"batch_{n:03d}.md"
         tgt = f"{slug} {n:03d}"
-        if not chk.add(tl.is_file(), "batch.timeline", tgt, str(tl) if not tl.is_file() else ""):
+        if not chk.add(tl.is_file(), "lote.linha_do_tempo", tgt, str(tl) if not tl.is_file() else ""):
             continue
         b = batches[n] = parse_batch(read(tl))
         want = images[n - 1] if n - 1 < len(images) else None
-        chk.add(b.images == want, "batch.images", tgt, f"{b.images} image lines · batch_images {want} · {len(b.frames)} frames")
+        chk.add(b.images == want, "lote.imagens", tgt, f"{b.images} image lines · batch_images {want} · {len(b.frames)} frames")
         probs = b.problems + ([] if b.sheet else ['missing the "Folha de contato:" line'])
         detail = "; ".join(probs[:3]) + (f" … (+{len(probs) - 3})" if len(probs) > 3 else "") if probs else "render.py format"
-        chk.add(not probs, "batch.format", tgt, detail)
+        chk.add(not probs, "lote.formato", tgt, detail)
 
     ledger = out / "ledger.md"
-    if chk.add(ledger.is_file(), "ledger.exists", slug, "" if ledger.is_file() else str(ledger)):
+    if chk.add(ledger.is_file(), "ledger.existe", slug, "" if ledger.is_file() else str(ledger)):
         text = read(ledger)
         m = LEDGER_HDR.search(text)
         if not m:
-            chk.add(False, "ledger.integrated", slug, 'missing "Integrado até o lote: NNN de BBB"')
+            chk.add(False, "ledger.integrado", slug, 'missing "Integrado até o lote: NNN de BBB"')
         else:
             k, bb = int(m.group(1)), m.group(2)
             lo = 0 if plan else max(0, last - 1)
             ok = bb is not None and int(bb) == total and lo <= k <= last
             want = f"{lo:03d}–{last:03d} de {total:03d} (plan curation)" if plan else f"{lo:03d} de {total:03d}"
             fmt = "" if bb is not None else ' · expected format "NNN de BBB"'
-            chk.add(ok, "ledger.integrated", slug, f"{m.group(0)} · expected {want}{fmt}")
-        chk.budget(count_words(text), MAX_LEDGER_WORDS, "ledger.words", slug, "words")
-        chk.add(has_plan_table(text), "ledger.plan", slug, "plan table" if has_plan_table(text) else "no table with a \"lotes\" header")
+            chk.add(ok, "ledger.integrado", slug, f"{m.group(0)} · expected {want}{fmt}")
+        chk.budget(count_words(text), MAX_LEDGER_WORDS, "ledger.palavras", slug, "words")
+        chk.add(has_plan_table(text), "ledger.plano", slug, "plan table" if has_plan_table(text) else "no table with a \"lotes\" header")
 
     for n in range(1, last + 1):
         tgt = f"{slug} {n:03d}"
         p = out / "prompts" / f"batch_{n:03d}.md"
-        if (n == 1 or not plan or p.is_file()) and chk.add(p.is_file(), "prompt.exists", tgt, "" if p.is_file() else str(p)):
+        if (n == 1 or not plan or p.is_file()) and chk.add(p.is_file(), "prompt.existe", tgt, "" if p.is_file() else str(p)):
             text = read(p)
             want = norm(f"{v['batches_dir']}/batch_{n:03d}.md")
-            chk.add(want in norm(text), "prompt.path", tgt, "cites batch_NNN.md" if want in norm(text) else f"does not cite {want}")
+            chk.add(want in norm(text), "prompt.caminho", tgt, "cites batch_NNN.md" if want in norm(text) else f"does not cite {want}")
             if n in batches:
                 hits = copied_cues(text, batches[n].cues)
                 copies = [f"{cid} ({k} words)" for cid, k, hard in hits if hard]
                 quotes = [f"{cid} ({k} words)" for cid, k, hard in hits if not hard]
                 if copies:
-                    chk.add_level(FAIL, "prompt.cue_copy", tgt, "copies " + ", ".join(copies[:6]))
+                    chk.add_level(FAIL, "prompt.copia_fala", tgt, "copies " + ", ".join(copies[:6]))
                 elif quotes:
-                    chk.add_level(WARN, "prompt.cue_copy", tgt, "quotes an excerpt of " + ", ".join(quotes[:6]))
+                    chk.add_level(AVISO, "prompt.copia_fala", tgt, "quotes an excerpt of " + ", ".join(quotes[:6]))
                 else:
-                    chk.add_level(PASS, "prompt.cue_copy", tgt, f"no cue excerpt with {COPY_WORDS}+ words")
+                    chk.add_level(PASS, "prompt.copia_fala", tgt, f"no cue excerpt with {COPY_WORDS}+ words")
             refs = len(frame_refs(text))
-            level = PASS if refs <= MAX_FRAME_REFS else WARN if refs <= HARD_FRAME_REFS else FAIL
+            level = PASS if refs <= MAX_FRAME_REFS else AVISO if refs <= HARD_FRAME_REFS else FAIL
             chk.add_level(level, "prompt.ids", tgt, f"{refs} frame references · up to {MAX_FRAME_REFS} (FAIL above {HARD_FRAME_REFS})")
-            chk.budget(count_words(text), MAX_PROMPT_WORDS, "prompt.words", tgt, "words")
+            chk.budget(count_words(text), MAX_PROMPT_WORDS, "prompt.palavras", tgt, "words")
         r = out / "reports" / f"batch_{n:03d}.md"
-        if chk.add(r.is_file(), "report.exists", tgt, "" if r.is_file() else str(r)) and n in batches:
+        if chk.add(r.is_file(), "relatorio.existe", tgt, "" if r.is_file() else str(r)) and n in batches:
             nums = covered_numbers(read(r))
             missing = [f for f in batches[n].frames if int(f[1:]) not in nums]
             detail = f"missing {', '.join(missing[:8])}{' …' if len(missing) > 8 else ''}" if missing else f"{len(batches[n].frames)} frames cited"
-            chk.add(not missing, "report.frames", tgt, detail)
+            chk.add(not missing, "relatorio.frames", tgt, detail)
 
     final = out / FINAL_MD
-    if chk.add(final.is_file(), "final.exists", slug, "" if final.is_file() else str(final)):
+    if chk.add(final.is_file(), "final.existe", slug, "" if final.is_file() else str(final)):
         text = read(final)
-        chk.add(bool(ANSWER.search(text)), "final.answer", slug, '"Resposta ao objetivo"' if ANSWER.search(text) else 'missing "Resposta ao objetivo"')
+        chk.add(bool(ANSWER.search(text)), "final.resposta", slug, '"Resposta ao objetivo"' if ANSWER.search(text) else 'missing "Resposta ao objetivo"')
         m = COVERAGE.search(text)
         if not m:
-            chk.add(False, "final.coverage", slug, 'missing "Cobertura: lotes x/B"')
+            chk.add(False, "final.cobertura", slug, 'missing "Cobertura: lotes x/B"')
         else:
             x, y = int(m.group(1)), int(m.group(2))
-            chk.add(x == last and y == total, "final.coverage", slug, f"batches {x}/{y} · expected {last}/{total}")
+            chk.add(x == last and y == total, "final.cobertura", slug, f"batches {x}/{y} · expected {last}/{total}")
         frames = (rv or {}).get("frames")
         if frames and (rv.get("batches") or {}).get("from") == 1:
             fm = COV_FRAMES.search(text)
@@ -385,22 +385,22 @@ def check_return(chk: Checker, wa: dict, ret: dict) -> None:
     for v in wa["videos"]:
         slug = str(v.get("slug"))
         rv = by_slug.get(slug)
-        if not chk.add(rv is not None, "return.video", slug, "" if rv else "missing from the return"):
+        if not chk.add(rv is not None, "retorno.video", slug, "" if rv else "missing from the return"):
             continue
         status, frames, b = rv.get("status"), rv.get("frames"), rv.get("batches") or {}
         if status == "skipped":
-            chk.add(True, "return.frames", slug, f"skipped ({FINAL_MD} already existed)")
+            chk.add(True, "retorno.frames", slug, f"skipped ({FINAL_MD} already existed)")
         elif frames is None and isinstance(b.get("from"), int) and isinstance(b.get("planned"), int) and b["from"] > b["planned"]:
-            chk.add(True, "return.frames", slug, "no new batch in this run (resume with the FINAL only)")
+            chk.add(True, "retorno.frames", slug, "no new batch in this run (resume with the FINAL only)")
         else:
             m = re.fullmatch(r"(\d+)/(\d+)", str(frames or ""))
-            chk.add(bool(m) and m.group(1) == m.group(2), "return.frames", slug, f"frames {frames}")
+            chk.add(bool(m) and m.group(1) == m.group(2), "retorno.frames", slug, f"frames {frames}")
         partial_needed = isinstance(b.get("planned"), int) and isinstance(b.get("total"), int) and b["planned"] < b["total"]
         ok = status in ("ok", "partial", "skipped") and (status != "ok" or not partial_needed)
-        chk.add(ok, "return.status", slug, f"{status}{' (limited run: expected partial)' if partial_needed else ''}")
+        chk.add(ok, "retorno.status", slug, f"{status}{' (limited run: expected partial)' if partial_needed else ''}")
     comb = ret.get("combined")
     if isinstance(comb, dict) and comb.get("error"):
-        chk.add(False, "return.combined", "run", str(comb["error"]))
+        chk.add(False, "retorno.combinado", "run", str(comb["error"]))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -427,7 +427,7 @@ def main(argv: list[str] | None = None) -> int:
         check_video(chk, wa, v, by_slug.get(v.get("slug")))
     if len(wa["videos"]) > 1:
         comb = run_dir / FINAL_MD
-        chk.add(comb.is_file(), "combined.exists", "run", "" if comb.is_file() else str(comb))
+        chk.add(comb.is_file(), "combinado.existe", "run", "" if comb.is_file() else str(comb))
     if ret is not None:
         check_return(chk, wa, ret)
     print(chk.table())

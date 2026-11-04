@@ -109,11 +109,11 @@ def test_not_ready_without_permissions(sandbox, tools_ok, capsys):
     assert any(l.startswith("[OK]    python ") for l in lines)
     assert any(l.startswith("[OK]    pasta-central ") for l in lines) and (home / "runs").is_dir()
     perm = line_of(out, "permissoes")
-    assert perm.startswith("[FALTA]") and "-> setup.md, step 5 (permissions)" in perm and "--aplicar-permissoes" in perm
+    assert perm.startswith("[FALTA]") and "-> setup.md, step 5 (permissões)" in perm and "--aplicar-permissoes" in perm
     ag = line_of(out, "agentes")
-    assert ag.startswith("[AVISO]") and "-> setup.md, step 4 (agents)" in ag
+    assert ag.startswith("[AVISO]") and "-> setup.md, step 4 (agentes)" in ag
     wf = line_of(out, "workflow")
-    assert wf.startswith("[AVISO]") and "-> setup.md, step 4 (agents)" in wf
+    assert wf.startswith("[AVISO]") and "-> setup.md, step 4 (agentes)" in wf
     assert "video-analysis.js ausente in " + (chome / "workflows").as_posix() in wf and "--instalar-agentes" in wf
     assert not (chome / "workflows").exists()                                  # the check only reads
 
@@ -131,7 +131,7 @@ def test_install_apply_then_ready(sandbox, tools_ok, capsys):
     # the workflow changed: the open session may keep the previous version in memory (an AVISO, exit still 0)
     assert lines[2].startswith("[AVISO] instalar-workflow ") and "previous version" in lines[2]
     assert "close and reopen Claude Code" in lines[2] and "scriptPath" in lines[2]
-    assert lines[2].endswith("-> setup.md, step 4 (agents)")
+    assert lines[2].endswith("-> setup.md, step 4 (agentes)")
     assert lines[3].startswith("[OK]    aplicar-permissoes ") and "backup at" in lines[3]
     data = json.loads((chome / "settings.json").read_text(encoding="utf-8"))
     assert data["enabledPlugins"] == {"p@m": True}
@@ -156,7 +156,7 @@ def test_outdated_workflow_is_aviso_until_reinstalled(sandbox, tools_ok, capsys)
     code, out = run(capsys, "--json")
     wf = json.loads(out)["itens"][-1]
     assert wf["id"] == "workflow" and wf["estado"] == "aviso" and wf["copia"] == "diferente"
-    assert wf["detalhe"].startswith("video-analysis.js diferente in ") and wf["passo"] == "4-agents"
+    assert wf["detalhe"].startswith("video-analysis.js diferente in ") and wf["passo"] == "4-agentes"
     code, out = run(capsys, "--instalar-agentes", "--json")
     data = json.loads(out)
     action = next(a for a in data["acoes"] if a["id"] == "instalar-workflow")
@@ -180,7 +180,7 @@ def test_workflow_copy_failure_is_falta(sandbox, tools_ok, monkeypatch, capsys):
     code, out = run(capsys, "--instalar-agentes")
     action = line_of(out, "instalar-workflow")
     assert code == 1 and action.startswith("[FALTA]") and "could not copy the workflow" in action and "acesso negado" in action
-    assert "-> setup.md, step 4 (agents)" in action and line_of(out, "instalar-agentes").startswith("[OK]")
+    assert "-> setup.md, step 4 (agentes)" in action and line_of(out, "instalar-agentes").startswith("[OK]")
     assert line_of(out, "workflow").startswith("[AVISO]")
     assert out.splitlines()[-1] == "2 item(s) missing: run /video-analysis setup."   # the action and permissoes
 
@@ -192,7 +192,7 @@ def test_missing_tools_are_falta(sandbox, monkeypatch, capsys):
                                                                 "detail": f"{key}?"})
     code, out = run(capsys)
     assert code == 1
-    for ident, step in (("ffmpeg", "1 (tools)"), ("ffprobe", "1 (tools)"), ("pillow", "2 (libraries)")):
+    for ident, step in (("ffmpeg", "1 (ferramentas)"), ("ffprobe", "1 (ferramentas)"), ("pillow", "2 (bibliotecas)")):
         line = next(l for l in out.splitlines() if f" {ident} " in l)
         assert line.startswith("[FALTA]") and f"step {step}" in line
     assert "winget install --id Gyan.FFmpeg -e" in out and "python -m pip install numpy Pillow" in out
@@ -208,10 +208,10 @@ def test_json_output(sandbox, tools_ok, capsys):
     ids = [i["id"] for i in data["itens"]]
     assert ids == ["python", "ffmpeg", "ffprobe", "numpy", "pillow", "pasta-central", "permissoes", "agentes", "workflow"]
     perm = data["itens"][6]
-    assert perm["estado"] == "falta" and perm["passo"] == "5-permissions" and perm["regras"] == ambiente.workspace_rules(home)
+    assert perm["estado"] == "falta" and perm["passo"] == "5-permissões" and perm["regras"] == ambiente.workspace_rules(home)
     assert data["itens"][7]["estado"] == "aviso"
     wf = data["itens"][8]
-    assert wf["estado"] == "aviso" and wf["passo"] == "4-agents" and wf["copia"] == "ausente"
+    assert wf["estado"] == "aviso" and wf["passo"] == "4-agentes" and wf["copia"] == "ausente"
     assert wf["caminho"] == (chome / "workflows" / "video-analysis.js").as_posix()
 
 

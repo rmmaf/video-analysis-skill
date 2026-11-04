@@ -4,55 +4,60 @@ Source of truth: the "Unified contract" section of `docs/plano.md`. The schemas 
 they are in `workflow/video-analysis.js`; this page repeats them for reference. Every path in JSON and in
 the generated `.md` files is absolute and uses `/` (`C:/Users/digom/...`).
 
-## 1. `pedido.md`
+## 1. `request.md`
 
-The main agent writes it with Write to `C:/Users/digom/video-analysis/pedidos/pedido.md`. Nothing goes
+The main agent writes it with Write to `C:/Users/digom/video-analysis/requests/request.md`. Nothing goes
 through the shell: a path with spaces and an objective with quotes or colons need no escaping.
 
 ```markdown
 # videos
 C:/Users/digom/Downloads/venda_zero_clientes.mp4
 
-# objetivo
+# objective
 Explique o indicador "venda zero clientes": o que é pedido, de onde vem cada dado citado e o que
 aparece na tela quando cada fonte é mencionada
 
-# opcoes
-papeis: inline
-max_lotes: 2
+# options
+roles: inline
+max_batches: 2
 ```
 
-- Sections: exactly the lines `# videos`, `# objetivo` and `# opcoes`.
+- Sections: exactly the lines `# videos`, `# objective` and `# options`.
 - `# videos`: one path per line (file, folder, or wildcard with `*`/`?`), without quotes. Folder: only the
   videos in it, without subfolders.
-- `# objetivo`: the user's text, verbatim, on one or more lines. It goes to the run's `objective.md`.
-- `# opcoes`: `key: value`, one per line; the value is the rest of the line after the first `:`.
-  `papeis` always; `idioma` when the objective is not in Portuguese; the others, only the ones given.
+- `# objective`: the user's text, verbatim, on one or more lines. It goes to the run's `objective.md`.
+- `# options`: `key: value`, one per line; the value is the rest of the line after the first `:`.
+  `roles` always; `language` when the objective is not in Portuguese; the others, only the ones given.
 
-| key | values | default | user option |
-|---|---|---|---|
-| `papeis` | `agents`, `inline` | chosen by the main agent (step 2) | `--papeis` |
-| `max_lotes` | integer ≥ 1 (`todos` or `0` = no limit) | no limit | `--max-lotes` |
-| `trecho` | `hh:mm:ss-hh:mm:ss` | whole video | `--trecho` |
-| `paralelo` | 1 to 6 | 3 | `--paralelo` |
-| `esforco_analista` | `low`, `medium`, `high`, `xhigh`, `max` | `high` | `--esforco-analista` |
-| `esforco_curador` | same (applies only to the NEXT) | `high` | `--esforco-curador` |
-| `curadoria` | `plano`, `lotes` | `plano` | `--curadoria` |
-| `idioma` | `pt-BR`, `en`, `es`… | the objective's; `pt-BR` | `--idioma` |
-| `falantes` | `SPEAKER_01=Name;SPEAKER_03=Other` | the labels in the subtitles | `--falantes` |
-| `sensibilidade` | `low`, `normal`, `high` | `normal` | `--sensibilidade` |
-| `ignorar_regiao` | `x,y,w,h` in fractions of the frame (0 to 1, origin at the top left corner) | none | `--ignorar-regiao` |
+| key | values | default | user option | old key |
+|---|---|---|---|---|
+| `roles` | `agents`, `inline` | chosen by the main agent (step 2) | `--papeis` | `papeis` |
+| `max_batches` | integer ≥ 1 (`all` or `0` = no limit) | no limit | `--max-lotes` | `max_lotes` |
+| `range` | `hh:mm:ss-hh:mm:ss` | whole video | `--trecho` | `trecho` |
+| `parallel` | 1 to 6 | 3 | `--paralelo` | `paralelo` |
+| `analyst_effort` | `low`, `medium`, `high`, `xhigh`, `max` | `high` | `--esforco-analista` | `esforco_analista` |
+| `curator_effort` | same (applies only to the NEXT) | `high` | `--esforco-curador` | `esforco_curador` |
+| `curation` | `plan`, `batches` | `plan` | `--curadoria plano\|lotes` | `curadoria` |
+| `language` | `pt-BR`, `en`, `es`… | the objective's; `pt-BR` | `--idioma` | `idioma` |
+| `speakers` | `SPEAKER_01=Name;SPEAKER_03=Other` | the labels in the subtitles | `--falantes` | `falantes` |
+| `sensitivity` | `low`, `normal`, `high` | `normal` | `--sensibilidade` | `sensibilidade` |
+| `ignore_region` | `x,y,w,h` in fractions of the frame (0 to 1, origin at the top left corner) | none | `--ignorar-regiao` | `ignorar_regiao` |
 
-**Consumption.** On success, the request is moved to `runs/<run_id>/pedido.md`; on error, renamed to
-`pedidos/pedido.erro.md` (replacing the previous one), and the next Write needs no Read. On exit code 4
-(one video failed, the others form a run), a copy also goes to the run. `--estimar` does not consume it:
-the next Write needs a Read first. An option given on the command line prevails over the one in the request.
+**Old names.** The request of the earlier version still works: `pedidos/pedido.md`, `--pedido`, the
+sections `# objetivo` and `# opcoes`, the keys of the "old key" column (the same as the command-line
+options) and the values `todos`, `plano` and `lotes`. Write the new names.
+
+**Consumption.** On success, the request is moved to `runs/<run_id>/request.md`; on error, renamed to
+`requests/request.error.md` (a request named `pedido.md` becomes `pedido.erro.md`, as before), replacing the
+previous one, and the next Write needs no Read. On exit code 4 (one video failed, the others form a run), a
+copy also goes to the run. `--estimar` does not consume it: the next Write needs a Read first. An option
+given on the command line prevails over the one in the request.
 
 ## 2. The `prepare.py` command line used by the skill
 
 ```bash
-python "<skill>/scripts/prepare.py" --pedido "C:/Users/digom/video-analysis/pedidos/pedido.md" --estimar
-python "<skill>/scripts/prepare.py" --pedido "C:/Users/digom/video-analysis/pedidos/pedido.md"
+python "<skill>/scripts/prepare.py" --request "C:/Users/digom/video-analysis/requests/request.md" --estimar
+python "<skill>/scripts/prepare.py" --request "C:/Users/digom/video-analysis/requests/request.md"
 python "<skill>/scripts/prepare.py" --resume <run_id|run_dir|ultimo> [--papeis agents|inline] [--max-lotes N] [--curadoria plano|lotes]
 ```
 
@@ -60,8 +65,9 @@ python "<skill>/scripts/prepare.py" --resume <run_id|run_dir|ultimo> [--papeis a
 - Subtitle rule: the `.vtt` has the same name as the video, in the same folder. `--vtt "<path>"` points to
   another one (only with 1 video); `--skip-missing` skips, in a folder, the videos without subtitles.
 - `--resume` accepts only `--papeis`, `--max-lotes`, `--paralelo`, `--esforco-analista`,
-  `--esforco-curador` and `--curadoria`; an option not given keeps the value stored in the run (`curadoria`
-  of a run older than the option: `lotes`). It refuses `--pedido`, inputs, `--estimar` and `--force`.
+  `--esforco-curador` and `--curadoria`; an option not given keeps the value stored in the run (`--curadoria`
+  of a run older than the option: `lotes`). It refuses `--request` (or `--pedido`), inputs, `--estimar` and
+  `--force`.
 - Manual use, outside the skill: direct inputs (`<videos…> --objective-file <md> | --objective "…"
   [--run [NAME]]`; without an objective, it only warms the cache, without a run), `--gc [DAYS]` (default 30)
   and the parameters of [`parametros.md`](parametros.md). General: `--home FOLDER` (default
@@ -136,14 +142,14 @@ exception is exit code 4 with some video ready, which brings usable `videos` and
 | `estimate.seconds` | with `--estimar`, the estimate of the extraction: above 400 s, the prepare runs in the background. In the prepare and the resume, the time it took |
 | `estimate.batches`, `estimate.agents` | above 80 agents, confirm with the user |
 | `env.permissions_ok` | `false`: warn and offer the setup |
-| `env.agents_current` | the copies in `~/.claude/agents/` are identical to the skill's; if not, `papeis: agents` becomes `inline`, with a warning |
+| `env.agents_current` | the copies in `~/.claude/agents/` are identical to the skill's; if not, `roles: agents` becomes `inline`, with a warning |
 | `env.workflow_current` | `~/.claude/workflows/video-analysis.js` is identical to the skill's script (the same Claude Code folder the verifier checks: `VA_CLAUDE_HOME` or `%USERPROFILE%\.claude`): the Workflow is called by name. If not, missing or of another version: inline script and a setup suggestion (step 6 of `SKILL.md`) |
 | `warnings`, `videos[].warnings` | high density (with a suggested region to ignore), camera-like segment, short or offset subtitles |
 | `workflow_args` | goes to the Workflow in `args`, as a JSON object and unedited |
 | `script_path` | the skill's script, only for the inline Workflow (step 6 of `SKILL.md`): read and passed in `script`, unedited. In `scriptPath` the tool refuses it; with `env.workflow_current: true`, the normal case is `name: "video-analysis"`, the workflow saved by the setup |
 
 - `estimate.agents` = Σ per video (batches to analyse + 2, or + 1 on a resume with a ledger, which has
-  no INIT; with `curadoria: lotes`, 2 × batches + 1; a video already finished, with `final_exists`,
+  no INIT; with `curation: batches`, 2 × batches + 1; a video already finished, with `final_exists`,
   counts 0) + 1 if there is more than one video (the CROSS, counted even with `combined_exists`).
 - With `--estimar`, the envelope is the same, with `"mode": "estimate"`: ffprobe only, so `estimate.seconds`
   is the estimate of the extraction and the batch fields may come null with a cold cache.
@@ -272,7 +278,7 @@ curator idempotent on resume.
 - `report.md` from a run older than the renaming counts as the final report (in the video and in the
   combined one): without pending work, it is renamed to `relatorio.md`; with pending work, it goes to
   `relatorio.anterior.md` (or `report.anterior.md`, if there was also a `relatorio.md`);
-- `trecho`: batches numbered 001… within the segment, with the frame ids of the whole video.
+- `range` (`--trecho`): batches numbered 001… within the segment, with the frame ids of the whole video.
 
 | ledger | `start_batch` | `start_prompt_exists` | what the Workflow does |
 |---|---|---|---|
@@ -327,7 +333,7 @@ const S_FINAL = { type: 'object', required: ['status', 'report_path', 'answered'
 - A `report_path` other than the requested path never counts: the second attempt receives both paths and
   writes to the requested one; wrong again, the batch is `failed`, with the warning
   `batch N: report written to the wrong path (<path>)`, and the FINAL lists it under `Failed`; with
-  `curadoria: lotes`, the following NEXT also receives it, as FAILED.
+  `curation: batches`, the following NEXT also receives it, as FAILED.
 - `coverage` is the curator's audit: does the report's table cover all the ids of the batch? `incomplete`
   demotes the batch to `partial`; `missing`, to `failed`.
 - The S_FINAL has no `warnings`: on failure, the reason goes in the `summary`. In the others, it goes in
@@ -379,13 +385,15 @@ C:\Users\digom\video-analysis\
     frames-<h8>\                        F0001_hhmmss.jpg…, frames.json, samples.csv, ffmpeg_a.log, ffmpeg_b.log, stage.json
     batches-<h8>\                       batch_NNN.md/.json, sheet_NNN.jpg, overview.jpg, transcript.md,
                                         summary.json, timeline.json, batches.json, stage.json
-  runs\<YYYYMMDD-HHMMSS>-<slug>\        pedido.md, objective.md, run.json, prepare.json, status.json, relatorio.md (combined)
+  runs\<YYYYMMDD-HHMMSS>-<slug>\        request.md, objective.md, run.json, prepare.json, status.json, relatorio.md (combined)
     v<N>\                               ledger.md, relatorio.md, prompts\batch_NNN.md, reports\batch_NNN.md
-  pedidos\                              pedido.md (temporary), pedido.erro.md
+  requests\                             request.md (temporary), request.error.md
   roles\                                copy of the roles for inline mode
   logs\  debug\  tmp\
 ```
 
+- `request.md` in the run: a run older than the rename has `pedido.md` instead (and, in `run.json`, the
+  key `pedido` instead of `request`). Nothing reads either one; the resume uses only `run.json`.
 - `v<N>`: the video's `vid` (`v1`, `v2`…, in the order of the inputs). A video that fails in the prepare
   gets no folder and does not renumber the others (`videos[].out_dir`, section 4). An old run uses the
   video's slug instead, and the resume keeps that name.

@@ -412,7 +412,7 @@ def _warnings(run: _Run, frames: list[dict], density: dict, suggestions: list[di
             reg = ",".join(f"{v:.2f}" for v in s["region"])
             msg += f"; suggested region to ignore: {reg} (explains {round(100 * s['explains'])}% of the frames)"
         else:
-            msg += "; no recurring region to ignore (if there are redundant frames: sensibilidade low)"
+            msg += "; no recurring region to ignore (if there are redundant frames: sensitivity low)"
         out.append(msg)
     for a, b in run.an.camera_spans:
         if (b - a) / run.S >= 10.0:

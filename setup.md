@@ -105,8 +105,9 @@ dependency.
 
 ## Step 3 — central folder
 
-The folder `C:\Users\digom\video-analysis\` and its subfolders (`cache`, `runs`, `pedidos`, `roles`,
-`logs`) are created on first use. The permission rules and `pedido.md` point to it: do not move it.
+The folder `C:\Users\digom\video-analysis\` and its subfolders (`cache`, `runs`, `requests`, `roles`,
+`logs`) are created on first use. The permission rules and `request.md` point to it: do not move it. The
+`pedidos` subfolder of the earlier version is no longer used; if it is empty, the person may delete it.
 
 If the item comes out `[FALTA]`, the folder exists but does not accept writes. **The person does it:**
 they check whether there is a file, and not a folder, with that name; whether the disk has space; and

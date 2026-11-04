@@ -1,18 +1,24 @@
-"""Run folders, the request file (pedido.md), resume scan and workflow_args (plan, unified
+"""Run folders, the request file (request.md), resume scan and workflow_args (plan, unified
 contract items 1-4; design-agentico DL-2, DL-5, DL-6, DL-11, DL-12).
 
-- ``parse_pedido``: sections ``# videos`` (one path per line), ``# objetivo`` (literal text) and
-  ``# opcoes`` (``key: value``; the value is the rest of the line after the first ":").
-  Headings are matched without accents or case ("# Vídeos", "# Opções" also work).
-- ``normalize_options``: validates the option values (pedido or CLI) into typed values.
+- ``parse_request``: sections ``# videos`` (one path per line), ``# objective`` (literal text) and
+  ``# options`` (``key: value``; the value is the rest of the line after the first ":").
+  Headings are matched without accents or case; the Portuguese names of before the rename
+  (``# objetivo``, ``# opcoes``, also "# Opções") still work.
+- ``normalize_options``: validates the option values (request or CLI) into typed values. The
+  request's keys are the English names of ``OPTION_NAMES``; the internal keys, in Portuguese (the
+  names of the command-line options), still work in the request.
 - ``new_run``: ``runs/<YYYYMMDD-HHMMSS>-<slug24>`` (``-2``... on a collision in the same second).
 - ``resume_video``: DL-11. No ledger -> prompts/ and reports/ go to ``_descartado/<stamp>/`` and the
   video starts at batch 1; ``relatorio.md`` becomes ``relatorio.anterior.md`` when work remains. The
   final report is never ``report.md`` (Claude Code blocks subagents from writing report.md, summary.md
   and findings.md); a legacy ``report.md`` of an older run still counts as the final (``_settle_final``).
 - ``build_workflow_args``: the v1 object the Workflow script validates.
-- ``consume_pedido``: success -> ``<run_dir>/pedido.md``; failure -> ``pedido.erro.md`` (replacing
-  an older one), so the next Write of ``pedido.md`` never needs a Read first.
+- ``consume_request``: success -> ``<run_dir>/request.md``; failure -> ``request.error.md``
+  (``pedido.erro.md`` for a request still named ``pedido.md``), replacing an older one, so the next
+  Write of the request never needs a Read first.
+- ``parse_pedido``, ``read_pedido`` and ``consume_pedido``: the names of before the rename, kept with
+  the same parameters for scripts that import them.
 """
 from __future__ import annotations
 
@@ -28,10 +34,12 @@ from . import EFFORT_LEVELS, SCHEMA_VERSION, WORKFLOW_DEFAULTS
 from .common import as_posix, fmt_hms, ms_to_s, parse_time_ms, read_json, resolve_unicode_paths, slugify
 
 __all__ = [
-    "FINAL_MD", "LEGACY_FINAL_MD", "OPTION_KEYS", "RunError", "build_workflow_args", "consume_pedido",
-    "copy_roles", "estimate_agents", "find_run", "new_run", "normalize_options", "objective_markdown",
-    "parse_pedido", "read_pedido", "resume_combined", "resume_video", "run_slug", "scaffold_video",
+    "FINAL_MD", "LEGACY_FINAL_MD", "OPTION_KEYS", "OPTION_NAMES", "REQUEST_MD", "RunError", "build_workflow_args",
+    "consume_request", "copy_roles", "estimate_agents", "find_run", "new_run", "normalize_options",
+    "objective_markdown", "parse_request", "read_request", "resume_combined", "resume_video", "run_slug",
+    "scaffold_video",
     "unique_slugs", "workflow_options", "parse_regions", "parse_trecho", "parse_speakers", "fold",
+    "consume_pedido", "parse_pedido", "read_pedido",
 ]
 
 MAX_SLUG = 40
@@ -40,6 +48,8 @@ FINAL_MD = "relatorio.md"             # final report, per video (<out_dir>/) and
 BACKUP_MD = "relatorio.anterior.md"   # the previous final, kept when a resume has work left
 LEGACY_FINAL_MD = "report.md"         # the name before the rename (the harness blocks subagents from writing it)
 LEGACY_BACKUP_MD = "report.anterior.md"
+REQUEST_MD = "request.md"             # the request's copy in the run folder (pedido.md before the rename)
+LEGACY_REQUEST_STEM = "pedido"        # a request still named pedido.md fails into pedido.erro.md, as before
 
 
 class RunError(ValueError):
@@ -58,10 +68,11 @@ def fold(text: str) -> str:
     return re.sub(r"[\s\-]+", "_", s)
 
 
-# --- pedido.md --------------------------------------------------------------------------------------
+# --- request.md -------------------------------------------------------------------------------------
 
-_SECTIONS = {"videos": "videos", "video": "videos", "objetivo": "objetivo", "objective": "objetivo",
-             "opcoes": "opcoes", "opcao": "opcoes", "options": "opcoes"}
+# folded heading -> section; "objetivo" and "opcoes" are the names of before the rename
+_SECTIONS = {"videos": "videos", "video": "videos", "objective": "objective", "objetivo": "objective",
+             "options": "options", "option": "options", "opcoes": "options", "opcao": "options"}
 _HEADING_RE = re.compile(r"^#[ \t]+(\S.*?)[ \t#]*$")
 _BULLET_RE = re.compile(r"^(?:[-*+][ \t]+)")
 
@@ -74,8 +85,9 @@ def _strip_quotes(s: str) -> str:
     return s
 
 
-def parse_pedido(text: str) -> dict:
-    """``{"videos": [str], "objective": str, "options": {key: value or [values]}}``.
+def parse_request(text: str) -> dict:
+    """``{"videos": [str], "objective": str, "options": {key: value or [values]}}``, with the options
+    under their internal keys (``OPTION_KEYS``).
 
     Raises RunError ``pedido_invalido`` (missing/duplicated section, text before the first
     section, option line without ":"), ``objetivo_ausente`` (empty objective) or
@@ -107,34 +119,34 @@ def parse_pedido(text: str) -> dict:
             videos.append(s)
     if not videos:
         raise RunError("pedido_invalido", "the section '# videos' is empty")
-    lines = blocks.get("objetivo")
+    lines = blocks.get("objective")
     if lines is None:
-        raise RunError("objetivo_ausente", "missing section '# objetivo' in the request")
+        raise RunError("objetivo_ausente", "missing section '# objective' in the request")
     while lines and not lines[0].strip():
         lines = lines[1:]
     objective = "\n".join(lines).rstrip()
     if not objective.strip():
-        raise RunError("objetivo_ausente", "the section '# objetivo' is empty")
+        raise RunError("objetivo_ausente", "the section '# objective' is empty")
     options: dict[str, Any] = {}
-    for raw in blocks.get("opcoes", []):
+    for raw in blocks.get("options", []):
         line = _BULLET_RE.sub("", raw.strip())
         if not line:
             continue
         if ":" not in line:
-            raise RunError("pedido_invalido", f"option line without ':' in '# opcoes': {line[:80]!r} (use key: value)")
+            raise RunError("pedido_invalido", f"option line without ':' in '# options': {line[:80]!r} (use key: value)")
         key, value = line.split(":", 1)
         canon = option_key(key)
         value = _strip_quotes(value)
         if canon == "ignorar_regiao":
             options.setdefault(canon, []).append(value)
         elif canon in options:
-            raise RunError("opcao_invalida", f"the option {canon!r} appears twice in the request")
+            raise RunError("opcao_invalida", f"the option {OPTION_NAMES[canon]!r} appears twice in the request")
         else:
             options[canon] = value
     return {"videos": videos, "objective": objective, "options": options}
 
 
-def read_pedido(path: str | os.PathLike) -> dict:
+def read_request(path: str | os.PathLike) -> dict:
     p = Path(path)
     try:
         raw = p.read_bytes()
@@ -146,13 +158,19 @@ def read_pedido(path: str | os.PathLike) -> dict:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         text = raw.decode("cp1252", errors="replace")
-    return parse_pedido(text)
+    return parse_request(text)
 
 
 # --- options --------------------------------------------------------------------------------------
 
+# internal keys: the names of the command-line options (--max-lotes -> max_lotes), still accepted in the request
 OPTION_KEYS = ("papeis", "max_lotes", "paralelo", "esforco_analista", "esforco_curador", "curadoria", "idioma",
                "trecho", "falantes", "sensibilidade", "ignorar_regiao")
+# the keys of the request's '# options', in English, by internal key
+OPTION_NAMES = {"papeis": "roles", "max_lotes": "max_batches", "paralelo": "parallel",
+                "esforco_analista": "analyst_effort", "esforco_curador": "curator_effort", "curadoria": "curation",
+                "idioma": "language", "trecho": "range", "falantes": "speakers", "sensibilidade": "sensitivity",
+                "ignorar_regiao": "ignore_region"}
 _OPTION_ALIASES = {
     "papel": "papeis", "roles": "papeis", "roles_mode": "papeis", "modo": "papeis",
     "max_batches": "max_lotes", "lotes": "max_lotes", "maximo_de_lotes": "max_lotes",
@@ -171,7 +189,8 @@ def option_key(key: str) -> str:
     k = fold(key)
     k = _OPTION_ALIASES.get(k, k)
     if k not in OPTION_KEYS:
-        raise RunError("opcao_invalida", f"unknown option {key.strip()!r}; accepted: {', '.join(OPTION_KEYS)}")
+        raise RunError("opcao_invalida", f"unknown option {key.strip()!r}; accepted: {', '.join(OPTION_NAMES.values())} "
+                                         f"(or the Portuguese {', '.join(OPTION_KEYS)})")
     return k
 
 
@@ -184,7 +203,9 @@ _IDIOMA_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
 
 
 def _bad(key: str, value: Any, why: str) -> RunError:
-    return RunError("opcao_invalida", f"{key}: {str(value).strip()!r} is invalid ({why})")
+    """The option by its request key and its command-line option: "max_batches (--max-lotes): …"."""
+    name = f"{OPTION_NAMES[key]} (--{key.replace('_', '-')})" if key in OPTION_NAMES else key
+    return RunError("opcao_invalida", f"{name}: {str(value).strip()!r} is invalid ({why})")
 
 
 def _int(key: str, value: Any, lo: int, hi: int | None) -> int:
@@ -257,7 +278,7 @@ def parse_regions(value: Any) -> list[list[float]]:
 
 
 def normalize_options(raw: dict) -> dict:
-    """Raw strings (pedido or CLI) -> typed options; every key of OPTION_KEYS is present
+    """Raw strings (request or CLI) -> typed options; every key of OPTION_KEYS is present
     (None when not given). Raises RunError ``opcao_invalida``."""
     opts: dict[str, Any] = dict.fromkeys(OPTION_KEYS)
     for key, value in raw.items():
@@ -286,7 +307,7 @@ def normalize_options(raw: dict) -> dict:
         elif key == "curadoria":
             mode = _CURATION.get(fold(value))
             if not mode:
-                raise _bad(key, value, "use plano or lotes")
+                raise _bad(key, value, "use plan or batches (or plano, lotes)")
             opts[key] = mode
         elif key == "idioma":
             s = str(value).strip().replace("_", "-")
@@ -405,7 +426,7 @@ def copy_roles(skill_dir: str | os.PathLike, roles_dir: str | os.PathLike) -> li
     return names
 
 
-# --- pedido consumption -----------------------------------------------------------------------------
+# --- request consumption ----------------------------------------------------------------------------
 
 def _move(src: Path, dst: Path) -> None:
     try:
@@ -414,26 +435,39 @@ def _move(src: Path, dst: Path) -> None:
         shutil.move(str(src), str(dst))
 
 
-def consume_pedido(pedido: str | os.PathLike, run_dir: str | os.PathLike | None, ok: bool,
-                   copy_to_run: bool = False) -> Path | None:
-    """Success: move the pedido to ``<run_dir>/pedido.md``. Failure: rename it to
-    ``<stem>.erro<ext>`` next to it (replacing an older one); with ``copy_to_run`` a copy also
-    goes to the run folder (a video failed but the others form a usable run)."""
-    src = Path(pedido)
+def consume_request(request: str | os.PathLike, run_dir: str | os.PathLike | None, ok: bool,
+                    copy_to_run: bool = False) -> Path | None:
+    """Success: move the request to ``<run_dir>/request.md``. Failure: rename it to
+    ``<stem>.error<ext>`` next to it (``pedido.erro.md`` for a request still named ``pedido.md``),
+    replacing an older one; with ``copy_to_run`` a copy also goes to the run folder (a video failed
+    but the others form a usable run)."""
+    src = Path(request)
     if not src.is_file():
         return None
     if ok and run_dir is not None:
-        dst = Path(run_dir) / "pedido.md"
+        dst = Path(run_dir) / REQUEST_MD
         _move(src, dst)
         return dst
     if copy_to_run and run_dir is not None:
         try:
-            shutil.copyfile(src, Path(run_dir) / "pedido.md")
+            shutil.copyfile(src, Path(run_dir) / REQUEST_MD)
         except OSError:
             pass
-    dst = src.with_name(f"{src.stem}.erro{src.suffix or '.md'}")
+    tag = ".erro" if src.stem.casefold() == LEGACY_REQUEST_STEM else ".error"
+    dst = src.with_name(f"{src.stem}{tag}{src.suffix or '.md'}")
     _move(src, dst)
     return dst
+
+
+# the names of before the rename, kept with the same parameters for scripts that import them
+parse_pedido = parse_request
+read_pedido = read_request
+
+
+def consume_pedido(pedido: str | os.PathLike, run_dir: str | os.PathLike | None, ok: bool,
+                   copy_to_run: bool = False) -> Path | None:
+    """``consume_request`` under its old name, with the old parameter ``pedido``."""
+    return consume_request(pedido, run_dir, ok, copy_to_run)
 
 
 # --- resume (DL-11) -----------------------------------------------------------------------------------

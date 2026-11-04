@@ -4,7 +4,7 @@
 `runs\<run_id>\status.json`. Its errors come out as `{"ok": false, "error": {"code", "detail"}}`, with exit
 code `2` (input), `3` (environment), `4` (a video failed), `130` (interrupted) or `1` (internal error);
 the table of the `error.code` values is in [`contratos.md`](contratos.md), section 2. An error in the
-prepare renames the request to `pedido.erro.md` (`--estimar` does not touch it). The commands cited here
+prepare renames the request to `request.error.md` (`--estimar` does not touch it). The commands cited here
 are those of `SKILL.md`, with the same pre-approved prefix.
 
 ## Preparation (`prepare.py`)
@@ -23,8 +23,8 @@ are those of `SKILL.md`, with the same pre-approved prefix.
 
 - **What to do:** show the candidates and the suggested command (also in `missing_vtt`). Run it, in
   PowerShell, only after the user's "yes", or let the user run it. Then repeat: if the error came from
-  the prepare, write the request again (the previous one became `pedido.erro.md`); if it came from
-  `--estimar`, `pedido.md` is still there.
+  the prepare, write the request again (the previous one became `request.error.md`); if it came from
+  `--estimar`, `request.md` is still there.
   - Rename the `.vtt`, not the video: a renamed video gets another cache key and is extracted again.
   - Use `-LiteralPath`: with `-Path`, brackets in the name (`[PES] …`) become wildcards.
   - In PowerShell, `’` and `‘` also close a single-quoted string: inside it, double them (`’’`).
@@ -61,7 +61,7 @@ are those of `SKILL.md`, with the same pre-approved prefix.
   reason is in `errors` and in the log.
 - **What to do:** say which video and why, in one sentence, and ask whether to go on with the others.
   Their run is ready: `run.json` written and `workflow_args` in the JSON (step 6 of `SKILL.md`, with that
-  JSON). The request became `pedido.erro.md`, with a copy in the run folder.
+  JSON). The request became `request.error.md`, with a copy in the run folder.
 
 ### Internal error (exit code 1)
 
@@ -81,9 +81,9 @@ are those of `SKILL.md`, with the same pre-approved prefix.
 - **What to do:** read `<run_dir>\prepare.json`, which has the same JSON. The `run_dir` is the first line
   of stderr (`run_dir: …`).
 
-### "File has not been read yet" when writing `pedido.md`
+### "File has not been read yet" when writing `request.md`
 
-- **Cause:** a `pedido.md` was left over, for example after an `--estimar` not followed by the prepare.
+- **Cause:** a `request.md` was left over, for example after an `--estimar` not followed by the prepare.
 - **What to do:** read the file and write it again.
 
 ### The prepare seems stuck right at the start
@@ -118,7 +118,7 @@ are those of `SKILL.md`, with the same pre-approved prefix.
 - **Cause:** more than 12 frames/min in the video, or more than 30 in any one minute. Usually a region
   that changes by itself escaped the automatic mask: webcam, clock, animation, notification.
 - **What to do:** if the warning brings a suggested region to ignore, offer to repeat with
-  `--ignorar-regiao x,y,w,h` (in the request, `ignorar_regiao`). Without a suggestion,
+  `--ignorar-regiao x,y,w,h` (in the request, `ignore_region`). Without a suggestion,
   `--sensibilidade low`. The subtitles come from the cache; the frames are extracted again. Details in
   [`parametros.md`](parametros.md).
 

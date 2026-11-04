@@ -292,7 +292,7 @@ def test_runtime_problems_skips_the_package_metadata_scan(monkeypatch):
 def test_workspace_status(tmp_path):
     ws = tmp_path / "ws"
     st = A.workspace_status(ws)
-    assert st["ok"] and all((ws / d).is_dir() for d in ("cache", "runs", "pedidos", "roles", "logs", "tmp"))
+    assert st["ok"] and all((ws / d).is_dir() for d in ("cache", "runs", "requests", "roles", "logs", "tmp"))
     assert not list((ws / "tmp").iterdir())
     blocker = tmp_path / "arquivo"
     blocker.write_text("x", encoding="utf-8")

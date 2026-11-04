@@ -1,4 +1,6 @@
-"""va.runs: pedido.md, options, run folders, resume (DL-11), size estimate (DL-12), workflow_args."""
+"""va.runs: request.md (and the old names), options, run folders, resume (DL-11), size estimate (DL-12),
+workflow_args."""
+import inspect
 import re
 import time
 
@@ -7,7 +9,27 @@ import pytest
 from va import contracts, runs as R
 from va.common import as_posix
 
-PEDIDO = """# videos
+REQUEST = """# videos
+C:/Users/digom/Downloads/venda_zero_clientes.mp4
+- "C:/Users/digom/Documents/solar/[PES] pasta  dupla/Reunião ’x’.mp4"
+
+# objective
+Explique o indicador "venda zero clientes": o que é pedido, de onde vem: cada dado citado.
+
+## Formato
+- uma tabela; # não é seção aqui
+
+# options
+roles: inline
+max_batches: 2
+range: 00:10:00-00:20:00
+ignore_region: 0.80,0.75,0.20,0.25; 0.00,0.00,0.20,0.06
+ignore_region: 0.5,0.5,0.1,0.1
+speakers: SPEAKER_01=Lianderson;SPEAKER_03=Francisco
+"""
+
+# the same request with the names of before the rename (pedido.md): sections and option keys in Portuguese
+LEGACY_REQUEST = """# videos
 C:/Users/digom/Downloads/venda_zero_clientes.mp4
 - "C:/Users/digom/Documents/solar/[PES] pasta  dupla/Reunião ’x’.mp4"
 
@@ -27,10 +49,11 @@ falantes: SPEAKER_01=Lianderson;SPEAKER_03=Francisco
 """
 
 
-# --- pedido ---------------------------------------------------------------------------------------
+# --- request ----------------------------------------------------------------------------------------
 
-def test_parse_pedido_sections_and_literal_objective():
-    p = R.parse_pedido(PEDIDO)
+@pytest.mark.parametrize("text", [REQUEST, LEGACY_REQUEST], ids=["english", "legacy"])
+def test_parse_request_sections_and_literal_objective(text):
+    p = R.parse_request(text)
     assert p["videos"] == ["C:/Users/digom/Downloads/venda_zero_clientes.mp4",
                            "C:/Users/digom/Documents/solar/[PES] pasta  dupla/Reunião ’x’.mp4"]
     assert p["objective"] == ('Explique o indicador "venda zero clientes": o que é pedido, de onde vem: cada dado citado.\n'
@@ -40,38 +63,49 @@ def test_parse_pedido_sections_and_literal_objective():
     assert p["options"]["ignorar_regiao"] == ["0.80,0.75,0.20,0.25; 0.00,0.00,0.20,0.06", "0.5,0.5,0.1,0.1"]
 
 
-def test_parse_pedido_tolerates_accents_case_crlf_bom():
-    text = "\ufeff# Vídeos\r\nC:/a.mp4\r\n\r\n# OBJETIVO\r\n  Resuma.\r\n# Opções\r\n--max-lotes: 3\r\nEsforço Analista: médio\r\n"
-    p = R.parse_pedido(text)
+def test_parse_request_old_and_new_names_give_the_same_request():
+    assert R.parse_request(REQUEST) == R.parse_request(LEGACY_REQUEST)
+
+
+@pytest.mark.parametrize("text", [
+    "\ufeff# Vídeos\r\nC:/a.mp4\r\n\r\n# OBJETIVO\r\n  Resuma.\r\n# Opções\r\n--max-lotes: 3\r\nEsforço Analista: médio\r\n",
+    "\ufeff# Videos\r\nC:/a.mp4\r\n\r\n# OBJECTIVE\r\n  Resuma.\r\n# Options #\r\nMax Batches: 3\r\nAnalyst-Effort: médio\r\n",
+], ids=["legacy", "english"])
+def test_parse_request_tolerates_accents_case_crlf_bom(text):
+    p = R.parse_request(text)
     assert p["videos"] == ["C:/a.mp4"] and p["objective"] == "  Resuma."
     assert p["options"] == {"max_lotes": "3", "esforco_analista": "médio"}
     assert R.normalize_options(p["options"])["esforco_analista"] == "medium"
 
 
 @pytest.mark.parametrize("text, code, needle", [
-    ("# objetivo\nx\n", "pedido_invalido", "# videos"),
-    ("# videos\n\n# objetivo\nx\n", "pedido_invalido", "is empty"),
-    ("# videos\nC:/a.mp4\n", "objetivo_ausente", "# objetivo"),
-    ("# videos\nC:/a.mp4\n# objetivo\n  \n\n", "objetivo_ausente", "is empty"),
-    ("lixo antes\n# videos\nC:/a.mp4\n# objetivo\nx\n", "pedido_invalido", "before the first"),
-    ("# videos\nC:/a.mp4\n# videos\nC:/b.mp4\n# objetivo\nx\n", "pedido_invalido", "twice"),
+    ("# objective\nx\n", "pedido_invalido", "# videos"),
+    ("# videos\n\n# objective\nx\n", "pedido_invalido", "is empty"),
+    ("# videos\nC:/a.mp4\n", "objetivo_ausente", "# objective"),
+    ("# videos\nC:/a.mp4\n# objective\n  \n\n", "objetivo_ausente", "is empty"),
+    ("lixo antes\n# videos\nC:/a.mp4\n# objective\nx\n", "pedido_invalido", "before the first"),
+    ("# videos\nC:/a.mp4\n# videos\nC:/b.mp4\n# objective\nx\n", "pedido_invalido", "twice"),
+    ("# videos\nC:/a.mp4\n# objective\nx\n# objetivo\ny\n", "pedido_invalido", "'# objective' appears twice"),
+    ("# videos\nC:/a.mp4\n# objective\nx\n# options\nroles inline\n", "pedido_invalido", "without ':' in '# options'"),
+    ("# videos\nC:/a.mp4\n# objective\nx\n# options\nturbo: sim\n", "opcao_invalida", "accepted: roles, max_batches"),
+    ("# videos\nC:/a.mp4\n# objective\nx\n# options\nroles: inline\npapeis: agents\n", "opcao_invalida",
+     "'roles' appears twice"),
+    ("# videos\nC:/a.mp4\n# objetivo\n  \n# opcoes\npapeis: inline\n", "objetivo_ausente", "is empty"),
     ("# videos\nC:/a.mp4\n# objetivo\nx\n# opcoes\npapeis inline\n", "pedido_invalido", "without ':'"),
-    ("# videos\nC:/a.mp4\n# objetivo\nx\n# opcoes\nturbo: sim\n", "opcao_invalida", "unknown"),
-    ("# videos\nC:/a.mp4\n# objetivo\nx\n# opcoes\npapeis: inline\npapeis: agents\n", "opcao_invalida", "twice"),
 ])
-def test_parse_pedido_errors(text, code, needle):
+def test_parse_request_errors(text, code, needle):
     with pytest.raises(R.RunError) as exc:
-        R.parse_pedido(text)
+        R.parse_request(text)
     assert exc.value.code == code and needle in exc.value.detail
 
 
-def test_read_pedido_missing_and_cp1252(tmp_path):
+def test_read_request_missing_and_cp1252(tmp_path):
     with pytest.raises(R.RunError) as exc:
-        R.read_pedido(tmp_path / "pedido.md")
+        R.read_request(tmp_path / "request.md")
     assert exc.value.code == "pedido_invalido"
-    p = tmp_path / "pedido.md"
-    p.write_bytes("# videos\nC:/v.mp4\n# objetivo\nAção\n".encode("cp1252"))
-    assert R.read_pedido(p)["objective"] == "Ação"
+    p = tmp_path / "request.md"
+    p.write_bytes("# videos\nC:/v.mp4\n# objective\nAção\n".encode("cp1252"))
+    assert R.read_request(p)["objective"] == "Ação"
 
 
 # --- options ---------------------------------------------------------------------------------------
@@ -95,6 +129,21 @@ def test_normalize_options_all_keys():
         ["plan", "plan", "batches", "batches"]
 
 
+def test_request_option_names():
+    """Every option has an English key in the request, and the old Portuguese key still works."""
+    assert set(R.OPTION_NAMES) == set(R.OPTION_KEYS) and len(set(R.OPTION_NAMES.values())) == len(R.OPTION_KEYS)
+    for key, name in R.OPTION_NAMES.items():
+        assert R.option_key(name) == key and R.option_key(key) == key
+    english = R.normalize_options({"roles": "agents", "max_batches": "all", "parallel": "2", "analyst_effort": "medium",
+                                   "curator_effort": "low", "curation": "batches", "language": "en", "range": "1:00-1:30",
+                                   "speakers": "SPEAKER_01=Ana", "sensitivity": "low", "ignore_region": ["0.8,0.75,0.2,0.25"]})
+    legacy = R.normalize_options({"papeis": "agentes", "max_lotes": "todos", "paralelo": "2", "esforco_analista": "medio",
+                                  "esforco_curador": "baixo", "curadoria": "lotes", "idioma": "en", "trecho": "1:00 a 1:30",
+                                  "falantes": "SPEAKER_01=Ana", "sensibilidade": "baixa",
+                                  "ignorar_regiao": ["0.8,0.75,0.2,0.25"]})
+    assert english == legacy and english["curadoria"] == "batches" and english["max_lotes"] is None
+
+
 @pytest.mark.parametrize("key, value, needle", [
     ("papeis", "auto", "agents or inline"),
     ("max_lotes", "dois", "integer"),
@@ -102,7 +151,7 @@ def test_normalize_options_all_keys():
     ("paralelo", "7", "1 to 6"),
     ("paralelo", "0", "1 to 6"),
     ("esforco_analista", "ultra", "low"),
-    ("curadoria", "sempre", "plano or lotes"),
+    ("curadoria", "sempre", "plan or batches"),
     ("idioma", "português!", "pt-BR"),
     ("trecho", "00:20:00-00:10:00", "after the start"),
     ("trecho", "10 minutos", "hh:mm:ss"),
@@ -112,6 +161,8 @@ def test_normalize_options_all_keys():
     ("ignorar_regiao", "0.9,0.9,0.2,0.2", "x+w"),
     ("ignorar_regiao", "0.1,0.1,0,0.2", "fractions"),
     ("papeis", "   ", "empty"),
+    ("max_lotes", "dois", "max_batches (--max-lotes): 'dois' is invalid"),
+    ("ignorar_regiao", "1,1", "ignore_region (--ignorar-regiao)"),
 ])
 def test_normalize_options_errors(key, value, needle):
     with pytest.raises(R.RunError) as exc:
@@ -171,27 +222,64 @@ def test_copy_roles(tmp_path, skill_dir):
     assert not list(roles.glob(".*.tmp"))
 
 
-# --- pedido consumption -----------------------------------------------------------------------------
+# --- request consumption ----------------------------------------------------------------------------
 
-def test_consume_pedido_success_and_failure(tmp_path):
+def test_consume_request_success_and_failure(tmp_path):
+    req_dir, run = tmp_path / "requests", tmp_path / "runs" / "r1"
+    req_dir.mkdir()
+    run.mkdir(parents=True)
+    p = req_dir / "request.md"
+    p.write_text("um", encoding="utf-8")
+    assert R.consume_request(p, run, ok=True) == run / "request.md"
+    assert not p.exists() and (run / "request.md").read_text(encoding="utf-8") == "um"
+    (req_dir / "request.error.md").write_text("antigo", encoding="utf-8")
+    p.write_text("dois", encoding="utf-8")
+    assert R.consume_request(p, None, ok=False) == req_dir / "request.error.md"
+    assert not p.exists() and (req_dir / "request.error.md").read_text(encoding="utf-8") == "dois"  # older replaced
+    p.write_text("três", encoding="utf-8")
+    run2 = tmp_path / "runs" / "r2"
+    run2.mkdir()
+    R.consume_request(p, run2, ok=False, copy_to_run=True)
+    assert (run2 / "request.md").read_text(encoding="utf-8") == "três"
+    assert (req_dir / "request.error.md").read_text(encoding="utf-8") == "três"
+    assert R.consume_request(p, run, ok=True) is None  # nothing left to consume
+
+
+def test_consume_request_with_the_old_name(tmp_path):
+    """A request still named pedido.md (pedidos/, before the rename): its copy in the run is
+    request.md, like any other; on failure it becomes pedido.erro.md, as before."""
     ped_dir, run = tmp_path / "pedidos", tmp_path / "runs" / "r1"
     ped_dir.mkdir()
     run.mkdir(parents=True)
     p = ped_dir / "pedido.md"
     p.write_text("um", encoding="utf-8")
-    assert R.consume_pedido(p, run, ok=True) == run / "pedido.md"
-    assert not p.exists() and (run / "pedido.md").read_text(encoding="utf-8") == "um"
-    (ped_dir / "pedido.erro.md").write_text("antigo", encoding="utf-8")
+    assert R.consume_request(p, run, ok=True) == run / "request.md" and not (run / "pedido.md").exists()
     p.write_text("dois", encoding="utf-8")
-    assert R.consume_pedido(p, None, ok=False) == ped_dir / "pedido.erro.md"
-    assert not p.exists() and (ped_dir / "pedido.erro.md").read_text(encoding="utf-8") == "dois"  # older replaced
-    p.write_text("três", encoding="utf-8")
-    run2 = tmp_path / "runs" / "r2"
-    run2.mkdir()
-    R.consume_pedido(p, run2, ok=False, copy_to_run=True)
-    assert (run2 / "pedido.md").read_text(encoding="utf-8") == "três"
-    assert (ped_dir / "pedido.erro.md").read_text(encoding="utf-8") == "três"
-    assert R.consume_pedido(p, run, ok=True) is None  # nothing left to consume
+    assert R.consume_request(p, None, ok=False) == ped_dir / "pedido.erro.md"
+    assert not p.exists() and sorted(f.name for f in ped_dir.iterdir()) == ["pedido.erro.md"]
+    other = ped_dir / "meu pedido.md"
+    other.write_text("três", encoding="utf-8")
+    assert R.consume_request(other, None, ok=False) == ped_dir / "meu pedido.error.md"
+
+
+def test_old_function_names_still_work(tmp_path):
+    """parse_pedido, read_pedido and consume_pedido, the names of before the rename, still import and
+    take the same parameters as before, by position or by keyword."""
+    from va.runs import consume_pedido, parse_pedido, read_pedido
+    assert parse_pedido is R.parse_request and read_pedido is R.read_request
+    assert {"parse_pedido", "read_pedido", "consume_pedido"} <= set(R.__all__)
+    assert [list(inspect.signature(f).parameters) for f in (parse_pedido, read_pedido, consume_pedido)] ==         [["text"], ["path"], ["pedido", "run_dir", "ok", "copy_to_run"]]
+    assert parse_pedido(LEGACY_REQUEST) == parse_pedido(text=LEGACY_REQUEST) == R.parse_request(REQUEST)
+    ped_dir, run = tmp_path / "pedidos", tmp_path / "runs" / "r1"
+    ped_dir.mkdir()
+    run.mkdir(parents=True)
+    p = ped_dir / "pedido.md"
+    p.write_text(LEGACY_REQUEST, encoding="utf-8")
+    assert read_pedido(p) == read_pedido(path=p) and read_pedido(p)["options"]["papeis"] == "inline"
+    assert consume_pedido(p, run, ok=True) == run / "request.md" and not p.exists()
+    p.write_text("dois", encoding="utf-8")
+    assert consume_pedido(pedido=p, run_dir=run, ok=False, copy_to_run=True) == ped_dir / "pedido.erro.md"
+    assert (run / "request.md").read_text(encoding="utf-8") == "dois" and not p.exists()
 
 
 # --- resume -------------------------------------------------------------------------------------------

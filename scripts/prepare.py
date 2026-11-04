@@ -1,18 +1,18 @@
 #!/usr/bin/env python
-"""Preparação determinística da skill video-analysis: frames únicos, legenda, lotes e workflow_args.
+"""Deterministic preparation for the video-analysis skill: unique frames, subtitles, batches and workflow_args.
 
-Pela skill (sempre a ferramenta Bash, sempre ``python``, nunca ``python3``):
+From the skill (always the Bash tool, always ``python``, never ``python3``):
     python prepare.py --pedido "C:/Users/digom/video-analysis/pedidos/pedido.md" --estimar
     python prepare.py --pedido "C:/Users/digom/video-analysis/pedidos/pedido.md"
     python prepare.py --resume <run_id|run_dir|ultimo> [--papeis agents|inline] [--max-lotes N] [--curadoria plano|lotes]
-Uso manual:
-    python prepare.py INPUT [INPUT ...] [--objective-file MD | --objective "texto"] [--run [NOME]] [opções]
-    python prepare.py --gc [DIAS]
+Manual use:
+    python prepare.py INPUT [INPUT ...] [--objective-file MD | --objective "text"] [--run [NAME]] [options]
+    python prepare.py --gc [DAYS]
 
-stdout: exatamente uma linha JSON (a última), também gravada em <run_dir>/prepare.json e em logs/.
-stderr: primeiro "run_dir: …", depois o progresso; <run_dir>/status.json é atualizado a cada 5 s.
-Saída: 0 ok · 2 entrada · 3 ambiente · 4 um vídeo falhou (os outros vêm no JSON) · 130 interrompido.
-Contratos: reference/contratos.md; CLI completa: docs/design-deterministico.md §2.
+stdout: exactly one JSON line (the last one), also written to <run_dir>/prepare.json and to logs/.
+stderr: first "run_dir: …", then the progress; <run_dir>/status.json is updated every 5 s.
+Exit code: 0 ok · 2 input · 3 environment · 4 a video failed (the others come in the JSON) · 130 interrupted.
+Contracts: reference/contratos.md; full CLI: docs/design-deterministico.md §2.
 """
 import os
 import sys
@@ -53,8 +53,8 @@ EXIT = {
     "interrompido": 130,
     "erro_interno": 1,
 }
-_REASONS = {"nao_encontrado": "nada com esse caminho", "pasta_sem_videos": "pasta sem vídeos (a busca não entra em subpastas)",
-            "glob_sem_videos": "o curinga não casou com nenhum vídeo"}
+_REASONS = {"nao_encontrado": "nothing at this path", "pasta_sem_videos": "folder without videos (the search does not go into subfolders)",
+            "glob_sem_videos": "the wildcard matched no video"}
 
 
 class Fail(Exception):
@@ -67,55 +67,55 @@ class Fail(Exception):
 
 class _Parser(argparse.ArgumentParser):
     def error(self, message):
-        raise Fail("uso_invalido", f"{message} (veja python prepare.py --help)")
+        raise Fail("uso_invalido", f"{message} (see python prepare.py --help)")
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = _Parser(prog="prepare.py", description=__doc__.splitlines()[0],
                 formatter_class=argparse.RawDescriptionHelpFormatter, epilog="\n".join(__doc__.splitlines()[1:]))
-    p.add_argument("inputs", nargs="*", metavar="INPUT", help="vídeo, pasta ou curinga (* e ?) — uso manual")
-    m = p.add_argument_group("modo")
-    m.add_argument("--pedido", metavar="MD", help="pedido.md com # videos, # objetivo e # opcoes (entrada da skill)")
+    p.add_argument("inputs", nargs="*", metavar="INPUT", help="video, folder or wildcard (* and ?) — manual use")
+    m = p.add_argument_group("mode")
+    m.add_argument("--pedido", metavar="MD", help="pedido.md with # videos, # objetivo and # opcoes (the skill's input)")
     m.add_argument("--estimar", "--estimate", dest="estimate", action="store_true",
-                   help="só ffprobe e cache: estima o tempo; não consome o pedido nem cria run")
-    m.add_argument("--resume", "--retomar", dest="resume", metavar="RUN", help="run_id, pasta do run ou ultimo")
-    m.add_argument("--gc", nargs="?", const=30.0, type=float, metavar="DIAS",
-                   help="apaga do cache os vídeos sem uso há mais de DIAS (padrão 30)")
-    g = p.add_argument_group("geral")
-    g.add_argument("--home", metavar="PASTA", help="pasta central (padrão: VIDEO_ANALYSIS_HOME ou %%USERPROFILE%%\\video-analysis)")
-    g.add_argument("--jobs", type=int, default=2, help="vídeos processados em paralelo, em processos separados (padrão 2)")
+                   help="ffprobe and cache only: estimates the time; does not consume the request or create a run")
+    m.add_argument("--resume", "--retomar", dest="resume", metavar="RUN", help="run_id, run folder or ultimo")
+    m.add_argument("--gc", nargs="?", const=30.0, type=float, metavar="DAYS",
+                   help="deletes from the cache the videos unused for more than DAYS (default 30)")
+    g = p.add_argument_group("general")
+    g.add_argument("--home", metavar="FOLDER", help="central folder (default: VIDEO_ANALYSIS_HOME or %%USERPROFILE%%\\video-analysis)")
+    g.add_argument("--jobs", type=int, default=2, help="videos processed in parallel, in separate processes (default 2)")
     g.add_argument("--force", nargs="?", const="all", choices=["all", "cues", "frames", "batches"],
-                   help="refaz o estágio e os seguintes (sem valor: all)")
+                   help="redoes the stage and the following ones (no value: all)")
     g.add_argument("--forcar", action="store_true",
-                   help="prepara mesmo acima de 800 agentes estimados (diagnóstico: o Workflow recusa; divida o run)")
-    g.add_argument("--vtt", metavar="ARQ", help="legenda explícita (só com exatamente 1 vídeo)")
-    g.add_argument("--skip-missing", action="store_true", help="pula os vídeos sem .vtt de mesmo nome")
-    g.add_argument("--recursive", action="store_true", help="busca vídeos também nas subpastas")
-    g.add_argument("--run", nargs="?", const="", metavar="NOME", help="cria runs/<carimbo>-<NOME> (uso manual)")
+                   help="prepares even above 800 estimated agents (diagnostics: the Workflow refuses; split the run)")
+    g.add_argument("--vtt", metavar="FILE", help="explicit subtitles (only with exactly 1 video)")
+    g.add_argument("--skip-missing", action="store_true", help="skips the videos without a .vtt of the same name")
+    g.add_argument("--recursive", action="store_true", help="also looks for videos in subfolders")
+    g.add_argument("--run", nargs="?", const="", metavar="NAME", help="creates runs/<stamp>-<NAME> (manual use)")
     o = g.add_mutually_exclusive_group()
     o.add_argument("--objective-file", "--objetivo-arquivo", dest="objective_file", metavar="MD")
-    o.add_argument("--objective", "--objetivo", dest="objective", metavar="TEXTO")
-    g.add_argument("--json-out", metavar="ARQ", help="grava também o JSON neste arquivo")
-    g.add_argument("--ascii", action="store_true", help="JSON só com ASCII (\\uXXXX)")
-    g.add_argument("--quiet", action="store_true", help="sem progresso no stderr (a linha run_dir continua)")
-    g.add_argument("--debug", action="store_true", help="traceback completo no stderr")
-    a = p.add_argument_group("opções do pedido (a da linha de comando prevalece)")
+    o.add_argument("--objective", "--objetivo", dest="objective", metavar="TEXT")
+    g.add_argument("--json-out", metavar="FILE", help="also writes the JSON to this file")
+    g.add_argument("--ascii", action="store_true", help="ASCII-only JSON (\\uXXXX)")
+    g.add_argument("--quiet", action="store_true", help="no progress on stderr (the run_dir line stays)")
+    g.add_argument("--debug", action="store_true", help="full traceback on stderr")
+    a = p.add_argument_group("request options (the command line's value prevails)")
     a.add_argument("--papeis", metavar="agents|inline")
     a.add_argument("--max-lotes", dest="max_lotes", metavar="N")
     a.add_argument("--paralelo", metavar="N")
-    a.add_argument("--esforco-analista", dest="esforco_analista", metavar="NIVEL")
-    a.add_argument("--esforco-curador", dest="esforco_curador", metavar="NIVEL")
+    a.add_argument("--esforco-analista", dest="esforco_analista", metavar="LEVEL")
+    a.add_argument("--esforco-curador", dest="esforco_curador", metavar="LEVEL")
     a.add_argument("--curadoria", metavar="plano|lotes",
-                   help="lotes = curador antes de cada lote (padrão: plano; no --resume, a do run, ou lotes num run anterior à opção)")
+                   help="lotes = curator before each batch (default: plano; with --resume, the run's, or lotes for a run older than the option)")
     a.add_argument("--idioma", metavar="xx")
     a.add_argument("--trecho", metavar="hh:mm:ss-hh:mm:ss")
-    a.add_argument("--falantes", "--speaker-names", dest="falantes", metavar='"SPEAKER_01=Nome;…"')
+    a.add_argument("--falantes", "--speaker-names", dest="falantes", metavar='"SPEAKER_01=Name;…"')
     a.add_argument("--sensibilidade", "--sensitivity", dest="sensibilidade", metavar="low|normal|high")
     a.add_argument("--ignorar-regiao", "--ignore-region", dest="ignorar_regiao", action="append", metavar="x,y,w,h")
-    d = p.add_argument_group("extração e lotes (uso manual; design §2)")
-    d.add_argument("--start", metavar="T", help="início do intervalo extraído ([HH:]MM:SS[.mmm] ou segundos)")
-    d.add_argument("--end", metavar="T", help="fim do intervalo extraído")
-    d.add_argument("--vtt-offset", type=float, metavar="SEG")
+    d = p.add_argument_group("extraction and batches (manual use; design §2)")
+    d.add_argument("--start", metavar="T", help="start of the extracted range ([HH:]MM:SS[.mmm] or seconds)")
+    d.add_argument("--end", metavar="T", help="end of the extracted range")
+    d.add_argument("--vtt-offset", type=float, metavar="SEC")
     d.add_argument("--sample-fps", type=float)
     d.add_argument("--settle", type=float)
     d.add_argument("--max-settle-wait", type=float)
@@ -126,7 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--no-revisit", action="store_true")
     d.add_argument("--max-edge", type=int)
     d.add_argument("--jpeg-q", type=int)
-    d.add_argument("--sequential", action="store_true", help="passes A e B separados (mesma saída; diagnóstico)")
+    d.add_argument("--sequential", action="store_true", help="separate passes A and B (same output; diagnostics)")
     d.add_argument("--batch-frames", type=int)
     d.add_argument("--batch-text", type=int)
     d.add_argument("--batch-span", type=float)
@@ -197,7 +197,7 @@ def emit(ctx: Ctx, env: dict, code: int) -> int:
         try:
             write_json(t, env)
         except (OSError, ValueError) as exc:
-            ctx.log(f"não consegui gravar {as_posix(t)}: {exc}", echo=False)
+            ctx.log(f"could not write {as_posix(t)}: {exc}", echo=False)
     line = json.dumps(env, ensure_ascii=ctx.ascii, separators=(",", ":"), allow_nan=False)
     sys.stdout.write(line + "\n")
     sys.stdout.flush()
@@ -284,20 +284,20 @@ def gather(ctx: Ctx, args) -> tuple[list[str], str | None, dict]:
         ctx.pedido = Path(os.path.abspath(args.pedido))
         ctx.consume = not args.estimate  # any later failure renames it to pedido.erro.md
         if args.inputs:
-            raise Fail("uso_invalido", "use --pedido ou entradas diretas (INPUT…), não os dois")
+            raise Fail("uso_invalido", "use --pedido or direct inputs (INPUT…), not both")
         if args.objective or args.objective_file:
-            raise Fail("uso_invalido", "com --pedido, o objetivo vem da seção '# objetivo'")
+            raise Fail("uso_invalido", "with --pedido, the objective comes from the '# objetivo' section")
         ped = runs.read_pedido(ctx.pedido)
         entries, objective, raw = ped["videos"], ped["objective"], dict(ped["options"])
     else:
         if not args.inputs:
-            raise Fail("uso_invalido", "informe --pedido <md>, vídeos (INPUT…), --resume <run> ou --gc")
+            raise Fail("uso_invalido", "provide --pedido <md>, videos (INPUT…), --resume <run> or --gc")
         entries, raw = list(args.inputs), {}
         objective = None
         if args.objective_file:
             hits = [p for p in resolve_unicode_paths(args.objective_file) if p.is_file()]
             if len(hits) != 1:
-                raise Fail("objetivo_ausente", f"arquivo do objetivo não encontrado: {args.objective_file}")
+                raise Fail("objetivo_ausente", f"objective file not found: {args.objective_file}")
             data = hits[0].read_bytes()
             try:
                 objective = data.decode("utf-8-sig")
@@ -306,7 +306,7 @@ def gather(ctx: Ctx, args) -> tuple[list[str], str | None, dict]:
         elif args.objective is not None:
             objective = args.objective
         if objective is not None and not objective.strip():
-            raise Fail("objetivo_ausente", "o objetivo está vazio")
+            raise Fail("objetivo_ausente", "the objective is empty")
     for key in runs.OPTION_KEYS:
         value = getattr(args, key, None)
         if value is not None:
@@ -319,7 +319,7 @@ def _num(args, name: str, lo: float, hi: float, label: str) -> float | None:
     if value is None:
         return None
     if not (lo <= value <= hi):
-        raise Fail("opcao_invalida", f"{label}: {value} fora de {lo}–{hi}")
+        raise Fail("opcao_invalida", f"{label}: {value} outside {lo}–{hi}")
     return value
 
 
@@ -361,7 +361,7 @@ def stage_overrides(args, opts: dict) -> dict:
         except ValueError as exc:
             raise Fail("opcao_invalida", f"--start/--end: {exc}") from None
         if start < 0 or (end is not None and end <= start):
-            raise Fail("opcao_invalida", "--end precisa ser depois de --start")
+            raise Fail("opcao_invalida", "--end must be after --start")
         fr["range"] = [start, end]
     if opts.get("falantes"):
         cu["speaker_names"] = opts["falantes"]
@@ -392,9 +392,9 @@ def effective_params(overrides: dict, trecho: list | None) -> dict:
         if trecho and isinstance(ba, dict) and "range" not in ba:
             ba = {**ba, "range": list(trecho)}
     except cache.StageUnavailable as exc:
-        raise Fail("instalacao_incompleta", f"{exc}: reinstale a skill (scripts/va incompleto)") from None
+        raise Fail("instalacao_incompleta", f"{exc}: reinstall the skill (scripts/va incomplete)") from None
     except (ValueError, TypeError, KeyError) as exc:
-        raise Fail("opcao_invalida", f"parâmetro inválido: {exc}") from None
+        raise Fail("opcao_invalida", f"invalid parameter: {exc}") from None
     return {"frames": cache.plain(fr), "cues": cache.plain(cu), "batches": cache.plain(ba)}
 
 
@@ -402,17 +402,17 @@ def discover_pairs(ctx: Ctx, args, entries: list[str]) -> list[tuple[Path, Path]
     videos, problems = discover.expand_inputs(entries, recursive=args.recursive)
     if problems:
         detail = "; ".join(f"{p['input']} ({_REASONS.get(p['reason'], p['reason'])})" for p in problems)
-        raise Fail("video_nao_encontrado", f"não achei: {detail}. Confira o caminho (entre aspas, se tiver espaços); "
-                   "acentos, ’, espaços duplos e colchetes já são tratados", inputs=[p["input"] for p in problems])
+        raise Fail("video_nao_encontrado", f"not found: {detail}. Check the path (in quotes, if it has spaces); "
+                   "accents, ’, double spaces and brackets are already handled", inputs=[p["input"] for p in problems])
     if not videos:
-        raise Fail("video_nao_encontrado", "nenhum vídeo nas entradas")
+        raise Fail("video_nao_encontrado", "no video in the inputs")
     explicit = None
     if args.vtt:
         if len(videos) != 1:
-            raise Fail("uso_invalido", f"--vtt só vale com exatamente 1 vídeo (as entradas dão {len(videos)})")
+            raise Fail("uso_invalido", f"--vtt only works with exactly 1 video (the inputs give {len(videos)})")
         hits = [p for p in resolve_unicode_paths(args.vtt) if p.is_file()]
         if len(hits) != 1:
-            raise Fail("vtt_ausente", f"--vtt aponta para um arquivo que não existe: {args.vtt}")
+            raise Fail("vtt_ausente", f"--vtt points to a file that does not exist: {args.vtt}")
         explicit = hits[0]
     pairs, skipped, missing = discover.match_vtts(videos, explicit, skip_missing=args.skip_missing)
     if missing:
@@ -420,13 +420,13 @@ def discover_pairs(ctx: Ctx, args, entries: list[str]) -> list[tuple[Path, Path]
                    missing_vtt=[{"video": as_posix(m["video"]), "candidates": [as_posix(c["path"]) for c in m["candidates"]],
                                  "suggestion": m["suggestion"]} for m in missing])
     if skipped:
-        ctx.warnings.append("sem legenda de mesmo nome, pulado(s) por --skip-missing: " + "; ".join(p.name for p in skipped))
+        ctx.warnings.append("no subtitles with the same name, skipped by --skip-missing: " + "; ".join(p.name for p in skipped))
     if not pairs:
-        raise Fail("vtt_ausente", "nenhum vídeo com legenda .vtt de mesmo nome (todos pulados por --skip-missing): "
+        raise Fail("vtt_ausente", "no video with a .vtt subtitle file of the same name (all skipped by --skip-missing): "
                    + "; ".join(p.name for p in skipped))
     for video, _ in pairs:
         if len(str(video)) > LONG_PATH:
-            ctx.warnings.append(f"caminho com mais de {LONG_PATH} caracteres (limite do Windows por perto): {video.name}")
+            ctx.warnings.append(f"path longer than {LONG_PATH} characters (close to the Windows limit): {video.name}")
     return pairs
 
 
@@ -438,7 +438,7 @@ def runtime_check(ctx: Ctx, need: tuple[str, ...]) -> str | None:
     problems = ambiente.runtime_problems(need)
     if problems:
         code = "ffmpeg_ausente" if any(p["code"] == "ffmpeg_ausente" for p in problems) else "dependencia_ausente"
-        raise Fail(code, "; ".join(p["detail"] for p in problems) + ": rode /video-analysis setup")
+        raise Fail(code, "; ".join(p["detail"] for p in problems) + ": run /video-analysis setup")
     if "ffmpeg" in need:
         with contextlib.suppress(Exception):
             return ambiente.tool_status("ffmpeg").get("version")
@@ -476,7 +476,7 @@ def _duration(info) -> float:
     except (TypeError, ValueError):
         d = 0.0
     if not d > 0:
-        raise ValueError("ffprobe não informou a duração (arquivo sem faixa de vídeo?)")
+        raise ValueError("ffprobe did not report the duration (file without a video track?)")
     return d
 
 
@@ -496,24 +496,24 @@ def env_status(ctx: Ctx) -> tuple[dict, dict]:
 def roles_and_env(ctx: Ctx, requested: str) -> tuple[str, dict]:
     roles = runs.copy_roles(SKILL_DIR, ctx.home / WORKSPACE_DIRS["roles"])
     if not roles:
-        ctx.warnings.append("a skill não tem papéis em agents/: o modo inline não vai achar o papel")
+        ctx.warnings.append("the skill has no roles in agents/: inline mode will not find the role")
     env, agents = env_status(ctx)
     mode = requested
     if requested == "agents" and not agents["current"]:
         mode = "inline"
-        ctx.warnings.append("papeis: agents pedido, mas as cópias em ~/.claude/agents não são idênticas às da skill "
-                            f"({agents['detail']}); usando inline. Rode /video-analysis setup e reabra o Claude Code")
+        ctx.warnings.append("papeis: agents requested, but the copies in ~/.claude/agents are not identical to the skill's "
+                            f"({agents['detail']}); using inline. Run /video-analysis setup and reopen Claude Code")
     return mode, env
 
 
 def guard(ctx: Ctx, agents: int, forcar: bool, **extra) -> None:
     limit = WORKFLOW_DEFAULTS["max_agents"]
     if agents > limit and not forcar:
-        raise Fail("run_grande_demais", f"~{agents} agentes estimados (limite {limit}; o Workflow recusa acima disso): "
-                   "divida em runs menores, use trecho ou max_lotes", **extra)
+        raise Fail("run_grande_demais", f"~{agents} estimated agents (limit {limit}; the Workflow refuses above that): "
+                   "split into smaller runs, use trecho or max_lotes", **extra)
     if agents > limit:
-        ctx.warnings.append(f"~{agents} agentes (--forcar): o Workflow recusa mais de {limit} agentes; divida o run "
-                            "(--trecho/--max-lotes ou menos vídeos) antes de disparar")
+        ctx.warnings.append(f"~{agents} agents (--forcar): the Workflow refuses more than {limit} agents; split the run "
+                            "(--trecho/--max-lotes or fewer videos) before launching")
 
 
 def video_entry(vid: str, slug: str, title: str, res: dict, extra_warnings: list[str]) -> dict:
@@ -565,7 +565,7 @@ def run_jobs(ctx: Ctx, jobs: list[dict], n_jobs: int) -> list[dict]:
     from concurrent.futures import ProcessPoolExecutor, as_completed
 
     workers = min(n_jobs, len(pooled))
-    ctx.log(f"{len(pooled)} vídeos, {workers} em paralelo")
+    ctx.log(f"{len(pooled)} videos, {workers} in parallel")
     ex = ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("spawn"),
                              initializer=cache.child_init)
     try:
@@ -576,13 +576,13 @@ def run_jobs(ctx: Ctx, jobs: list[dict], n_jobs: int) -> list[dict]:
                 results[i] = fut.result()
             except Exception as exc:  # BrokenProcessPool, pickling problems
                 results[i] = {"vid": jobs[i]["vid"], "ok": False, "cache_hit": {}, "timing_s": {}, "warnings": [],
-                              "error": {"code": "video_falhou", "detail": f"o processo do vídeo morreu: {type(exc).__name__}: {exc}"}}
+                              "error": {"code": "video_falhou", "detail": f"the video's process died: {type(exc).__name__}: {exc}"}}
     except KeyboardInterrupt:
         ex.shutdown(wait=False, cancel_futures=True)
         raise
     ex.shutdown(wait=True)
     return [r if r is not None else {"vid": jobs[i]["vid"], "ok": False, "cache_hit": {}, "timing_s": {}, "warnings": [],
-                                     "error": {"code": "video_falhou", "detail": "o processo do vídeo não devolveu resultado"}}
+                                     "error": {"code": "video_falhou", "detail": "the video's process returned no result"}}
             for i, r in enumerate(results)]
 
 
@@ -608,7 +608,7 @@ def option_lines(opts: dict, wopts: dict, roles_mode: str, language: str) -> lis
 def check_args(wargs: dict) -> None:
     problems = contracts.check_workflow_args(wargs)
     if problems:
-        raise Fail("erro_interno", "workflow_args inválido gerado pelo prepare.py: " + "; ".join(problems[:5]))
+        raise Fail("erro_interno", "invalid workflow_args generated by prepare.py: " + "; ".join(problems[:5]))
 
 
 # --- modes ----------------------------------------------------------------------------------------------
@@ -616,16 +616,16 @@ def check_args(wargs: dict) -> None:
 def run_gc(ctx: Ctx, args) -> int:
     ctx.mode = "gc"
     if args.inputs or args.pedido or args.resume or args.estimate:
-        raise Fail("uso_invalido", "--gc roda sozinho")
+        raise Fail("uso_invalido", "--gc runs alone")
     if args.gc < 0:
-        raise Fail("opcao_invalida", "--gc: DIAS precisa ser 0 ou mais")
+        raise Fail("opcao_invalida", "--gc: DAYS must be 0 or more")
     ensure_home(ctx)
     open_log(ctx, f"gc-{time.strftime('%Y%m%d-%H%M%S')}")
     ctx.stderr_on = True
     res = cache.gc_cache(ctx.home / WORKSPACE_DIRS["cache"], args.gc)
-    ctx.log(f"gc: {len(res['removed'])} vídeo(s) apagado(s) do cache, {res['freed_mb']} MB liberados; "
-            f"{res['kept']} mantido(s)")
-    errors = [{"key": f["key"], "code": "gc_falhou", "detail": "não consegui apagar (arquivo em uso?)"} for f in res["failed"]]
+    ctx.log(f"gc: {len(res['removed'])} video(s) deleted from the cache, {res['freed_mb']} MB freed; "
+            f"{res['kept']} kept")
+    errors = [{"key": f["key"], "code": "gc_falhou", "detail": "could not delete (file in use?)"} for f in res["failed"]]
     return emit(ctx, envelope(ctx, True, errors=errors, gc=res), 0)
 
 
@@ -639,11 +639,11 @@ def run_prepare(ctx: Ctx, args) -> int:
         raise Fail(exc.code, exc.detail) from None
     make_run = not estimate and (ctx.pedido is not None or objective is not None or args.run is not None)
     if args.run is not None and objective is None and not estimate:
-        raise Fail("objetivo_ausente", "--run precisa de --objective-file ou --objective")
+        raise Fail("objetivo_ausente", "--run needs --objective-file or --objective")
     ensure_home(ctx)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     open_log(ctx, f"{ctx.mode}-{stamp}")
-    ctx.log(f"prepare.py {va.VERSION} · modo {ctx.mode} · home {as_posix(ctx.home)} · argv {sys.argv[1:]}", echo=False)
+    ctx.log(f"prepare.py {va.VERSION} · mode {ctx.mode} · home {as_posix(ctx.home)} · argv {sys.argv[1:]}", echo=False)
 
     pairs = discover_pairs(ctx, args, entries)
     overrides = stage_overrides(args, opts)
@@ -667,8 +667,8 @@ def run_prepare(ctx: Ctx, args) -> int:
             keys = cache.stage_keys(vkey, vtt, params, meta)
         except OSError as exc:
             errors.append({"vid": vid, "slug": slug, "video": as_posix(video), "code": "video_falhou",
-                           "detail": f"leitura: {type(exc).__name__}: {exc}"})
-            ctx.log(f"{slug}: não consegui ler o vídeo ou a legenda: {exc}", echo=False)
+                           "detail": f"read: {type(exc).__name__}: {exc}"})
+            ctx.log(f"{slug}: could not read the video or the subtitles: {exc}", echo=False)
             continue
         vdir = ctx.home / WORKSPACE_DIRS["cache"] / vkey
         hits = cache.stage_hits(vdir, keys, force)
@@ -693,17 +693,17 @@ def run_prepare(ctx: Ctx, args) -> int:
         except Exception as exc:
             errors.append({"vid": k["vid"], "slug": k["slug"], "video": as_posix(k["video"]), "code": "video_falhou",
                            "detail": f"ffprobe: {type(exc).__name__}: {exc}"})
-            ctx.log(f"{k['slug']}: ffprobe falhou: {exc}", echo=False)
+            ctx.log(f"{k['slug']}: ffprobe failed: {exc}", echo=False)
             continue
         if trecho and trecho[0] >= duration:
-            raise Fail("opcao_invalida", f"trecho começa em {fmt_hms(trecho[0], 0)}, depois do fim de {k['title']} "
+            raise Fail("opcao_invalida", f"trecho starts at {fmt_hms(trecho[0], 0)}, after the end of {k['title']} "
                        f"({fmt_hms(duration, 0)})")
         warn = []
         if trecho and trecho[1] > duration:
-            warn.append(f"trecho termina depois do fim do vídeo ({fmt_hms(duration, 0)}): vai até o fim")
+            warn.append(f"trecho ends after the end of the video ({fmt_hms(duration, 0)}): it runs to the end")
         items.append({**k, "info": info, "duration": duration, "warn": warn})
     if not items:
-        raise Fail("video_falhou", "nenhum vídeo pôde ser lido: " + "; ".join(f"{e['slug']}: {e['detail']}" for e in errors),
+        raise Fail("video_falhou", "no video could be read: " + "; ".join(f"{e['slug']}: {e['detail']}" for e in errors),
                    errors=errors)
 
     if estimate:
@@ -716,7 +716,7 @@ def run_prepare(ctx: Ctx, args) -> int:
         ctx.status = Status(ctx, items)
         ctx.status.start()
     ctx.stderr_on = True
-    ctx.log(f"{len(items)} vídeo(s); log em {as_posix(ctx.log_path)}")
+    ctx.log(f"{len(items)} video(s); log at {as_posix(ctx.log_path)}")
 
     jobs = []
     for it in items:
@@ -737,13 +737,13 @@ def run_prepare(ctx: Ctx, args) -> int:
         if res.get("ok"):
             done.append((it, res))
             continue
-        err = res.get("error") or {"code": "video_falhou", "detail": "falhou sem detalhe"}
+        err = res.get("error") or {"code": "video_falhou", "detail": "failed without detail"}
         if err.get("code") == "instalacao_incompleta":
             raise Fail("instalacao_incompleta", err["detail"])
         errors.append({"vid": it["vid"], "slug": it["slug"], "video": as_posix(it["video"]), "code": "video_falhou",
                        "detail": err["detail"]})
     if not done:
-        raise Fail("video_falhou", "nenhum vídeo foi preparado: " + "; ".join(f"{e['slug']}: {e['detail']}" for e in errors),
+        raise Fail("video_falhou", "no video was prepared: " + "; ".join(f"{e['slug']}: {e['detail']}" for e in errors),
                    errors=errors)
 
     videos_out, states, wvideos = [], [], []
@@ -759,14 +759,14 @@ def run_prepare(ctx: Ctx, args) -> int:
         wvideos.append({"slug": it["slug"], "title": it["title"], "n_frames": n_frames, "batch_images": images,
                         "duration_s": span(res.get("summary") or {}, it["duration"], trecho),
                         "batches_dir": res["dirs"]["batches"],
-                        # v1, v2...: a pasta do vídeo não repete o slug do run (o analista juntava os dois nomes)
+                        # v1, v2...: the video folder does not repeat the run's slug (the analyst used to join the two names)
                         "out_dir": str(ctx.run_dir / it["vid"]) if ctx.run_dir else None, **state, "_res": res, "_it": it})
     n_batches = sum(s["remaining"] for s in states)
     agents = runs.estimate_agents(states, wopts["curation"])
     estimate = {"batches": n_batches, "agents": agents, "seconds": round(ctx.elapsed())}
 
     if not make_run:  # cache only (manual use): no run, no workflow_args
-        ctx.log(f"pronto em {ctx.elapsed():.1f} s (sem run: use --run/--objective para criar um)")
+        ctx.log(f"done in {ctx.elapsed():.1f} s (no run: use --run/--objective to create one)")
         env = envelope(ctx, not errors, error=_partial_error(errors, len(items)) if errors else None,
                        videos=videos_out, estimate=estimate, errors=errors)
         return emit(ctx, env, 0 if not errors else EXIT["video_falhou"])
@@ -812,7 +812,7 @@ def run_prepare(ctx: Ctx, args) -> int:
     if ok and ctx.consume:
         runs.consume_pedido(ctx.pedido, ctx.run_dir, ok=True)
         ctx.consume = False
-    ctx.log(f"pronto em {ctx.elapsed():.1f} s: {n_batches} lote(s), ~{agents} agente(s), papéis {roles_mode}")
+    ctx.log(f"done in {ctx.elapsed():.1f} s: {n_batches} batch(es), ~{agents} agent(s), roles {roles_mode}")
     if ctx.status:
         ctx.status.finish("pronto" if ok else "parcial")
         ctx.status = None
@@ -833,7 +833,7 @@ class _Partial(Exception):
 
 def _partial_error(errors: list[dict], total: int) -> dict:
     names = "; ".join(f"{e['slug']}: {e['detail']}" for e in errors)
-    return {"code": "video_falhou", "detail": f"{len(errors)} de {total} vídeo(s) falharam ({names}); os demais estão no JSON"}
+    return {"code": "video_falhou", "detail": f"{len(errors)} of {total} video(s) failed ({names}); the others are in the JSON"}
 
 
 def finish_estimate(ctx: Ctx, args, items: list[dict], errors: list[dict], wopts: dict, params: dict) -> int:
@@ -871,7 +871,7 @@ def finish_estimate(ctx: Ctx, args, items: list[dict], errors: list[dict], wopts
     env_info, _ = env_status(ctx)
     if agents is not None:
         guard(ctx, agents, args.forcar, videos=videos_out, estimate=estimate, env=env_info, errors=errors)
-    ctx.log(f"estimativa: ~{estimate['seconds']} s para {len(items)} vídeo(s)")
+    ctx.log(f"estimate: ~{estimate['seconds']} s for {len(items)} video(s)")
     if errors and not items:
         raise Fail("video_falhou", "; ".join(f"{e['slug']}: {e['detail']}" for e in errors), errors=errors)
     env = envelope(ctx, not errors, error=_partial_error(errors, len(items) + len(errors)) if errors else None,
@@ -882,7 +882,7 @@ def finish_estimate(ctx: Ctx, args, items: list[dict], errors: list[dict], wopts
 def run_resume(ctx: Ctx, args) -> int:
     ctx.mode = "resume"
     if args.pedido or args.inputs or args.estimate or args.force:
-        raise Fail("uso_invalido", "--resume não aceita --pedido, entradas, --estimar nem --force")
+        raise Fail("uso_invalido", "--resume does not accept --pedido, inputs, --estimar or --force")
     ensure_home(ctx)
     try:
         run_dir = runs.find_run(ctx.home, args.resume)
@@ -894,14 +894,14 @@ def run_resume(ctx: Ctx, args) -> int:
         vids = rj["videos"]
         assert isinstance(vids, list) and vids and len(vids) == len(old["videos"])
     except (OSError, ValueError, KeyError, TypeError, AssertionError) as exc:
-        raise Fail("run_inconsistente", f"{as_posix(run_dir / 'run.json')} incompleto ou ilegível ({exc})") from None
+        raise Fail("run_inconsistente", f"{as_posix(run_dir / 'run.json')} incomplete or unreadable ({exc})") from None
     ctx.run_dir, ctx.run_id = run_dir, run_dir.name
     stamp = time.strftime("%Y%m%d-%H%M%S")
     open_log(ctx, f"resume-{stamp}-{ctx.run_id}")
     print(f"run_dir: {as_posix(ctx.run_dir)}", file=sys.stderr, flush=True)
     ctx.stderr_on = True
     if not (run_dir / "objective.md").is_file():
-        raise Fail("run_inconsistente", f"falta {as_posix(run_dir / 'objective.md')}")
+        raise Fail("run_inconsistente", f"missing {as_posix(run_dir / 'objective.md')}")
     raw = {k: getattr(args, k) for k in ("papeis", "max_lotes", "paralelo", "esforco_analista", "esforco_curador",
                                          "curadoria")
            if getattr(args, k) is not None}
@@ -912,7 +912,7 @@ def run_resume(ctx: Ctx, args) -> int:
     stored = rj.get("options") or {}
     wopts = {"max_batches": old["options"].get("max_batches"), "max_parallel_videos": old["options"]["max_parallel_videos"],
              "analyst_effort": old["options"]["analyst_effort"], "curator_effort": old["options"]["curator_effort"],
-             "curation": old["options"].get("curation") or "batches"}  # run anterior à opção: tinha o NEXT
+             "curation": old["options"].get("curation") or "batches"}  # run older than the option: it had the NEXT
     if args.max_lotes is not None:
         wopts["max_batches"] = over["max_lotes"] or None
     if over["paralelo"]:
@@ -938,7 +938,7 @@ def run_resume(ctx: Ctx, args) -> int:
         if valid:
             results[i] = cache.prepare_video(job)  # all hits: reads the summary, refreshes last_used
         else:
-            ctx.log(f"{v['slug']}: cache incompleto; refazendo com os parâmetros do run")
+            ctx.log(f"{v['slug']}: incomplete cache; rebuilding with the run's parameters")
             jobs.append((i, job))
     if jobs:
         ffv = runtime_check(ctx, ("ffmpeg", "ffprobe", "numpy", "pillow"))
@@ -959,9 +959,9 @@ def run_resume(ctx: Ctx, args) -> int:
             if err.get("code") == "instalacao_incompleta":
                 raise Fail("instalacao_incompleta", err.get("detail", ""))
             errors.append({"vid": v.get("vid"), "slug": v["slug"], "video": v["video_path"], "code": "video_falhou",
-                           "detail": err.get("detail") or "cache ausente e não reconstruído"})
+                           "detail": err.get("detail") or "cache missing and not rebuilt"})
     if errors:
-        raise Fail("video_falhou", "não deu para retomar: " + "; ".join(f"{e['slug']}: {e['detail']}" for e in errors),
+        raise Fail("video_falhou", "could not resume: " + "; ".join(f"{e['slug']}: {e['detail']}" for e in errors),
                    errors=errors)
 
     states, videos_out, wvideos, actions = [], [], [], []
@@ -972,7 +972,7 @@ def run_resume(ctx: Ctx, args) -> int:
         n_frames = int(stage_result.get("n_frames") or ov["n_frames"])
         warn = []
         if images != list(ov["batch_images"]):
-            warn.append("os lotes refeitos diferem dos do run original: relatórios antigos podem não bater")
+            warn.append("the rebuilt batches differ from the original run's: old reports may not match")
         out_dir = run_dir / Path(ov["out_dir"]).name  # recomputed: still valid if the central folder was moved
         st = runs.resume_video(out_dir, len(images), wopts["max_batches"], stamp)
         actions += [f"{v['slug']}: {a}" for a in st["actions"]]
@@ -997,13 +997,13 @@ def run_resume(ctx: Ctx, args) -> int:
                                      combined_exists=combined_exists, videos=wvideos)
     check_args(wargs)
     if all(s["final_exists"] for s in states) and (len(states) == 1 or combined_exists):
-        ctx.warnings.append("o run já está completo: nada a retomar (para outra pergunta, um run novo reaproveita o cache)")
+        ctx.warnings.append("the run is already complete: nothing to resume (for another question, a new run reuses the cache)")
     rj["workflow_args"] = wargs
     rj["options"] = {**stored, **wopts, "roles_mode_requested": requested, "roles_mode": roles_mode}
     rj.setdefault("resumes", []).append({"at": cache.iso_now(), "argv": sys.argv[1:], "actions": actions,
                                          "start_batches": [s["start_batch"] for s in states]})
     write_json(run_dir / "run.json", cache.plain(rj))
-    ctx.log(f"retomada pronta: {n_batches} lote(s) a analisar, ~{agents} agente(s), papéis {roles_mode}")
+    ctx.log(f"resume ready: {n_batches} batch(es) to analyse, ~{agents} agent(s), roles {roles_mode}")
     env = envelope(ctx, True, videos=videos_out, estimate=estimate, env=env_info, workflow_args=wargs)
     return emit(ctx, env, 0)
 
@@ -1026,7 +1026,7 @@ def main(argv: list[str] | None = None) -> int:
         ctx.home = workspace_home(args.home)
         modes = [m for m, on in (("--resume", args.resume is not None), ("--gc", args.gc is not None)) if on]
         if len(modes) > 1:
-            raise Fail("uso_invalido", f"use só um modo: {' ou '.join(modes)}")
+            raise Fail("uso_invalido", f"use only one mode: {' or '.join(modes)}")
         if args.gc is not None:
             return run_gc(ctx, args)
         if args.resume is not None:
@@ -1041,11 +1041,11 @@ def main(argv: list[str] | None = None) -> int:
     except Fail as f:
         return _failed(ctx, f)
     except KeyboardInterrupt:
-        return _failed(ctx, Fail("interrompido", "interrompido (Ctrl+C ou processo encerrado); os estágios completos ficam no cache"))
+        return _failed(ctx, Fail("interrompido", "interrupted (Ctrl+C or process terminated); the completed stages stay in the cache"))
     except Exception as exc:  # a bug: still one JSON line, with the traceback in the log
         import traceback
         tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-        ctx.log("ERRO INTERNO\n" + tb, echo=False)
+        ctx.log("INTERNAL ERROR\n" + tb, echo=False)
         if ctx.debug:
             print(tb, file=sys.stderr)
         return _failed(ctx, Fail("erro_interno", f"{type(exc).__name__}: {exc}"))
@@ -1064,7 +1064,7 @@ def _consume_failed(ctx: Ctx) -> None:
 
 def _failed(ctx: Ctx, f: Fail) -> int:
     code = EXIT.get(f.code, 1)
-    ctx.log(f"erro {f.code}: {f.detail}", echo=False)
+    ctx.log(f"error {f.code}: {f.detail}", echo=False)
     _consume_failed(ctx)
     extra = dict(f.extra)
     env = envelope(ctx, False, error={"code": f.code, "detail": f.detail}, **extra)

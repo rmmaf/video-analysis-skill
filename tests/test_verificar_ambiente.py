@@ -105,16 +105,16 @@ def test_not_ready_without_permissions(sandbox, tools_ok, capsys):
     code, out = run(capsys)
     assert code == 1
     lines = out.splitlines()
-    assert lines[-1] == "Falta 1 item(ns): rode /video-analysis setup."      # the two AVISOs do not count
+    assert lines[-1] == "1 item(s) missing: run /video-analysis setup."      # the two AVISOs do not count
     assert any(l.startswith("[OK]    python ") for l in lines)
     assert any(l.startswith("[OK]    pasta-central ") for l in lines) and (home / "runs").is_dir()
     perm = line_of(out, "permissoes")
-    assert perm.startswith("[FALTA]") and "-> setup.md, passo 5 (permissões)" in perm and "--aplicar-permissoes" in perm
+    assert perm.startswith("[FALTA]") and "-> setup.md, step 5 (permissions)" in perm and "--aplicar-permissoes" in perm
     ag = line_of(out, "agentes")
-    assert ag.startswith("[AVISO]") and "-> setup.md, passo 4 (agentes)" in ag
+    assert ag.startswith("[AVISO]") and "-> setup.md, step 4 (agents)" in ag
     wf = line_of(out, "workflow")
-    assert wf.startswith("[AVISO]") and "-> setup.md, passo 4 (agentes)" in wf
-    assert "video-analysis.js ausente em " + (chome / "workflows").as_posix() in wf and "--instalar-agentes" in wf
+    assert wf.startswith("[AVISO]") and "-> setup.md, step 4 (agents)" in wf
+    assert "video-analysis.js ausente in " + (chome / "workflows").as_posix() in wf and "--instalar-agentes" in wf
     assert not (chome / "workflows").exists()                                  # the check only reads
 
 
@@ -124,15 +124,15 @@ def test_install_apply_then_ready(sandbox, tools_ok, capsys):
     code, out = run(capsys, "--instalar-agentes", "--aplicar-permissoes")
     assert code == 0, out
     lines = out.splitlines()
-    assert lines[-1] == "Pronto."
-    assert lines[0].startswith("[OK]    instalar-agentes ") and "feche e abra o Claude Code" in lines[0]
-    assert lines[1].startswith("[OK]    instalar-workflow ") and "nome video-analysis" in lines[1]
+    assert lines[-1] == "Ready."
+    assert lines[0].startswith("[OK]    instalar-agentes ") and "close and reopen Claude Code" in lines[0]
+    assert lines[1].startswith("[OK]    instalar-workflow ") and "name video-analysis" in lines[1]
     assert (chome / "workflows" / "video-analysis.js").as_posix() in lines[1]
     # the workflow changed: the open session may keep the previous version in memory (an AVISO, exit still 0)
-    assert lines[2].startswith("[AVISO] instalar-workflow ") and "versão anterior" in lines[2]
-    assert "feche e abra o Claude Code" in lines[2] and "scriptPath" in lines[2]
-    assert lines[2].endswith("-> setup.md, passo 4 (agentes)")
-    assert lines[3].startswith("[OK]    aplicar-permissoes ") and "backup em" in lines[3]
+    assert lines[2].startswith("[AVISO] instalar-workflow ") and "previous version" in lines[2]
+    assert "close and reopen Claude Code" in lines[2] and "scriptPath" in lines[2]
+    assert lines[2].endswith("-> setup.md, step 4 (agents)")
+    assert lines[3].startswith("[OK]    aplicar-permissoes ") and "backup at" in lines[3]
     data = json.loads((chome / "settings.json").read_text(encoding="utf-8"))
     assert data["enabledPlugins"] == {"p@m": True}
     assert data["permissions"]["allow"] == ambiente.workspace_rules(home)
@@ -142,9 +142,9 @@ def test_install_apply_then_ready(sandbox, tools_ok, capsys):
     assert (chome / "workflows" / "video-analysis.js").read_bytes() == WORKFLOW_SRC.read_bytes()
     assert line_of(out, "agentes").startswith("[OK]") and line_of(out, "workflow").startswith("[OK]")
     code, out = run(capsys, "--instalar-agentes", "--aplicar-permissoes")      # idempotent
-    assert code == 0 and "já estavam" in out and len(list(chome.glob("settings.json.bak-*"))) == 1
-    assert "o workflow já estava idêntico em " in line_of(out, "instalar-workflow")
-    assert "[AVISO]" not in out and "versão anterior" not in out                  # nothing changed: no warning
+    assert code == 0 and "were already" in out and len(list(chome.glob("settings.json.bak-*"))) == 1
+    assert "the workflow was already identical in " in line_of(out, "instalar-workflow")
+    assert "[AVISO]" not in out and "previous version" not in out                 # nothing changed: no warning
     assert sorted(p.name for p in (chome / "workflows").iterdir()) == ["video-analysis.js"]
 
 
@@ -156,19 +156,19 @@ def test_outdated_workflow_is_aviso_until_reinstalled(sandbox, tools_ok, capsys)
     code, out = run(capsys, "--json")
     wf = json.loads(out)["itens"][-1]
     assert wf["id"] == "workflow" and wf["estado"] == "aviso" and wf["copia"] == "diferente"
-    assert wf["detalhe"].startswith("video-analysis.js diferente em ") and wf["passo"] == "4-agentes"
+    assert wf["detalhe"].startswith("video-analysis.js diferente in ") and wf["passo"] == "4-agents"
     code, out = run(capsys, "--instalar-agentes", "--json")
     data = json.loads(out)
-    acao = next(a for a in data["acoes"] if a["id"] == "instalar-workflow")
-    assert acao["estado"] == "ok" and acao["copiado"] is True and acao["caminho"] == installed.as_posix()
+    action = next(a for a in data["acoes"] if a["id"] == "instalar-workflow")
+    assert action["estado"] == "ok" and action["copiado"] is True and action["caminho"] == installed.as_posix()
     assert data["itens"][-1]["estado"] == "ok" and data["itens"][-1]["copia"] == "ok"
     assert installed.read_bytes() == WORKFLOW_SRC.read_bytes()
     # replaced with this session open: the note says the session may keep the old version in memory
-    assert acao["nota"] == CLI.NOTA_WORKFLOW and "versão anterior" in acao["nota"]
-    assert "feche e abra o Claude Code" in acao["nota"] and "scriptPath" in acao["nota"]
+    assert action["nota"] == CLI.NOTA_WORKFLOW and "previous version" in action["nota"]
+    assert "close and reopen Claude Code" in action["nota"] and "scriptPath" in action["nota"]
     code, out = run(capsys, "--instalar-agentes", "--json")                    # already identical: no note
-    acao = next(a for a in json.loads(out)["acoes"] if a["id"] == "instalar-workflow")
-    assert acao["copiado"] is False and acao["nota"] is None
+    action = next(a for a in json.loads(out)["acoes"] if a["id"] == "instalar-workflow")
+    assert action["copiado"] is False and action["nota"] is None
 
 
 def test_workflow_copy_failure_is_falta(sandbox, tools_ok, monkeypatch, capsys):
@@ -178,11 +178,11 @@ def test_workflow_copy_failure_is_falta(sandbox, tools_ok, monkeypatch, capsys):
         raise PermissionError("acesso negado")
     monkeypatch.setattr(ambiente, "install_workflow", refuse)
     code, out = run(capsys, "--instalar-agentes")
-    acao = line_of(out, "instalar-workflow")
-    assert code == 1 and acao.startswith("[FALTA]") and "não consegui copiar o workflow" in acao and "acesso negado" in acao
-    assert "-> setup.md, passo 4 (agentes)" in acao and line_of(out, "instalar-agentes").startswith("[OK]")
+    action = line_of(out, "instalar-workflow")
+    assert code == 1 and action.startswith("[FALTA]") and "could not copy the workflow" in action and "acesso negado" in action
+    assert "-> setup.md, step 4 (agents)" in action and line_of(out, "instalar-agentes").startswith("[OK]")
     assert line_of(out, "workflow").startswith("[AVISO]")
-    assert out.splitlines()[-1] == "Falta 2 item(ns): rode /video-analysis setup."   # the action and permissoes
+    assert out.splitlines()[-1] == "2 item(s) missing: run /video-analysis setup."   # the action and permissoes
 
 
 def test_missing_tools_are_falta(sandbox, monkeypatch, capsys):
@@ -192,11 +192,11 @@ def test_missing_tools_are_falta(sandbox, monkeypatch, capsys):
                                                                 "detail": f"{key}?"})
     code, out = run(capsys)
     assert code == 1
-    for ident, passo in (("ffmpeg", "1 (ferramentas)"), ("ffprobe", "1 (ferramentas)"), ("pillow", "2 (bibliotecas)")):
+    for ident, step in (("ffmpeg", "1 (tools)"), ("ffprobe", "1 (tools)"), ("pillow", "2 (libraries)")):
         line = next(l for l in out.splitlines() if f" {ident} " in l)
-        assert line.startswith("[FALTA]") and f"passo {passo}" in line
+        assert line.startswith("[FALTA]") and f"step {step}" in line
     assert "winget install --id Gyan.FFmpeg -e" in out and "python -m pip install numpy Pillow" in out
-    assert out.splitlines()[-1] == "Falta 4 item(ns): rode /video-analysis setup."
+    assert out.splitlines()[-1] == "4 item(s) missing: run /video-analysis setup."
 
 
 def test_json_output(sandbox, tools_ok, capsys):
@@ -208,10 +208,10 @@ def test_json_output(sandbox, tools_ok, capsys):
     ids = [i["id"] for i in data["itens"]]
     assert ids == ["python", "ffmpeg", "ffprobe", "numpy", "pillow", "pasta-central", "permissoes", "agentes", "workflow"]
     perm = data["itens"][6]
-    assert perm["estado"] == "falta" and perm["passo"] == "5-permissões" and perm["regras"] == ambiente.workspace_rules(home)
+    assert perm["estado"] == "falta" and perm["passo"] == "5-permissions" and perm["regras"] == ambiente.workspace_rules(home)
     assert data["itens"][7]["estado"] == "aviso"
     wf = data["itens"][8]
-    assert wf["estado"] == "aviso" and wf["passo"] == "4-agentes" and wf["copia"] == "ausente"
+    assert wf["estado"] == "aviso" and wf["passo"] == "4-agents" and wf["copia"] == "ausente"
     assert wf["caminho"] == (chome / "workflows" / "video-analysis.js").as_posix()
 
 
@@ -219,7 +219,7 @@ def test_bad_settings_json_is_not_overwritten(sandbox, tools_ok, capsys):
     user, chome, home = sandbox
     (chome / "settings.json").write_text("{quebrado", encoding="utf-8")
     code, out = run(capsys, "--aplicar-permissoes")
-    assert code == 1 and "nada foi gravado" in out
+    assert code == 1 and "nothing was written" in out
     assert (chome / "settings.json").read_text(encoding="utf-8") == "{quebrado"
 
 

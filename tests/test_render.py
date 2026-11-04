@@ -391,14 +391,14 @@ def test_over_budget_warning(tmp_path):
     result, _, _, _ = run(tmp_path, params={**PARAMS, "max_text_chars": 8000}, cues_fn=long_text)
     over = [e for e in result["batches"]["batches"] if e["over_budget"]]
     assert over and over[0]["frames"][0] == "F0005"
-    assert any("caracteres de fala" in w for w in result["summary"]["warnings"])
+    assert any("characters of speech" in w for w in result["summary"]["warnings"])
 
 
 def test_missing_image_gives_placeholder_and_warning(tmp_path):
     frames, cues, meta, fdir, bdir = make_fixture(tmp_path)
     (fdir / "F0007_000081.jpg").unlink()
     result = run_batches_stage(frames, cues, PARAMS, bdir, meta)
-    assert any("não encontrada" in w and "F0007" in w for w in result["summary"]["warnings"])
+    assert any("not found" in w and "F0007" in w for w in result["summary"]["warnings"])
     assert (bdir / "sheet_002.jpg").is_file()
 
 

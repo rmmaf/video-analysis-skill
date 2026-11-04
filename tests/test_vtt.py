@@ -73,8 +73,8 @@ def test_edge_cases_match_the_readme_table():
     assert utt["A pergunta é: isto não é falante"] == 18 and utt["Sem horas"] is None
     assert doc["cues"][13]["src"] == doc["cues"][14]["src"] == [14]
     warnings = " | ".join(doc["warnings"])
-    assert "horário inválido" in warnings and "#18 00:01:61.000" in warnings
-    assert "fim antes do início" in warnings and "#6" in warnings
+    assert "invalid time" in warnings and "#18 00:01:61.000" in warnings
+    assert "end before start" in warnings and "#6" in warnings
 
 
 def test_cp1252_fallback_equals_utf8_text():
@@ -199,7 +199,7 @@ def test_nonmonotonic_and_end_before_start():
     fixed = next(c for c in doc["cues"] if c["text"].startswith("Tchau, tchau."))
     # end < start -> start + 0.5 s; then 59 chars in 0.5 s is too fast -> extended to the next start
     assert (fixed["start"], fixed["end"], fixed["approx"]) == (149.02, 151.46, True)
-    assert any("fim antes do início" in w for w in doc["warnings"])
+    assert any("end before start" in w for w in doc["warnings"])
     starts = [(c["start"], c["end"]) for c in doc["cues"]]
     assert starts == sorted(starts)
 
@@ -257,11 +257,11 @@ def test_missing_header_offset_clip_and_duration_warnings():
     assert rows(doc) == [(0.0, 1.0, None, "antes do início"), (2.0, 4.0, None, "normal"), (8.0, 10.0, None, "passa do fim")]
     assert doc["offset_s"] == -1.0
     w = " | ".join(doc["warnings"])
-    assert "sem o cabeçalho WEBVTT" in w and "1 fala(s) começam depois do fim" in w
+    assert "missing the WEBVTT header" in w and "1 cue(s) start after the end" in w
     doc = parse_text("00:00:01.000 --> 00:00:02.000\ncurta\n\n", duration_s=100.0)
-    assert any("cobrem só 1%" in x for x in doc["warnings"])
+    assert any("cover only 1%" in x for x in doc["warnings"])
     doc = parse_text("NOTE só comentário\n\n", duration_s=10.0)
-    assert doc["cues"] == [] and any("nenhuma fala" in x for x in doc["warnings"])
+    assert doc["cues"] == [] and any("no cues" in x for x in doc["warnings"])
 
 
 def test_speaker_names_rename_by_name_or_tag():

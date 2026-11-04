@@ -155,7 +155,7 @@ def vtt_candidates(video: Path, limit: int = MAX_CANDIDATES) -> list[dict]:
 
     Each item: ``{"path": Path, "name": str, "reason": "prefixo"|"comeca_com_video"|"parecido",
     "score": float}``. ``prefixo``: the subtitle stem is a prefix of the video stem (Teams
-    downloads the transcript as "<reunião>.vtt" next to "<reunião>-AAAAMMDD_HHMMSS-Gravação de
+    downloads the transcript as "<meeting>.vtt" next to "<meeting>-YYYYMMDD_HHMMSS-Gravação de
     Reunião.mp4"); ``comeca_com_video``: the subtitle stem starts with the video stem
     ("aula.pt-BR.vtt"); ``parecido``: difflib ratio >= 0.6 on the NFC.casefold stems.
     """
@@ -196,8 +196,8 @@ def rename_suggestion(vtt: Path, video: Path) -> str:
     return f"Rename-Item -LiteralPath {ps_quote(src)} -NewName {ps_quote(new)}"
 
 
-_REASON_TEXT = {"prefixo": "prefixo do nome do vídeo", "comeca_com_video": "começa com o nome do vídeo",
-                "parecido": "nome parecido"}
+_REASON_TEXT = {"prefixo": "prefix of the video name", "comeca_com_video": "starts with the video name",
+                "parecido": "similar name"}
 
 
 def match_vtts(videos: list[Path], explicit_vtt: Path | None = None,
@@ -226,21 +226,21 @@ def match_vtts(videos: list[Path], explicit_vtt: Path | None = None,
 
 
 def missing_vtt_detail(missing: list[dict], allow_vtt_flag: bool) -> str:
-    """The pt-BR ``error.detail`` for ``vtt_ausente``: per video, the candidates in its folder and
+    """The English ``error.detail`` for ``vtt_ausente``: per video, the candidates in its folder and
     the suggested ``Rename-Item`` (the user decides; nothing is renamed automatically)."""
     n = len(missing)
-    lines = [f"Sem legenda .vtt de mesmo nome para {n} vídeo{'s' if n > 1 else ''} "
-             "(regra estrita: o mesmo nome do vídeo, com a extensão .vtt, na mesma pasta):"]
+    lines = [f"No .vtt subtitles with the same name for {n} video{'s' if n > 1 else ''} "
+             "(strict rule: the same name as the video, with the .vtt extension, in the same folder):"]
     for m in missing:
         lines.append(f"- {os.path.normpath(str(m['video']))}")
         cands = m["candidates"]
         if cands:
-            lines.append("  candidatos na pasta: " + "; ".join(f"{c['name']} ({_REASON_TEXT[c['reason']]})" for c in cands))
-            lines.append(f"  sugestão (PowerShell): {m['suggestion']}")
+            lines.append("  candidates in the folder: " + "; ".join(f"{c['name']} ({_REASON_TEXT[c['reason']]})" for c in cands))
+            lines.append(f"  suggestion (PowerShell): {m['suggestion']}")
         else:
-            lines.append("  nenhuma .vtt parecida na pasta")
-    alt = ["--skip-missing pula os vídeos sem legenda"]
+            lines.append("  no similar .vtt in the folder")
+    alt = ["--skip-missing skips the videos without subtitles"]
     if allow_vtt_flag:
-        alt.insert(0, '--vtt "<caminho da .vtt>" aponta a legenda (só com 1 vídeo)')
-    lines.append("Renomeie a .vtt, não o vídeo (vídeo renomeado é extraído de novo). Alternativas: " + "; ".join(alt) + ".")
+        alt.insert(0, '--vtt "<path of the .vtt>" points to the subtitles (only with 1 video)')
+    lines.append("Rename the .vtt, not the video (a renamed video is extracted again). Alternatives: " + "; ".join(alt) + ".")
     return "\n".join(lines)

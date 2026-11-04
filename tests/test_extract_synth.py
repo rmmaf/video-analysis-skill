@@ -106,7 +106,7 @@ def test_vfr_and_bframe_variants(extracted):
 def test_camera_heartbeat_and_warning(extracted):
     doc, truth, info, out = extracted("camera")
     assert [f["kind"] for f in doc["frames"]][1:] == ["heartbeat"] * (len(doc["frames"]) - 1)
-    assert any(w.startswith("trecho com cara de câmera") for w in doc["warnings"])
+    assert any(w.startswith("camera-like segment") for w in doc["warnings"])
     assert doc["hot_segments"] and doc["hot_segments"][0]["frac"] >= 0.5
 
 

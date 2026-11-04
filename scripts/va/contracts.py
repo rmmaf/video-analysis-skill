@@ -312,7 +312,7 @@ class WorkflowVideo(TypedDict):
     duration: str                  # "HH:MM:SS"
     n_frames: int
     batches_dir: str               # batch_NNN.md, sheet_NNN.jpg, transcript.md, summary.json, overview.jpg
-    out_dir: str                   # <run_dir>/v<N> (runs antigos: <run_dir>/<slug>): ledger.md, relatorio.md, prompts/, reports/
+    out_dir: str                   # <run_dir>/v<N> (older runs: <run_dir>/<slug>): ledger.md, relatorio.md, prompts/, reports/
     batch_images: list[int]        # images to open per batch (revisits within the batch excluded)
     start_batch: int               # first batch without reports/batch_NNN.md (1-based)
     ledger_exists: bool

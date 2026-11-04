@@ -1,116 +1,120 @@
 # video-analysis
 
-Skill do Claude Code que analisa vídeos frame a frame contra a legenda: gravações de tela, reuniões
-gravadas (Teams, Zoom) e aulas com slides. Você dá um objetivo, como "liste as decisões e os
-responsáveis" ou "o que aparece na tela quando falam do erro?", e recebe um relatório por vídeo em que
-cada achado aponta o frame e o horário que o sustentam.
+A Claude Code skill that analyses videos frame by frame against the subtitles: screen recordings, recorded
+meetings (Teams, Zoom) and lectures with slides. You give an objective, such as "list the decisions and
+who is responsible" or "what is on the screen when they talk about the error?", and you get a report per
+video in which each finding points to the frame and the time that support it.
 
-**Versão 1.0.0** · Windows · Python 3.10+ · ffmpeg · Claude Code com a ferramenta Workflow
+**Version 1.0.0** · Windows · Python 3.10+ · ffmpeg · Claude Code with the Workflow tool
 
-## Visão geral
+The command-line options, the keys of the request file (`pedido.md`), the `retomar` keyword and the names
+of the run files stay in Portuguese, because they are the skill's interface. Reports are written in the
+language of the objective (`--idioma` overrides it; pt-BR when in doubt).
 
-- Extrai só os frames únicos do vídeo. Movimento do cursor, tooltip e relógio não contam, e uma tela que
-  volta é reaproveitada em vez de virar frame novo.
-- Lê a legenda `.vtt` de mesmo nome (WhisperX, Teams ou simples) e liga cada frame às falas do intervalo
-  que ele representa.
-- Divide cada vídeo em lotes de até 20 frames. Um curador (Opus) planeja os lotes e um analista (Sonnet)
-  examina cada um, em série.
-- Entrega um `relatorio.md` por vídeo e, com dois vídeos ou mais, um relatório combinado.
-- Guarda frames, legenda e lotes em cache: uma pergunta nova sobre o mesmo vídeo não extrai nada de novo.
+## Overview
 
-## Como funciona
+- Extracts only the unique frames of the video. Cursor motion, tooltips and clocks do not count, and a
+  screen that comes back is reused instead of becoming a new frame.
+- Reads the `.vtt` subtitles of the same name (WhisperX, Teams or plain) and links each frame to the speech
+  in the interval it represents.
+- Splits each video into batches of up to 20 frames. A curator (Opus) plans the batches and an analyst
+  (Sonnet) examines each one, in series.
+- Delivers a `relatorio.md` per video and, with two or more videos, a combined report.
+- Keeps frames, subtitles and batches in a cache: a new question about the same video extracts nothing again.
 
-A skill tem duas camadas.
+## How it works
 
-1. **Determinística** (`scripts/`, Python). O `prepare.py` decodifica o vídeo uma vez com o ffmpeg, a 2
-   quadros por segundo, e compara cada amostra, em cinza e com 360 px de altura, com o último frame
-   mantido. Fica só o que mudou de verdade, cada frame com o intervalo de tempo que representa e um JPEG
-   com lado maior de 1568 px. Depois ele lê a legenda, corrige e funde as falas, alinha as falas aos
-   frames e escreve os lotes: a linha do tempo de cada lote (`batch_NNN.md`), uma prancha de miniaturas e
-   a transcrição.
-2. **Agêntica** (`workflow/` e `agents/`). Um Workflow do Claude Code conduz os lotes de cada vídeo em
-   série, com até 3 vídeos em paralelo. O curador lê o objetivo e a transcrição, registra o plano num
-   ledger e escreve o prompt do primeiro lote. O analista abre todas as imagens de um lote, cruza com as
-   falas e grava o relatório do lote. No fim, o curador escreve o relatório do vídeo e, com dois vídeos
-   ou mais, a síntese.
+The skill has two layers.
+
+1. **Deterministic** (`scripts/`, Python). `prepare.py` decodes the video once with ffmpeg, at 2 frames
+   per second, and compares each sample, in grayscale and 360 px high, with the last frame kept. Only
+   what really changed stays, each frame with the time interval it represents and a JPEG whose longer
+   side is 1568 px. Then it reads the subtitles, fixes and merges the cues, aligns the cues to the frames
+   and writes the batches: the timeline of each batch (`batch_NNN.md`), a contact sheet of thumbnails and
+   the transcript.
+2. **Agentic** (`workflow/` and `agents/`). A Claude Code Workflow runs the batches of each video in
+   series, with up to 3 videos in parallel. The curator reads the objective and the transcript, records
+   the plan in a ledger and writes the prompt of the first batch. The analyst opens all the images of a
+   batch, cross-checks them with the speech and writes the batch report. At the end, the curator writes
+   the video's report and, with two or more videos, the synthesis.
 
 ```mermaid
 flowchart TD
-    A["Chamada /video-analysis"] --> B["pedido.md<br/>vídeos, objetivo e opções"]
-    B --> C["prepare.py<br/>frames únicos, legenda, alinhamento e lotes"]
-    C --> D[("cache por vídeo")]
+    A["Call to /video-analysis"] --> B["pedido.md<br/>videos, objective and options"]
+    B --> C["prepare.py<br/>unique frames, subtitles, alignment and batches"]
+    C --> D[("cache per video")]
     C --> E["Workflow"]
-    E --> F["Curador Opus<br/>plano no ledger e prompt do lote 1"]
-    F --> G["Analista Sonnet<br/>frames e falas de um lote"]
-    G -->|"próximo lote"| G
-    G -.->|"curadoria por lote"| H["Curador Opus<br/>prompt do lote seguinte"]
+    E --> F["Opus curator<br/>plan in the ledger and prompt of batch 1"]
+    F --> G["Sonnet analyst<br/>frames and speech of a batch"]
+    G -->|"next batch"| G
+    G -.->|"per-batch curation"| H["Opus curator<br/>prompt of the next batch"]
     H -.-> G
-    G --> I["Curador Opus<br/>relatorio.md do vídeo"]
-    I --> J["Curador Opus<br/>relatorio.md combinado, com 2+ vídeos"]
+    G --> I["Opus curator<br/>relatorio.md of the video"]
+    I --> J["Opus curator<br/>combined relatorio.md, with 2+ videos"]
 ```
 
-O desenho economiza tokens em três pontos:
+The design saves tokens in three places:
 
-- O agente principal nunca abre frames, lotes nem relatórios de lote. Ele só vê o JSON do `prepare.py`
-  e os resumos finais.
-- Só frames únicos vão para análise. Nas medições do projeto, de 66% a 91% das amostras foram
-  descartadas.
-- A transcrição é lida uma vez, pelo curador, e resumida no ledger.
+- The main agent never opens frames, batches or batch reports. It only sees the JSON from `prepare.py`
+  and the final summaries.
+- Only unique frames go to analysis. In the project's measurements, 66% to 91% of the samples were
+  discarded.
+- The transcript is read once, by the curator, and summarized in the ledger.
 
-Cada vídeo usa um analista por lote, mais o plano e o relatório; com dois vídeos ou mais, um agente a
-mais escreve o relatório combinado. Com `--curadoria lotes`, o curador também escreve o prompt de cada
-lote seguinte, o que custa cerca do dobro. Acima de 80 agentes, a skill pergunta antes de seguir;
-acima de 800, recusa o run.
+Each video uses one analyst per batch, plus the plan and the report; with two or more videos, one more
+agent writes the combined report. With `--curadoria lotes`, the curator also writes the prompt of each
+following batch, which costs about twice as much. Above 80 agents, the skill asks before going on;
+above 800, it refuses the run.
 
-## Requisitos
+## Requirements
 
-| item | versão | para quê |
+| item | version | what for |
 |---|---|---|
-| Windows | desenvolvida no Windows 11 | caminhos, permissões e mensagens da skill são do Windows |
-| Claude Code | com skills e a ferramenta Workflow | sem Workflow, a skill conduz o mesmo laço com a ferramenta Agent ([`reference/sem-workflow.md`](reference/sem-workflow.md)) |
-| Python | 3.10 ou mais novo (testada no 3.14) | camada determinística |
-| ffmpeg e ffprobe | no PATH (testada no 8.1) | sondagem e extração de frames |
-| numpy e Pillow | qualquer versão recente | comparação de frames e imagens; a skill não usa OpenCV |
-| Node.js | 24 | só para os testes do workflow |
-| pytest | qualquer versão recente | só para os testes |
+| Windows | developed on Windows 11 | the skill's paths, permissions and messages are for Windows |
+| Claude Code | with skills and the Workflow tool | without Workflow, the skill runs the same loop with the Agent tool ([`reference/sem-workflow.md`](reference/sem-workflow.md)) |
+| Python | 3.10 or newer (tested on 3.14) | deterministic layer |
+| ffmpeg and ffprobe | on the PATH (tested on 8.1) | probing and frame extraction |
+| numpy and Pillow | any recent version | frame comparison and images; the skill does not use OpenCV |
+| Node.js | 24 | only for the workflow tests |
+| pytest | any recent version | only for the tests |
 
-## Instalação
+## Installation
 
-1. Clone o repositório na pasta de skills do Claude Code. A pasta precisa se chamar `video-analysis`:
+1. Clone the repository into the Claude Code skills folder. The folder must be named `video-analysis`:
 
    ```powershell
    git clone https://github.com/rmmaf/video-analysis-skill.git "$env:USERPROFILE\.claude\skills\video-analysis"
    ```
 
-2. No Claude Code, rode o setup:
+2. In Claude Code, run the setup:
 
    ```text
    /video-analysis setup
    ```
 
-   O setup roda o `verificar_ambiente.py` e resolve um item de cada vez: Python, ffmpeg, numpy e Pillow,
-   a pasta central, os agentes e o workflow, e as regras de permissão. Nada é instalado nem gravado sem
-   a sua confirmação. Fora da pasta central, ele grava em três lugares:
+   The setup runs `verificar_ambiente.py` and handles one item at a time: Python, ffmpeg, numpy and
+   Pillow, the central folder, the agents and the workflow, and the permission rules. Nothing is installed
+   or written without your confirmation. Outside the central folder, it writes to three places:
 
-   | o quê | onde | como desfazer |
+   | what | where | how to undo |
    |---|---|---|
-   | os papéis do curador e do analista | `%USERPROFILE%\.claude\agents\video-analysis-*.md` | apagar os dois arquivos |
-   | o workflow salvo | `%USERPROFILE%\.claude\workflows\video-analysis.js` | apagar o arquivo |
-   | as regras de permissão da pasta central | `%USERPROFILE%\.claude\settings.json` | restaurar o `settings.json.bak-<data>` |
+   | the curator and analyst roles | `%USERPROFILE%\.claude\agents\video-analysis-*.md` | delete the two files |
+   | the saved workflow | `%USERPROFILE%\.claude\workflows\video-analysis.js` | delete the file |
+   | the permission rules for the central folder | `%USERPROFILE%\.claude\settings.json` | restore the `settings.json.bak-<date>` |
 
-3. Feche e abra o Claude Code, para ele carregar os agentes e o workflow. Comece por uma análise curta,
-   com `--max-lotes 1`: ela confirma que o run não pede permissão a cada frame.
+3. Close and reopen Claude Code, so that it loads the agents and the workflow. Start with a short
+   analysis, with `--max-lotes 1`: it confirms that the run does not ask for permission at every frame.
 
-**Para atualizar**, puxe as mudanças e rode o setup de novo, que recopia os agentes e o workflow quando
-eles mudaram:
+**To update**, pull the changes and run the setup again, which copies the agents and the workflow again
+when they have changed:
 
 ```powershell
 git -C "$env:USERPROFILE\.claude\skills\video-analysis" pull
 ```
 
-## Uso
+## Usage
 
-Na conversa do Claude Code:
+In the Claude Code conversation:
 
 ```text
 /video-analysis "C:\Videos\reuniao.mp4" Liste as decisões tomadas e quem ficou responsável por cada uma
@@ -119,201 +123,202 @@ Na conversa do Claude Code:
 /video-analysis retomar
 ```
 
-- Cada vídeo precisa de uma legenda `.vtt` com o mesmo nome, na mesma pasta: `reuniao.mp4` usa
+- Each video needs a `.vtt` subtitle file with the same name, in the same folder: `reuniao.mp4` uses
   `reuniao.vtt`.
-- Formatos aceitos: `.mp4`, `.mkv`, `.mov`, `.webm`, `.m4v`, `.avi`, `.wmv`, `.mpg`, `.mpeg`, `.ts`,
-  `.m2ts` e `.flv`.
-- Ponha o caminho entre aspas. Assim a skill reconhece pastas e nomes com espaço.
+- Accepted formats: `.mp4`, `.mkv`, `.mov`, `.webm`, `.m4v`, `.avi`, `.wmv`, `.mpg`, `.mpeg`, `.ts`,
+  `.m2ts` and `.flv`.
+- Put the path in quotes. That way the skill recognizes folders and names with spaces.
 
-O que acontece depois da chamada:
+What happens after the call:
 
-1. A skill grava o pedido e estima o tempo da extração.
-2. O `prepare.py` extrai frames, legenda e lotes, ou os reaproveita do cache, e calcula quantos agentes o
-   run vai usar. Com mais de 80, a skill pergunta antes de disparar o Workflow.
-3. O Workflow roda em segundo plano, a cerca de 4 minutos por lote, e avisa quando termina.
-4. A skill mostra o resumo de cada vídeo e o caminho dos relatórios.
+1. The skill writes the request and estimates the extraction time.
+2. `prepare.py` extracts frames, subtitles and batches, or reuses them from the cache, and computes how
+   many agents the run will use. With more than 80, the skill asks before launching the Workflow.
+3. The Workflow runs in the background, at about 4 minutes per batch, and lets you know when it finishes.
+4. The skill shows the summary of each video and the path of the reports.
 
-`retomar` continua um run interrompido (Claude Code fechado, cota, erro) do ponto em que parou.
+`retomar` resumes an interrupted run (Claude Code closed, quota, error) from where it stopped.
 
-### Opções
+### Options
 
-| opção | padrão | efeito |
+| option | default | effect |
 |---|---|---|
-| `--max-lotes N` | todos | só os lotes 1 a N de cada vídeo, para testar o objetivo |
-| `--trecho hh:mm:ss-hh:mm:ss` | vídeo inteiro | só esse trecho, com lotes próprios |
-| `--paralelo N` | `3` | vídeos em paralelo; use `1` contra limite de taxa |
-| `--curadoria plano\|lotes` | `plano` | `lotes`: curador antes de cada lote, levando o contexto adiante (≈ 2× o custo) |
-| `--esforco-analista low\|medium\|high` | `high` | esforço do analista; `medium` custa ~13% menos e responde de forma menos completa |
-| `--esforco-curador low\|medium\|high` | `high` | esforço do curador nos lotes, só com `--curadoria lotes` |
-| `--papeis agents\|inline` | automático | `agents` usa os agentes instalados; `inline` passa os papéis no prompt e custa um pouco mais |
-| `--idioma xx` | o do objetivo | idioma dos relatórios |
-| `--falantes "SPEAKER_01=Nome;…"` | — | nomes reais dos falantes da legenda |
-| `--sensibilidade low\|normal\|high` | `normal` | `high` pega mudanças menores e gera mais frames |
-| `--ignorar-regiao x,y,w,h` | — | região do quadro, em frações, fora da comparação: webcam, relógio |
+| `--max-lotes N` | all | only batches 1 to N of each video, to test the objective |
+| `--trecho hh:mm:ss-hh:mm:ss` | whole video | only that segment, with its own batches |
+| `--paralelo N` | `3` | videos in parallel; use `1` against rate limits |
+| `--curadoria plano\|lotes` | `plano` | `lotes`: curator before each batch, carrying the context forward (≈ 2× the cost) |
+| `--esforco-analista low\|medium\|high` | `high` | analyst effort; `medium` costs ~13% less and answers less completely |
+| `--esforco-curador low\|medium\|high` | `high` | curator effort in the batches, only with `--curadoria lotes` |
+| `--papeis agents\|inline` | automatic | `agents` uses the installed agents; `inline` passes the roles in the prompt and costs a little more |
+| `--idioma xx` | the objective's | language of the reports |
+| `--falantes "SPEAKER_01=Name;…"` | — | real names of the speakers in the subtitles |
+| `--sensibilidade low\|normal\|high` | `normal` | `high` catches smaller changes and produces more frames |
+| `--ignorar-regiao x,y,w,h` | — | region of the frame, in fractions, left out of the comparison: webcam, clock |
 
-Quando mexer em cada uma e quanto custa: [`reference/parametros.md`](reference/parametros.md).
+When to change each one and what it costs: [`reference/parametros.md`](reference/parametros.md).
 
-### Saídas
+### Outputs
 
 ```text
 %USERPROFILE%\video-analysis\
-├── cache\<slug>-<fp8>\              legenda, frames e lotes de cada vídeo, reaproveitados entre runs
-├── runs\<AAAAMMDD-HHMMSS>-<slug>\
-│   ├── relatorio.md                 relatório combinado, com 2+ vídeos
-│   └── v1\                          relatorio.md do vídeo, ledger.md, prompts\ e reports\
-├── pedidos\                         pedido da análise em curso
-├── roles\                           cópia dos papéis para o modo inline
+├── cache\<slug>-<fp8>\              subtitles, frames and batches of each video, reused across runs
+├── runs\<YYYYMMDD-HHMMSS>-<slug>\
+│   ├── relatorio.md                 combined report, with 2+ videos
+│   └── v1\                          the video's relatorio.md, ledger.md, prompts\ and reports\
+├── pedidos\                         request of the analysis in progress
+├── roles\                           copy of the roles for inline mode
 └── logs\
 ```
 
-Os agentes só leem o cache e só gravam em `runs\`. Mover, renomear ou editar um vídeo faz ele ser
-extraído de novo; mudar o objetivo, não.
+The agents only read the cache and only write to `runs\`. Moving, renaming or editing a video causes it
+to be extracted again; changing the objective does not.
 
-## Ferramentas de linha de comando
+## Command-line tools
 
-Para uso manual, sem o Claude, a partir da pasta da skill:
+For manual use, without Claude, from the skill folder:
 
 ```powershell
-python scripts/prepare.py "C:\Videos\reuniao.mp4"                      # só aquece o cache
-python scripts/prepare.py --gc 30                                       # apaga do cache vídeos sem uso há 30 dias
-python scripts/explain.py --frames-json <frames.json> --frame F0042     # por que esse frame foi mantido
-python scripts/calibrate.py "C:\Videos\reuniao.mp4" --grid "sensitivity=normal,high"   # compara parâmetros
-python verificar_ambiente.py                                            # confere o ambiente, sem mudar nada
+python scripts/prepare.py "C:\Videos\reuniao.mp4"                      # only warms up the cache
+python scripts/prepare.py --gc 30                                       # deletes from the cache the videos unused for 30 days
+python scripts/explain.py --frames-json <frames.json> --frame F0042     # why this frame was kept
+python scripts/calibrate.py "C:\Videos\reuniao.mp4" --grid "sensitivity=normal,high"   # compares parameters
+python verificar_ambiente.py                                            # checks the environment, without changing anything
 ```
 
-`python scripts/prepare.py --help` lista todas as opções. O `frames.json` de um vídeo fica em
+`python scripts/prepare.py --help` lists all the options. The `frames.json` of a video is in
 `cache\<slug>-<fp8>\frames-<h8>\`.
 
-## Testes
+## Tests
 
-Rode a partir da pasta da skill:
+Run from the skill folder:
 
 ```powershell
-python -B -m pytest -q                  # unitários e vídeos sintéticos
-python -B -m pytest -q --run-real       # inclui os vídeos reais de tests/fixtures.json
-python -B -m pytest -q --run-slow       # inclui os testes de desempenho
-node tests/harness.mjs                  # o workflow, com agentes simulados
-python tests/check_run.py <run_dir>     # confere um run concluído
+python -B -m pytest -q                  # unit tests and synthetic videos
+python -B -m pytest -q --run-real       # includes the real videos of tests/fixtures.json
+python -B -m pytest -q --run-slow       # includes the performance tests
+node tests/harness.mjs                  # the workflow, with simulated agents
+python tests/check_run.py <run_dir>     # checks a finished run
 ```
 
-- O `-B` e o `pytest.ini` mantêm `__pycache__` e `.pytest_cache` fora da pasta da skill.
-- `--run-real` e `--run-slow` também ligam com `VA_RUN_REAL=1` e `VA_RUN_SLOW=1`.
-- Os vídeos sintéticos (`tests/synth.py`) são gerados com Pillow e x264, com gabarito, e ficam em cache em
-  `%TEMP%\va-synth-v<N>` (ou em `VA_SYNTH_DIR`).
-- O `harness.mjs` roda o `workflow/video-analysis.js` com agentes simulados: caminho feliz, lote que pula
-  frames, falhas, retomada, vários vídeos e os dois modos de papéis. Não tem dependências.
-- O `check_run.py` confere o ledger, se os prompts citam os lotes sem copiar falas, se os relatórios
-  cobrem todos os frames e se o relatório final responde ao objetivo. As checagens do ledger e dos
-  prompts seguem a curadoria do run (`options.curation`). No padrão `plano`, `Integrado até o lote`
-  pode ir de `000`, como o INIT o grava, até o último lote analisado, e só o prompt do lote 1 é
-  exigido; os dos outros lotes são conferidos quando existem. Com `--curadoria lotes`, o ledger tem de
-  estar integrado até o penúltimo ou o último lote analisado, e cada lote precisa do seu prompt. Um run
-  sem `options.curation` é anterior à opção, tinha o NEXT e é conferido como `lotes`.
-- `tests/test_vtt.py` e `tests/test_data_files.py` leem trechos reais de legenda que ficam fora do git
-  (veja [Dados e privacidade](#dados-e-privacidade)). Num clone novo, esses testes falham por falta dos
-  arquivos.
+- `-B` and `pytest.ini` keep `__pycache__` and `.pytest_cache` out of the skill folder.
+- `--run-real` and `--run-slow` can also be turned on with `VA_RUN_REAL=1` and `VA_RUN_SLOW=1`.
+- The synthetic videos (`tests/synth.py`) are generated with Pillow and x264, with ground truth, and are
+  cached in `%TEMP%\va-synth-v<N>` (or in `VA_SYNTH_DIR`).
+- `harness.mjs` runs `workflow/video-analysis.js` with simulated agents: happy path, a batch that skips
+  frames, failures, resume, several videos and the two role modes. It has no dependencies.
+- `check_run.py` checks the ledger, whether the prompts cite the batches without copying cues, whether
+  the reports cover all the frames and whether the final report answers the objective. The ledger and
+  prompt checks follow the run's curation (`options.curation`). With the default `plano`,
+  `Integrado até o lote` can go from `000`, as the INIT writes it, up to the last batch analysed, and only
+  the prompt of batch 1 is required; those of the other batches are checked when they exist. With
+  `--curadoria lotes`, the ledger must be integrated up to the second-to-last or the last batch analysed,
+  and each batch needs its own prompt. A run without `options.curation` predates the option, had the NEXT
+  and is checked as `lotes`.
+- `tests/test_vtt.py` and `tests/test_data_files.py` read real subtitle excerpts that are kept out of git
+  (see [Data and privacy](#data-and-privacy)). In a fresh clone, these tests fail because the files are
+  missing.
 
-## Solução de problemas
+## Troubleshooting
 
-O `prepare.py` diz o que houve pelo código de saída:
+`prepare.py` tells what happened through its exit code:
 
-| saída | significado |
+| exit code | meaning |
 |---|---|
-| `0` | ok, às vezes com avisos |
-| `2` | entrada: vídeo ou legenda não encontrados, pedido ou opção inválidos, run grande demais |
-| `3` | ambiente: falta ffmpeg, ffprobe, Python, numpy ou Pillow; rode `/video-analysis setup` |
-| `4` | um vídeo falhou; os outros seguem |
-| `130` | interrompido; o que ficou pronto continua no cache |
-| `1` | erro interno; o traceback fica em `logs\` |
+| `0` | ok, sometimes with warnings |
+| `2` | input: video or subtitles not found, invalid request or option, run too large |
+| `3` | environment: ffmpeg, ffprobe, Python, numpy or Pillow missing; run `/video-analysis setup` |
+| `4` | a video failed; the others go on |
+| `130` | interrupted; what was completed stays in the cache |
+| `1` | internal error; the traceback goes to `logs\` |
 
-Sintomas, causas e soluções, incluindo permissões, agentes e Workflow:
+Symptoms, causes and fixes, including permissions, agents and Workflow:
 [`reference/problemas.md`](reference/problemas.md).
 
-## Dados e privacidade
+## Data and privacy
 
-- A skill não usa segredo nem login: trabalha com arquivos locais, o ffmpeg e o Python.
-- Os agentes não copiam valores sensíveis que apareçam na tela ou na fala, como senha, token, chave,
-  connection string, CPF, telefone ou e-mail pessoal. Eles registram só que o dado apareceu, em que
-  frame e em que horário.
-- Os trechos reais de reuniões usados nos testes ficam fora do git, pelo `.gitignore`: as legendas de
-  `tests/data/vtt/`, menos a sintética `edge_cases.vtt`, e a transcrição alinhada em
-  `docs/prior-art/da_1608/`. Eles só existem na máquina de origem; a regra está em
+- The skill uses no secrets and no login: it works with local files, ffmpeg and Python.
+- The agents do not copy sensitive values that appear on the screen or in the speech, such as a password,
+  token, key, connection string, CPF, phone number or personal e-mail. They record only that the data
+  appeared, in which frame and at what time.
+- The real meeting excerpts used in the tests are kept out of git by `.gitignore`: the subtitles in
+  `tests/data/vtt/`, except the synthetic `edge_cases.vtt`, and the aligned transcript in
+  `docs/prior-art/da_1608/`. They exist only on the original machine; the rule is in
   [`tests/data/vtt/README.md`](tests/data/vtt/README.md).
-- O `.gitattributes` desliga a conversão de fim de linha dos `.vtt`, que os testes leem byte a byte.
+- `.gitattributes` turns off line-ending conversion for the `.vtt` files, which the tests read byte by byte.
 
-## Limitações conhecidas
+## Known limitations
 
-- **Feita para um usuário do Windows.** `SKILL.md`, `setup.md` e os arquivos de `reference/` citam
-  caminhos absolutos em `C:\Users\digom\`. Em outro usuário, troque esses caminhos; o código Python usa
-  `%USERPROFILE%` ou a variável `VIDEO_ANALYSIS_HOME`.
-- **Troca só de cor não vira frame.** A comparação é em tons de cinza: uma cor nova com o mesmo brilho
-  passa despercebida.
-- **Mudanças minúsculas podem passar por cursor.** Um dígito ou poucas letras podem não virar frame;
-  `--sensibilidade high` reduz isso.
-- **Vídeos longos custam caro e demoram.** Uma reunião de 55 minutos dá cerca de 50 lotes, e os lotes de
-  um vídeo rodam em série. Use `--trecho` ou `--max-lotes`.
-- **Sem legenda, não há análise.** Sem a `.vtt` de mesmo nome, o `prepare.py` para, mostra os arquivos
-  candidatos e sugere o comando para renomear.
+- **Made for one Windows user.** `SKILL.md`, `setup.md` and the files in `reference/` quote absolute
+  paths under `C:\Users\digom\`. For another user, replace those paths; the Python code uses
+  `%USERPROFILE%` or the `VIDEO_ANALYSIS_HOME` variable.
+- **A change of color alone does not become a frame.** The comparison is in grayscale: a new color with
+  the same brightness goes unnoticed.
+- **Tiny changes can be mistaken for the cursor.** A digit or a few letters may not become a frame;
+  `--sensibilidade high` reduces this.
+- **Long videos are expensive and slow.** A 55-minute meeting yields about 50 batches, and the batches of
+  a video run in series. Use `--trecho` or `--max-lotes`.
+- **No subtitles, no analysis.** Without the `.vtt` of the same name, `prepare.py` stops, shows the
+  candidate files and suggests the command to rename.
 
-## Próximos passos
+## Next steps
 
-Fora do escopo da versão 1, segundo o [plano](docs/plano.md):
+Out of scope for version 1, according to the [plan](docs/plano.md) (in Portuguese):
 
-- cobertura por relevância: o curador pula lotes alheios ao objetivo, o maior ganho em reuniões longas;
-- curadoria a cada 2 lotes em trechos homogêneos;
-- capítulos paralelos para um vídeo longo;
-- recorte em resolução nativa para texto miúdo;
-- comparação também em cor;
-- empacotar como plugin, para registrar os agentes sem copiar arquivos nem reiniciar o Claude Code.
+- coverage by relevance: the curator skips batches unrelated to the objective, the biggest gain in long meetings;
+- curation every 2 batches in homogeneous segments;
+- parallel chapters for a long video;
+- native-resolution crops for tiny text;
+- comparison in color too;
+- packaging as a plugin, to register the agents without copying files or restarting Claude Code.
 
-## Versões
+## Versions
 
-| componente | versão | constante em `scripts/va/__init__.py` |
+| component | version | constant in `scripts/va/__init__.py` |
 |---|---|---|
 | skill | `1.0.0` | `VERSION` |
-| extração e deduplicação de frames | `dedup-1.1` | `ALGO_VERSION` |
-| parser de legenda | `vtt-1.0` | `PARSER_VERSION` |
-| alinhamento, lotes e renderização | `render-1.1` | `RENDER_VERSION` |
-| contrato `workflow_args` | `1` | `SCHEMA_VERSION` |
+| frame extraction and deduplication | `dedup-1.1` | `ALGO_VERSION` |
+| subtitle parser | `vtt-1.0` | `PARSER_VERSION` |
+| alignment, batches and rendering | `render-1.1` | `RENDER_VERSION` |
+| `workflow_args` contract | `1` | `SCHEMA_VERSION` |
 
-As versões dos estágios entram nas chaves do cache: mudar uma delas refaz só o estágio afetado e os
-seguintes.
+The stage versions go into the cache keys: changing one of them redoes only the affected stage and the
+following ones.
 
-## Documentação
+## Documentation
 
-| arquivo | conteúdo |
+| file | contents |
 |---|---|
-| [`SKILL.md`](SKILL.md) | instruções que o Claude segue ao chamar a skill |
-| [`setup.md`](setup.md) | roteiro do `/video-analysis setup` |
-| [`reference/contratos.md`](reference/contratos.md) | formatos do pedido, do stdout do `prepare.py`, dos `workflow_args` e da pasta central |
-| [`reference/parametros.md`](reference/parametros.md) | o que cada parâmetro faz e quando mexer |
-| [`reference/problemas.md`](reference/problemas.md) | sintoma, causa e o que fazer |
-| [`reference/sem-workflow.md`](reference/sem-workflow.md) | o mesmo laço com a ferramenta Agent, sem Workflow |
-| [`docs/plano.md`](docs/plano.md) | plano, arquitetura e erratas da implementação |
-| [`docs/design-deterministico.md`](docs/design-deterministico.md) | especificação da camada determinística (em inglês) |
-| [`docs/design-agentico.md`](docs/design-agentico.md) | especificação da camada agêntica (em inglês) |
-| [`tests/data/calibration.md`](tests/data/calibration.md) | medições que calibraram os parâmetros |
+| [`SKILL.md`](SKILL.md) | instructions that Claude follows when calling the skill |
+| [`setup.md`](setup.md) | procedure for `/video-analysis setup` |
+| [`reference/contratos.md`](reference/contratos.md) | formats of the request, of the `prepare.py` stdout, of the `workflow_args` and of the central folder |
+| [`reference/parametros.md`](reference/parametros.md) | what each parameter does and when to change it |
+| [`reference/problemas.md`](reference/problemas.md) | symptom, cause and what to do |
+| [`reference/sem-workflow.md`](reference/sem-workflow.md) | the same loop with the Agent tool, without Workflow |
+| [`docs/plano.md`](docs/plano.md) (in Portuguese) | plan, architecture and implementation errata |
+| [`docs/design-deterministico.md`](docs/design-deterministico.md) | specification of the deterministic layer (in English) |
+| [`docs/design-agentico.md`](docs/design-agentico.md) | specification of the agentic layer (in English) |
+| [`tests/data/calibration.md`](tests/data/calibration.md) | measurements that calibrated the parameters |
 
-## Estrutura do repositório
+## Repository structure
 
 ```text
 video-analysis/
-├── SKILL.md                 instruções da skill para o Claude Code
-├── setup.md                 roteiro do setup
-├── verificar_ambiente.py    confere Python, ffmpeg, agentes, workflow e permissões
-├── agents/                  papéis do curador (Opus) e do analista (Sonnet)
-├── workflow/                video-analysis.js, o script do Workflow
+├── SKILL.md                 the skill's instructions for Claude Code
+├── setup.md                 setup procedure
+├── verificar_ambiente.py    checks Python, ffmpeg, agents, workflow and permissions
+├── agents/                  roles of the curator (Opus) and the analyst (Sonnet)
+├── workflow/                video-analysis.js, the Workflow script
 ├── scripts/
-│   ├── prepare.py           linha de comando da camada determinística
-│   ├── calibrate.py         varredura de parâmetros do motor de frames
-│   ├── explain.py           painel de por que um frame foi mantido ou ignorado
-│   └── va/                  extração, deduplicação, legenda, alinhamento, lotes, cache e runs
-├── reference/               contratos, parâmetros, problemas e o roteiro sem Workflow
-├── docs/                    plano, especificações e o protótipo anterior (prior-art)
-└── tests/                   pytest, vídeos sintéticos, harness do workflow e dados de teste
+│   ├── prepare.py           command line of the deterministic layer
+│   ├── calibrate.py         parameter sweep of the frame engine
+│   ├── explain.py           panel showing why a frame was kept or ignored
+│   └── va/                  extraction, deduplication, subtitles, alignment, batches, cache and runs
+├── reference/               contracts, parameters, troubleshooting and the procedure without Workflow
+├── docs/                    plan, specifications and the earlier prototype (prior-art)
+└── tests/                   pytest, synthetic videos, workflow harness and test data
 ```
 
-## Licença
+## License
 
-Repositório privado, de uso pessoal. Não há licença definida: sem um arquivo `LICENSE`, todos os
-direitos ficam com o autor.
+Private repository, for personal use. No license is defined: without a `LICENSE` file, all rights remain
+with the author.

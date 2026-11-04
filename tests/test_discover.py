@@ -209,9 +209,9 @@ def test_missing_vtt_detail(tree, tmp_path):
     lone = touch(tmp_path / "sem par" / "xyz.mp4")
     _, _, missing = D.match_vtts([tree["v2"], lone])
     detail = D.missing_vtt_detail(missing, allow_vtt_flag=False)
-    assert detail.startswith("Sem legenda .vtt de mesmo nome para 2 vídeos")
-    assert "Indicador PES.vtt (prefixo do nome do vídeo)" in detail
+    assert detail.startswith("No .vtt subtitles with the same name for 2 videos")
+    assert "Indicador PES.vtt (prefix of the video name)" in detail
     assert "Rename-Item -LiteralPath" in detail and f"-NewName '{PES_VIDEO}.vtt'" in detail
-    assert "nenhuma .vtt parecida na pasta" in detail
+    assert "no similar .vtt in the folder" in detail
     assert "--skip-missing" in detail and "--vtt" not in detail
     assert "--vtt" in D.missing_vtt_detail(missing[:1], allow_vtt_flag=True)

@@ -17,8 +17,8 @@ contract items 1-4; design-agentico DL-2, DL-5, DL-6, DL-11, DL-12).
 - ``consume_request``: success -> ``<run_dir>/request.md``; failure -> ``request.error.md``
   (``pedido.erro.md`` for a request still named ``pedido.md``), replacing an older one, so the next
   Write of the request never needs a Read first.
-- ``parse_pedido``, ``read_pedido`` and ``consume_pedido``: the names of before the rename, kept as
-  aliases for scripts that import them.
+- ``parse_pedido``, ``read_pedido`` and ``consume_pedido``: the names of before the rename, kept with
+  the same parameters for scripts that import them.
 """
 from __future__ import annotations
 
@@ -459,10 +459,15 @@ def consume_request(request: str | os.PathLike, run_dir: str | os.PathLike | Non
     return dst
 
 
-# the names of before the rename, kept for scripts that import them
+# the names of before the rename, kept with the same parameters for scripts that import them
 parse_pedido = parse_request
 read_pedido = read_request
-consume_pedido = consume_request
+
+
+def consume_pedido(pedido: str | os.PathLike, run_dir: str | os.PathLike | None, ok: bool,
+                   copy_to_run: bool = False) -> Path | None:
+    """``consume_request`` under its old name, with the old parameter ``pedido``."""
+    return consume_request(pedido, run_dir, ok, copy_to_run)
 
 
 # --- resume (DL-11) -----------------------------------------------------------------------------------

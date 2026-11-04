@@ -1,5 +1,6 @@
 """va.runs: request.md (and the old names), options, run folders, resume (DL-11), size estimate (DL-12),
 workflow_args."""
+import inspect
 import re
 import time
 
@@ -263,18 +264,22 @@ def test_consume_request_with_the_old_name(tmp_path):
 
 def test_old_function_names_still_work(tmp_path):
     """parse_pedido, read_pedido and consume_pedido, the names of before the rename, still import and
-    are the new functions."""
+    take the same parameters as before, by position or by keyword."""
     from va.runs import consume_pedido, parse_pedido, read_pedido
-    assert parse_pedido is R.parse_request and read_pedido is R.read_request and consume_pedido is R.consume_request
+    assert parse_pedido is R.parse_request and read_pedido is R.read_request
     assert {"parse_pedido", "read_pedido", "consume_pedido"} <= set(R.__all__)
-    assert parse_pedido(LEGACY_REQUEST) == R.parse_request(REQUEST)
+    assert [list(inspect.signature(f).parameters) for f in (parse_pedido, read_pedido, consume_pedido)] ==         [["text"], ["path"], ["pedido", "run_dir", "ok", "copy_to_run"]]
+    assert parse_pedido(LEGACY_REQUEST) == parse_pedido(text=LEGACY_REQUEST) == R.parse_request(REQUEST)
     ped_dir, run = tmp_path / "pedidos", tmp_path / "runs" / "r1"
     ped_dir.mkdir()
     run.mkdir(parents=True)
     p = ped_dir / "pedido.md"
     p.write_text(LEGACY_REQUEST, encoding="utf-8")
-    assert read_pedido(p)["options"]["papeis"] == "inline"
+    assert read_pedido(p) == read_pedido(path=p) and read_pedido(p)["options"]["papeis"] == "inline"
     assert consume_pedido(p, run, ok=True) == run / "request.md" and not p.exists()
+    p.write_text("dois", encoding="utf-8")
+    assert consume_pedido(pedido=p, run_dir=run, ok=False, copy_to_run=True) == ped_dir / "pedido.erro.md"
+    assert (run / "request.md").read_text(encoding="utf-8") == "dois" and not p.exists()
 
 
 # --- resume -------------------------------------------------------------------------------------------

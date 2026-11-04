@@ -102,7 +102,7 @@ def test_permissions_deny_and_ask_block(homes):
     user, chome, ws = homes
     settings(chome, allow=A.workspace_rules(ws), deny=[f"Edit(~/{ws.name}/**)"])
     st = A.permissions_status(ws, chome)
-    assert not st["ok"] and st["blocked"] == [f"deny: Edit(~/{ws.name}/**)"] and "bloqueia" in st["detail"]
+    assert not st["ok"] and st["blocked"] == [f"deny: Edit(~/{ws.name}/**)"] and "blocks" in st["detail"]
     settings(chome, allow=A.workspace_rules(ws), ask=["Read(~/**)"])
     assert not A.permissions_status(ws, chome)["ok"]
     settings(chome, allow=A.workspace_rules(ws), deny=[f"Read(~/{ws.name}/tmp/**)"])
@@ -113,11 +113,11 @@ def test_permissions_deny_and_ask_block(homes):
 def test_permissions_missing_or_bad_settings(homes):
     user, chome, ws = homes
     st = A.permissions_status(ws, chome)
-    assert not st["ok"] and "não existe" in st["detail"]
+    assert not st["ok"] and "does not exist" in st["detail"]
     (chome / "settings.json").write_text("{quebrado", encoding="utf-8")
-    assert "ilegível" in A.permissions_status(ws, chome)["detail"]
+    assert "unreadable" in A.permissions_status(ws, chome)["detail"]
     (chome / "settings.json").write_text("[]", encoding="utf-8")
-    assert "objeto" in A.permissions_status(ws, chome)["detail"]
+    assert "object" in A.permissions_status(ws, chome)["detail"]
     (chome / "settings.json").write_text('{"permissions": {"allow": "Read"}}', encoding="utf-8")
     assert not A.permissions_status(ws, chome)["ok"]
 
@@ -211,12 +211,12 @@ def test_workflow_status_and_install(homes, skill_dir):
     target = chome / "workflows" / "video-analysis.js"
     st = A.workflow_status(skill_dir, chome)
     assert st == {"id": "workflow", "current": False, "path": as_posix(target), "state": "ausente",
-                  "detail": f"video-analysis.js ausente em {as_posix(target.parent)}"}
+                  "detail": f"video-analysis.js ausente in {as_posix(target.parent)}"}
     assert not (chome / "workflows").exists()                         # the status only reads
     assert A.install_workflow(skill_dir, chome) == {"path": as_posix(target), "copied": True}
     assert target.read_bytes() == src.read_bytes()
     st = A.workflow_status(skill_dir)                                 # default Claude home: VA_CLAUDE_HOME of the sandbox
-    assert st["current"] and st["state"] == "ok" and st["path"] == as_posix(target) and "idêntico" in st["detail"]
+    assert st["current"] and st["state"] == "ok" and st["path"] == as_posix(target) and "identical" in st["detail"]
     assert A.install_workflow(skill_dir, chome)["copied"] is False
     target.write_text("export const meta = {name: 'video-analysis'}  // antigo", encoding="utf-8")
     st = A.workflow_status(skill_dir, chome)

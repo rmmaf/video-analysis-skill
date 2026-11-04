@@ -1,5 +1,5 @@
 """Environment checks shared by prepare.py and verificar_ambiente.py (design-agentico §7, DL-6,
-DL-13; plan, "Permissões e setup").
+DL-13; plan, "Permissions and setup").
 
 - Runtime: Python >= 3.10, ffmpeg and ffprobe on PATH, numpy and Pillow importable.
 - Workspace: the central folder and its subfolders exist (created on demand) and accept writes.
@@ -74,24 +74,24 @@ def python_status() -> dict:
     ok = (v.major, v.minor) >= MIN_PYTHON
     version = f"{v.major}.{v.minor}.{v.micro}"
     return {"id": "python", "ok": ok, "version": version, "path": sys.executable,
-            "detail": f"Python {version} ({sys.executable})" if ok else f"Python {version}: a skill precisa de 3.10 ou mais novo"}
+            "detail": f"Python {version} ({sys.executable})" if ok else f"Python {version}: the skill needs 3.10 or newer"}
 
 
 def tool_status(name: str, timeout: float = 15.0) -> dict:
     """``ffmpeg`` / ``ffprobe``: on PATH and ``-version`` runs."""
     path = shutil.which(name)
     if not path:
-        return {"id": name, "ok": False, "version": None, "path": None, "detail": f"{name} não está no PATH"}
+        return {"id": name, "ok": False, "version": None, "path": None, "detail": f"{name} is not on PATH"}
     try:
         r = subprocess.run([path, "-hide_banner", "-version"], stdin=subprocess.DEVNULL, capture_output=True,
                            text=True, encoding="utf-8", errors="replace", timeout=timeout, creationflags=_NO_WINDOW)
     except (OSError, subprocess.SubprocessError) as exc:
-        return {"id": name, "ok": False, "version": None, "path": path, "detail": f"{name} não executou: {exc}"}
+        return {"id": name, "ok": False, "version": None, "path": path, "detail": f"{name} did not run: {exc}"}
     first = (r.stdout or r.stderr or "").strip().splitlines()[:1]
     version = first[0].strip() if first else ""
     if r.returncode != 0:
         return {"id": name, "ok": False, "version": version or None, "path": path,
-                "detail": f"{name} -version saiu com {r.returncode}"}
+                "detail": f"{name} -version exited with {r.returncode}"}
     short = re.search(r"version\s+(\S+)", version)
     return {"id": name, "ok": True, "version": version, "path": path,
             "detail": f"{name} {short.group(1) if short else version} ({path})"}
@@ -106,7 +106,7 @@ def module_status(key: str, version: bool = True) -> dict:
     except (ImportError, ValueError):
         spec = None
     if spec is None:
-        return {"id": key, "ok": False, "version": None, "detail": f"{dist} não está instalado para {sys.executable}"}
+        return {"id": key, "ok": False, "version": None, "detail": f"{dist} is not installed for {sys.executable}"}
     if not version:
         return {"id": key, "ok": True, "version": None, "detail": dist}
     from importlib import metadata  # lazy: only verificar_ambiente.py shows the versions
@@ -137,14 +137,14 @@ def workspace_status(home: str | os.PathLike, create: bool = True) -> dict:
             for sub in WORKSPACE_DIRS.values():
                 (home / sub).mkdir(parents=True, exist_ok=True)
         if not home.is_dir():
-            return {"id": "pasta-central", "ok": False, "detail": f"{as_posix(home)} não existe (é criada no primeiro uso)"}
+            return {"id": "pasta-central", "ok": False, "detail": f"{as_posix(home)} does not exist (it is created on first use)"}
         probe = home / WORKSPACE_DIRS["tmp"] / f".escrita-{os.getpid()}"
         probe.parent.mkdir(parents=True, exist_ok=True)
         probe.write_bytes(b"ok")
         probe.unlink()
     except OSError as exc:
-        return {"id": "pasta-central", "ok": False, "detail": f"{as_posix(home)} não aceita gravação: {exc}"}
-    return {"id": "pasta-central", "ok": True, "detail": f"{as_posix(home)} aceita gravação"}
+        return {"id": "pasta-central", "ok": False, "detail": f"{as_posix(home)} does not accept writes: {exc}"}
+    return {"id": "pasta-central", "ok": True, "detail": f"{as_posix(home)} accepts writes"}
 
 
 # --- permission rules -------------------------------------------------------------------------------
@@ -226,13 +226,13 @@ def _inside(rule: str, tool: str, ws_n: str, uhome: Path, settings_dir: Path) ->
 
 def _load_settings(path: Path) -> tuple[dict | None, str | None]:
     if not path.is_file():
-        return None, f"{as_posix(path)} não existe"
+        return None, f"{as_posix(path)} does not exist"
     try:
         data = json.loads(path.read_bytes().decode("utf-8-sig"))
     except (OSError, ValueError) as exc:
-        return None, f"{as_posix(path)} ilegível: {exc}"
+        return None, f"{as_posix(path)} unreadable: {exc}"
     if not isinstance(data, dict):
-        return None, f"{as_posix(path)} não é um objeto JSON"
+        return None, f"{as_posix(path)} is not a JSON object"
     return data, None
 
 
@@ -262,15 +262,15 @@ def permissions_status(workspace: str | os.PathLike, chome: str | os.PathLike | 
                 if _covers(r, tool, ws_n, uh, ch):
                     out["blocked"].append(f"{kind}: {r}")
                 elif _inside(r, tool, ws_n, uh, ch):
-                    out["notes"].append(f"{kind} dentro da pasta central: {r}")
+                    out["notes"].append(f"{kind} inside the central folder: {r}")
     out["missing"] = [t for t in RULE_TOOLS if out["covered"][t] is None]
     out["ok"] = not out["missing"] and not out["blocked"]
     if out["ok"]:
-        out["detail"] = "Read, Edit e Write liberados para " + as_posix(os.path.abspath(workspace))
+        out["detail"] = "Read, Edit and Write allowed for " + as_posix(os.path.abspath(workspace))
     elif out["blocked"]:
-        out["detail"] = "regra que bloqueia a pasta central: " + "; ".join(out["blocked"])
+        out["detail"] = "rule that blocks the central folder: " + "; ".join(out["blocked"])
     else:
-        out["detail"] = f"faltam regras {', '.join(out['missing'])} para {as_posix(os.path.abspath(workspace))} em {as_posix(path)}"
+        out["detail"] = f"missing rules {', '.join(out['missing'])} for {as_posix(os.path.abspath(workspace))} in {as_posix(path)}"
     return out
 
 
@@ -286,7 +286,7 @@ def _indent_of(text: str) -> int | str:
 def merge_permissions(settings_path: str | os.PathLike, rules: list[str], now: float | None = None) -> dict:
     """Add the missing ``rules`` to ``permissions.allow``, keeping every other key and the existing
     rules as they are. Idempotent: nothing is written (and no backup made) when all are present.
-    Before writing an existing file, copies it to ``settings.json.bak-AAAAMMDD-HHMMSS``.
+    Before writing an existing file, copies it to ``settings.json.bak-YYYYMMDD-HHMMSS``.
     Raises AmbienteError (and writes nothing) when the file is not a valid JSON object."""
     path = Path(settings_path)
     raw = None
@@ -296,18 +296,18 @@ def merge_permissions(settings_path: str | os.PathLike, rules: list[str], now: f
             text = raw.decode("utf-8-sig")
             data = json.loads(text)
         except (UnicodeDecodeError, ValueError) as exc:
-            raise AmbienteError(f"{as_posix(path)} não é JSON válido ({exc}); nada foi gravado") from None
+            raise AmbienteError(f"{as_posix(path)} is not valid JSON ({exc}); nothing was written") from None
         if not isinstance(data, dict):
-            raise AmbienteError(f"{as_posix(path)} não é um objeto JSON; nada foi gravado")
+            raise AmbienteError(f"{as_posix(path)} is not a JSON object; nothing was written")
         indent, final_nl = _indent_of(text), text.endswith("\n")
     else:
         data, indent, final_nl = {}, 2, True
     perms = data.setdefault("permissions", {})
     if not isinstance(perms, dict):
-        raise AmbienteError(f"'permissions' em {as_posix(path)} não é um objeto; nada foi gravado")
+        raise AmbienteError(f"'permissions' in {as_posix(path)} is not an object; nothing was written")
     allow = perms.setdefault("allow", [])
     if not isinstance(allow, list):
-        raise AmbienteError(f"'permissions.allow' em {as_posix(path)} não é uma lista; nada foi gravado")
+        raise AmbienteError(f"'permissions.allow' in {as_posix(path)} is not a list; nothing was written")
     added = [r for r in rules if r not in allow]
     if not added:
         return {"changed": False, "added": [], "backup": None, "path": as_posix(path)}
@@ -349,11 +349,11 @@ def agents_status(skill_dir: str | os.PathLike, chome: str | os.PathLike | None 
         files.append({"name": src.name, "state": state})
     current = bool(files) and all(f["state"] == "ok" for f in files)
     if current:
-        detail = f"{len(files)} papéis idênticos aos da skill em {as_posix(dest)}"
+        detail = f"{len(files)} roles identical to the skill's in {as_posix(dest)}"
     elif not files:
-        detail = "a skill não tem papéis em agents/"
+        detail = "the skill has no roles in agents/"
     else:
-        detail = "; ".join(f"{f['name']} {f['state']}" for f in files if f["state"] != "ok") + f" em {as_posix(dest)}"
+        detail = "; ".join(f"{f['name']} {f['state']}" for f in files if f["state"] != "ok") + f" in {as_posix(dest)}"
     return {"id": "agentes", "current": current, "dir": as_posix(dest), "files": files, "detail": detail}
 
 
@@ -393,7 +393,7 @@ def workflow_status(skill_dir: str | os.PathLike, chome: str | os.PathLike | Non
     try:
         data = workflow_source(skill_dir).read_bytes()
     except OSError:
-        out["detail"] = f"a skill não tem workflow/{WORKFLOW_SCRIPT}"
+        out["detail"] = f"the skill has no workflow/{WORKFLOW_SCRIPT}"
         return out
     try:
         out["state"] = "ok" if target.read_bytes() == data else "diferente"
@@ -403,9 +403,9 @@ def workflow_status(skill_dir: str | os.PathLike, chome: str | os.PathLike | Non
         out["state"] = "ilegivel"
     out["current"] = out["state"] == "ok"
     if out["current"]:
-        out["detail"] = f"workflow salvo idêntico ao da skill em {as_posix(target)}"
+        out["detail"] = f"saved workflow identical to the skill's in {as_posix(target)}"
     else:
-        out["detail"] = f"{WORKFLOW_SCRIPT} {out['state']} em {as_posix(target.parent)}"
+        out["detail"] = f"{WORKFLOW_SCRIPT} {out['state']} in {as_posix(target.parent)}"
     return out
 
 

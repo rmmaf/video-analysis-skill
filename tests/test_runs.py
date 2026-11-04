@@ -50,14 +50,14 @@ def test_parse_pedido_tolerates_accents_case_crlf_bom():
 
 @pytest.mark.parametrize("text, code, needle", [
     ("# objetivo\nx\n", "pedido_invalido", "# videos"),
-    ("# videos\n\n# objetivo\nx\n", "pedido_invalido", "vazia"),
+    ("# videos\n\n# objetivo\nx\n", "pedido_invalido", "is empty"),
     ("# videos\nC:/a.mp4\n", "objetivo_ausente", "# objetivo"),
-    ("# videos\nC:/a.mp4\n# objetivo\n  \n\n", "objetivo_ausente", "vazia"),
-    ("lixo antes\n# videos\nC:/a.mp4\n# objetivo\nx\n", "pedido_invalido", "antes da primeira"),
-    ("# videos\nC:/a.mp4\n# videos\nC:/b.mp4\n# objetivo\nx\n", "pedido_invalido", "duas vezes"),
-    ("# videos\nC:/a.mp4\n# objetivo\nx\n# opcoes\npapeis inline\n", "pedido_invalido", "sem ':'"),
-    ("# videos\nC:/a.mp4\n# objetivo\nx\n# opcoes\nturbo: sim\n", "opcao_invalida", "desconhecida"),
-    ("# videos\nC:/a.mp4\n# objetivo\nx\n# opcoes\npapeis: inline\npapeis: agents\n", "opcao_invalida", "duas vezes"),
+    ("# videos\nC:/a.mp4\n# objetivo\n  \n\n", "objetivo_ausente", "is empty"),
+    ("lixo antes\n# videos\nC:/a.mp4\n# objetivo\nx\n", "pedido_invalido", "before the first"),
+    ("# videos\nC:/a.mp4\n# videos\nC:/b.mp4\n# objetivo\nx\n", "pedido_invalido", "twice"),
+    ("# videos\nC:/a.mp4\n# objetivo\nx\n# opcoes\npapeis inline\n", "pedido_invalido", "without ':'"),
+    ("# videos\nC:/a.mp4\n# objetivo\nx\n# opcoes\nturbo: sim\n", "opcao_invalida", "unknown"),
+    ("# videos\nC:/a.mp4\n# objetivo\nx\n# opcoes\npapeis: inline\npapeis: agents\n", "opcao_invalida", "twice"),
 ])
 def test_parse_pedido_errors(text, code, needle):
     with pytest.raises(R.RunError) as exc:
@@ -96,22 +96,22 @@ def test_normalize_options_all_keys():
 
 
 @pytest.mark.parametrize("key, value, needle", [
-    ("papeis", "auto", "agents ou inline"),
-    ("max_lotes", "dois", "inteiro"),
-    ("max_lotes", "-1", "inteiro"),
-    ("paralelo", "7", "de 1 a 6"),
-    ("paralelo", "0", "de 1 a 6"),
+    ("papeis", "auto", "agents or inline"),
+    ("max_lotes", "dois", "integer"),
+    ("max_lotes", "-1", "integer"),
+    ("paralelo", "7", "1 to 6"),
+    ("paralelo", "0", "1 to 6"),
     ("esforco_analista", "ultra", "low"),
-    ("curadoria", "sempre", "plano ou lotes"),
+    ("curadoria", "sempre", "plano or lotes"),
     ("idioma", "português!", "pt-BR"),
-    ("trecho", "00:20:00-00:10:00", "depois do início"),
+    ("trecho", "00:20:00-00:10:00", "after the start"),
     ("trecho", "10 minutos", "hh:mm:ss"),
-    ("falantes", "SPEAKER_01:Ana", "RÓTULO=Nome"),
-    ("sensibilidade", "maxima", "low, normal ou high"),
-    ("ignorar_regiao", "0,8,0,75,0,2,0,25", "ponto decimal"),
+    ("falantes", "SPEAKER_01:Ana", "LABEL=Name"),
+    ("sensibilidade", "maxima", "low, normal or high"),
+    ("ignorar_regiao", "0,8,0,75,0,2,0,25", "decimal point"),
     ("ignorar_regiao", "0.9,0.9,0.2,0.2", "x+w"),
-    ("ignorar_regiao", "0.1,0.1,0,0.2", "frações"),
-    ("papeis", "   ", "vazio"),
+    ("ignorar_regiao", "0.1,0.1,0,0.2", "fractions"),
+    ("papeis", "   ", "empty"),
 ])
 def test_normalize_options_errors(key, value, needle):
     with pytest.raises(R.RunError) as exc:
@@ -260,7 +260,7 @@ def test_resume_legacy_report_counts_as_final(tmp_path):
     out = _out(tmp_path, ledger=True, reports=(1, 2), legacy=True)
     st = R.resume_video(out, 5, 2, "s")          # nothing left: the legacy report.md is the final, renamed
     assert (st["start_batch"], st["final_exists"], st["remaining"]) == (3, True, 0)
-    assert st["actions"] == ["report.md -> relatorio.md (nome novo do relatório final)"]
+    assert st["actions"] == ["report.md -> relatorio.md (new name of the final report)"]
     assert (out / "relatorio.md").read_text(encoding="utf-8") == "antigo" and not (out / "report.md").exists()
     st = R.resume_video(out, 5, 2, "s")          # idempotent
     assert st["final_exists"] is True and st["actions"] == []
@@ -291,7 +291,7 @@ def test_resume_combined(tmp_path):
     (run / "relatorio.md").write_text("c", encoding="utf-8")
     assert R.resume_combined(run, [{"final_exists": True}, {"final_exists": True}]) == (True, [])
     exists, acts = R.resume_combined(run, [{"final_exists": True}, {"final_exists": False}])
-    assert not exists and acts == ["relatorio.md combinado -> relatorio.anterior.md"]
+    assert not exists and acts == ["relatorio.md combined -> relatorio.anterior.md"]
     assert (run / "relatorio.anterior.md").exists() and not (run / "relatorio.md").exists()
 
 
@@ -300,22 +300,22 @@ def test_resume_combined_legacy(tmp_path):
     run.mkdir()
     (run / "report.md").write_text("c", encoding="utf-8")
     exists, acts = R.resume_combined(run, [{"final_exists": True}, {"final_exists": True}])
-    assert exists and acts == ["report.md combinado -> relatorio.md (nome novo do relatório final)"]
+    assert exists and acts == ["report.md combined -> relatorio.md (new name of the final report)"]
     assert (run / "relatorio.md").read_text(encoding="utf-8") == "c" and not (run / "report.md").exists()
     (run / "relatorio.md").rename(run / "report.md")
     exists, acts = R.resume_combined(run, [{"final_exists": True}, {"final_exists": False}])
-    assert not exists and acts == ["report.md combinado -> relatorio.anterior.md"]
+    assert not exists and acts == ["report.md combined -> relatorio.anterior.md"]
     assert (run / "relatorio.anterior.md").read_text(encoding="utf-8") == "c" and not (run / "report.md").exists()
 
 
 def test_estimate_agents_formula():
-    # padrão (curation plan): INIT + R analistas + FINAL; na retomada com ledger, sem o INIT
+    # default (curation plan): INIT + R analysts + FINAL; on resume with a ledger, without the INIT
     assert R.estimate_agents([{"remaining": 4}]) == 6
     assert R.estimate_agents([{"remaining": 2}, {"remaining": 2}, {"remaining": 2}]) == 13  # + CROSS
     assert R.estimate_agents([{"remaining": 3, "final_exists": True}, {"remaining": 1}]) == 4
     assert R.estimate_agents([{"remaining": 2, "ledger_exists": True}]) == 3
     assert R.estimate_agents([{"remaining": 0, "ledger_exists": True}]) == 1   # FINAL only
-    # curation batches: um NEXT antes de cada lote, menos o 1º
+    # curation batches: one NEXT before each batch, except the 1st
     assert R.estimate_agents([{"remaining": 4}], "batches") == 9
     assert R.estimate_agents([{"remaining": 2}, {"remaining": 2}, {"remaining": 2}], "batches") == 16
     assert R.estimate_agents([{"remaining": 3, "final_exists": True}, {"remaining": 1}], "batches") == 4
@@ -366,6 +366,6 @@ def test_build_workflow_args_is_valid(tmp_path):
     assert wa["objective_path"] == as_posix(run_dir) + "/objective.md"
     assert "\\" not in str(wa)
     assert wa["videos"][1]["final_exists"] is True and wa["videos"][0]["start_batch"] == 1
-    assert wa["options"]["curation"] == "plan"      # options sem curation: o padrão
+    assert wa["options"]["curation"] == "plan"      # options without curation: the default
     assert list(wa) == ["schema_version", "run_id", "run_dir", "objective_path", "roles_dir", "roles_mode", "language",
                         "options", "combined_exists", "videos"]

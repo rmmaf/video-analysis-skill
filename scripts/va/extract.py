@@ -253,7 +253,7 @@ class _Run:
             raise FFmpegError(f"ffmpeg stopped after {self.used} of ~{expected:.0f} samples (exit {rc})",
                               read_log_tail(self.log_a))
         if rc not in (0, None):
-            self.notes.append(f"ffmpeg A terminou com código {rc}; {self.used} amostras usadas")
+            self.notes.append(f"ffmpeg A exited with code {rc}; {self.used} samples used")
 
     # -- lockstep: one decode, A on stdout, B as spool files
     def lockstep(self) -> bool:
@@ -296,7 +296,7 @@ class _Run:
             extra = spool / f"{self.a_count:07d}.jpg"
             if rc != 0 or not last.exists() or extra.exists():
                 b_ok = False
-                self.notes.append("spool JPEG fora de sincronia; passe B repetido em sequência")
+                self.notes.append("spool JPEG out of sync; pass B repeated sequentially")
             if b_ok:
                 waiting = self._take_spool(spool, waiting, proc, final=True)
                 if waiting:
@@ -370,7 +370,7 @@ class _Run:
                     self.w.put_bytes(d, j)
                 count += 1
         except FFmpegError as exc:
-            self.notes.append(f"passe B falhou: {str(exc).splitlines()[0]}")
+            self.notes.append(f"pass B failed: {str(exc).splitlines()[0]}")
         finally:
             stop(proc)
         for k, d in sorted(need.items()):
@@ -389,7 +389,7 @@ class _Run:
         if out.returncode != 0 or not data.startswith(b"\xff\xd8"):
             raise FFmpegError(f"could not extract the JPEG of sample {d.sample} (t={t:.3f} s)",
                               out.stderr.decode("utf-8", "replace")[-1500:])
-        self.notes.append(f"JPEG de {frame_id(d.n)} refeito por busca em {t:.3f} s")
+        self.notes.append(f"JPEG of {frame_id(d.n)} redone by seeking to {t:.3f} s")
         self.w.put_bytes(d, data)
 
 
@@ -402,32 +402,32 @@ def _warnings(run: _Run, frames: list[dict], density: dict, suggestions: list[di
     fpm, mx = density["frames_per_min"], density["max_per_min"]
     busy = []
     if fpm > float(p["warn_frames_per_min"]):
-        busy.append(f"{fpm:.1f} frames/min no vídeo (limite {float(p['warn_frames_per_min']):g})")
+        busy.append(f"{fpm:.1f} frames/min in the video (limit {float(p['warn_frames_per_min']):g})")
     if mx > int(p["warn_window_frames"]) and dur_s >= 30:
-        busy.append(f"{mx} frames em 60 s a partir de {fmt_hms(density['max_window'][0], 0)} (limite {int(p['warn_window_frames'])})")
+        busy.append(f"{mx} frames in 60 s starting at {fmt_hms(density['max_window'][0], 0)} (limit {int(p['warn_window_frames'])})")
     if busy:
-        msg = "densidade alta: " + " e ".join(busy)
+        msg = "high density: " + " and ".join(busy)
         if suggestions:
             s = suggestions[0]
             reg = ",".join(f"{v:.2f}" for v in s["region"])
-            msg += f"; região sugerida para ignorar: {reg} (explica {round(100 * s['explains'])}% dos frames)"
+            msg += f"; suggested region to ignore: {reg} (explains {round(100 * s['explains'])}% of the frames)"
         else:
-            msg += "; nenhuma região recorrente para ignorar (se houver frames redundantes: sensibilidade low)"
+            msg += "; no recurring region to ignore (if there are redundant frames: sensibilidade low)"
         out.append(msg)
     for a, b in run.an.camera_spans:
         if (b - a) / run.S >= 10.0:
             t0 = (run.r0 + run.an.ms(a)) / 1000.0
             t1 = min(run.r1, run.r0 + run.an.ms(b)) / 1000.0
-            out.append(f"trecho com cara de câmera em {fmt_hms(t0, 0)}–{fmt_hms(t1, 0)}: tudo se mexe; "
-                       f"a extração cai para ~2 frames/min (heartbeat)")
+            out.append(f"camera-like segment at {fmt_hms(t0, 0)}–{fmt_hms(t1, 0)}: everything moves; "
+                       f"extraction drops to ~2 frames/min (heartbeat)")
     for seg in hot_segments:
         if 0.35 <= seg["frac"] < float(p["camera_hot_frac"]) and seg["end"] - seg["start"] >= 60.0:
-            out.append(f"máscara quente cobriu {round(100 * seg['frac'])}% do quadro em "
-                       f"{fmt_hms(seg['start'], 0)}–{fmt_hms(seg['end'], 0)}; se um painel da tela sumiu da "
-                       f"comparação, use --hot-mode off")
+            out.append(f"hot mask covered {round(100 * seg['frac'])}% of the frame at "
+                       f"{fmt_hms(seg['start'], 0)}–{fmt_hms(seg['end'], 0)}; if a panel of the screen dropped out of the "
+                       f"comparison, use --hot-mode off")
     if len(frames) > int(p["warn_frames_total"]):
         tok = sum(f["tokens"] for f in frames if f["same_as"] is None)
-        out.append(f"{len(frames)} frames: custo alto de imagem (~{round(tok / 1000)}k tokens só de imagens)")
+        out.append(f"{len(frames)} frames: high image cost (~{round(tok / 1000)}k tokens for images alone)")
     out.extend(run.notes)
     return out
 
@@ -472,7 +472,7 @@ def run_frames_stage(src: str | os.PathLike, info: VideoInfo, params: dict, out_
             _clean_out_dir(out_dir)
             run = _Run(src, info, p, out_dir, progress)
             write_text(run.log_b, "")
-            run.notes.append(f"decodificação conjunta falhou ({first}); refeito em passes separados")
+            run.notes.append(f"shared decode failed ({first}); redone in separate passes")
             run.sequential()
     run._report(force=True)
     an = run.an

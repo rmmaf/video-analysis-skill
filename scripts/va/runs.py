@@ -2,10 +2,10 @@
 contract items 1-4; design-agentico DL-2, DL-5, DL-6, DL-11, DL-12).
 
 - ``parse_pedido``: sections ``# videos`` (one path per line), ``# objetivo`` (literal text) and
-  ``# opcoes`` (``chave: valor``; the value is the rest of the line after the first ":").
+  ``# opcoes`` (``key: value``; the value is the rest of the line after the first ":").
   Headings are matched without accents or case ("# Vídeos", "# Opções" also work).
 - ``normalize_options``: validates the option values (pedido or CLI) into typed values.
-- ``new_run``: ``runs/<AAAAMMDD-HHMMSS>-<slug24>`` (``-2``... on a collision in the same second).
+- ``new_run``: ``runs/<YYYYMMDD-HHMMSS>-<slug24>`` (``-2``... on a collision in the same second).
 - ``resume_video``: DL-11. No ledger -> prompts/ and reports/ go to ``_descartado/<stamp>/`` and the
   video starts at batch 1; ``relatorio.md`` becomes ``relatorio.anterior.md`` when work remains. The
   final report is never ``report.md`` (Claude Code blocks subagents from writing report.md, summary.md
@@ -89,16 +89,16 @@ def parse_pedido(text: str) -> dict:
         name = _SECTIONS.get(fold(m.group(1))) if m else None
         if name:
             if name in blocks:
-                raise RunError("pedido_invalido", f"a seção '# {name}' aparece duas vezes no pedido")
+                raise RunError("pedido_invalido", f"the section '# {name}' appears twice in the request")
             blocks[name] = []
             current = name
         elif current is None:
             if line.strip():
-                raise RunError("pedido_invalido", f"texto antes da primeira seção ('# videos'): {line.strip()[:80]!r}")
+                raise RunError("pedido_invalido", f"text before the first section ('# videos'): {line.strip()[:80]!r}")
         else:
             blocks[current].append(line)
     if "videos" not in blocks:
-        raise RunError("pedido_invalido", "falta a seção '# videos' (um caminho de vídeo ou pasta por linha)")
+        raise RunError("pedido_invalido", "missing section '# videos' (one video or folder path per line)")
     videos = []
     for line in blocks["videos"]:
         s = _BULLET_RE.sub("", line.strip())
@@ -106,29 +106,29 @@ def parse_pedido(text: str) -> dict:
         if s:
             videos.append(s)
     if not videos:
-        raise RunError("pedido_invalido", "a seção '# videos' está vazia")
+        raise RunError("pedido_invalido", "the section '# videos' is empty")
     lines = blocks.get("objetivo")
     if lines is None:
-        raise RunError("objetivo_ausente", "falta a seção '# objetivo' no pedido")
+        raise RunError("objetivo_ausente", "missing section '# objetivo' in the request")
     while lines and not lines[0].strip():
         lines = lines[1:]
     objective = "\n".join(lines).rstrip()
     if not objective.strip():
-        raise RunError("objetivo_ausente", "a seção '# objetivo' está vazia")
+        raise RunError("objetivo_ausente", "the section '# objetivo' is empty")
     options: dict[str, Any] = {}
     for raw in blocks.get("opcoes", []):
         line = _BULLET_RE.sub("", raw.strip())
         if not line:
             continue
         if ":" not in line:
-            raise RunError("pedido_invalido", f"linha de opção sem ':' em '# opcoes': {line[:80]!r} (use chave: valor)")
+            raise RunError("pedido_invalido", f"option line without ':' in '# opcoes': {line[:80]!r} (use key: value)")
         key, value = line.split(":", 1)
         canon = option_key(key)
         value = _strip_quotes(value)
         if canon == "ignorar_regiao":
             options.setdefault(canon, []).append(value)
         elif canon in options:
-            raise RunError("opcao_invalida", f"a opção {canon!r} aparece duas vezes no pedido")
+            raise RunError("opcao_invalida", f"the option {canon!r} appears twice in the request")
         else:
             options[canon] = value
     return {"videos": videos, "objective": objective, "options": options}
@@ -139,9 +139,9 @@ def read_pedido(path: str | os.PathLike) -> dict:
     try:
         raw = p.read_bytes()
     except FileNotFoundError:
-        raise RunError("pedido_invalido", f"pedido não encontrado: {as_posix(p)} (grave-o com Write antes)") from None
+        raise RunError("pedido_invalido", f"request file not found: {as_posix(p)} (write it with Write first)") from None
     except OSError as exc:
-        raise RunError("pedido_invalido", f"não consegui ler o pedido {as_posix(p)}: {exc}") from None
+        raise RunError("pedido_invalido", f"could not read the request file {as_posix(p)}: {exc}") from None
     try:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -171,7 +171,7 @@ def option_key(key: str) -> str:
     k = fold(key)
     k = _OPTION_ALIASES.get(k, k)
     if k not in OPTION_KEYS:
-        raise RunError("opcao_invalida", f"opção desconhecida {key.strip()!r}; aceitas: {', '.join(OPTION_KEYS)}")
+        raise RunError("opcao_invalida", f"unknown option {key.strip()!r}; accepted: {', '.join(OPTION_KEYS)}")
     return k
 
 
@@ -184,16 +184,16 @@ _IDIOMA_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
 
 
 def _bad(key: str, value: Any, why: str) -> RunError:
-    return RunError("opcao_invalida", f"{key}: {str(value).strip()!r} inválido ({why})")
+    return RunError("opcao_invalida", f"{key}: {str(value).strip()!r} is invalid ({why})")
 
 
 def _int(key: str, value: Any, lo: int, hi: int | None) -> int:
     s = str(value).strip()
     if not re.fullmatch(r"\+?\d+", s):
-        raise _bad(key, value, "use um número inteiro")
+        raise _bad(key, value, "use an integer")
     n = int(s)
     if n < lo or (hi is not None and n > hi):
-        raise _bad(key, value, f"use de {lo} a {hi}" if hi is not None else f"use {lo} ou mais")
+        raise _bad(key, value, f"use {lo} to {hi}" if hi is not None else f"use {lo} or more")
     return n
 
 
@@ -209,25 +209,25 @@ def parse_trecho(value: Any) -> list[float]:
     except ValueError:
         raise _bad("trecho", value, "use hh:mm:ss-hh:mm:ss") from None
     if t0 < 0 or t1 <= t0:
-        raise _bad("trecho", value, "o fim precisa ser depois do início")
+        raise _bad("trecho", value, "the end must be after the start")
     return [ms_to_s(t0), ms_to_s(t1)]
 
 
 def parse_speakers(value: Any) -> dict:
-    """"SPEAKER_01=Nome;SPEAKER_03=Outro" -> {"SPEAKER_01": "Nome", "SPEAKER_03": "Outro"}."""
+    """"SPEAKER_01=Name;SPEAKER_03=Other" -> {"SPEAKER_01": "Name", "SPEAKER_03": "Other"}."""
     out: dict[str, str] = {}
     for part in re.split(r"[;\n]", str(value)):
         part = part.strip()
         if not part:
             continue
         if "=" not in part:
-            raise _bad("falantes", value, "use RÓTULO=Nome separados por ';'")
+            raise _bad("falantes", value, "use LABEL=Name separated by ';'")
         label, name = (x.strip() for x in part.split("=", 1))
         if not label or not name:
-            raise _bad("falantes", value, "use RÓTULO=Nome separados por ';'")
+            raise _bad("falantes", value, "use LABEL=Name separated by ';'")
         out[label] = name
     if not out:
-        raise _bad("falantes", value, "use RÓTULO=Nome separados por ';'")
+        raise _bad("falantes", value, "use LABEL=Name separated by ';'")
     return out
 
 
@@ -242,17 +242,17 @@ def parse_regions(value: Any) -> list[list[float]]:
                 continue
             nums = [n for n in re.split(r"\s*,\s*|\s+", part) if n]
             if len(nums) != 4:
-                raise _bad("ignorar_regiao", part, "use x,y,w,h com ponto decimal; várias regiões separadas por ';'")
+                raise _bad("ignorar_regiao", part, "use x,y,w,h with a decimal point; several regions separated by ';'")
             try:
                 x, y, w, h = (float(n) for n in nums)
             except ValueError:
-                raise _bad("ignorar_regiao", part, "use números com ponto decimal") from None
+                raise _bad("ignorar_regiao", part, "use numbers with a decimal point") from None
             eps = 1e-6
             if min(x, y) < 0 or w <= 0 or h <= 0 or x + w > 1 + eps or y + h > 1 + eps:
-                raise _bad("ignorar_regiao", part, "frações de 0 a 1, com x+w ≤ 1 e y+h ≤ 1")
+                raise _bad("ignorar_regiao", part, "fractions from 0 to 1, with x+w ≤ 1 and y+h ≤ 1")
             regions.append([round(x, 4), round(y, 4), round(w, 4), round(h, 4)])
     if not regions:
-        raise _bad("ignorar_regiao", value, "nenhuma região")
+        raise _bad("ignorar_regiao", value, "no region")
     return regions
 
 
@@ -265,12 +265,12 @@ def normalize_options(raw: dict) -> dict:
         if value is None:
             continue
         if not isinstance(value, list) and not str(value).strip():
-            raise _bad(key, value, "valor vazio")
+            raise _bad(key, value, "empty value")
         if key == "papeis":
             f = fold(value)
             mode = {"agents": "agents", "agentes": "agents", "agent": "agents", "inline": "inline"}.get(f)
             if not mode:
-                raise _bad(key, value, "use agents ou inline")
+                raise _bad(key, value, "use agents or inline")
             opts[key] = mode
         elif key == "max_lotes":
             f = fold(value)
@@ -286,12 +286,12 @@ def normalize_options(raw: dict) -> dict:
         elif key == "curadoria":
             mode = _CURATION.get(fold(value))
             if not mode:
-                raise _bad(key, value, "use plano ou lotes")
+                raise _bad(key, value, "use plano or lotes")
             opts[key] = mode
         elif key == "idioma":
             s = str(value).strip().replace("_", "-")
             if not _IDIOMA_RE.match(s):
-                raise _bad(key, value, "use um código como pt-BR, en ou es")
+                raise _bad(key, value, "use a code such as pt-BR, en or es")
             opts[key] = s
         elif key == "trecho":
             opts[key] = parse_trecho(value)
@@ -300,7 +300,7 @@ def normalize_options(raw: dict) -> dict:
         elif key == "sensibilidade":
             level = _SENS.get(fold(value))
             if not level:
-                raise _bad(key, value, "use low, normal ou high")
+                raise _bad(key, value, "use low, normal or high")
             opts[key] = level
         elif key == "ignorar_regiao":
             opts[key] = parse_regions(value)
@@ -334,7 +334,7 @@ def run_slug(name: str) -> str:
 
 
 def new_run(runs_dir: str | os.PathLike, name: str, now: float | None = None) -> tuple[str, Path]:
-    """Create ``runs/<AAAAMMDD-HHMMSS>-<slug>``; ``-2``, ``-3``... if it already exists."""
+    """Create ``runs/<YYYYMMDD-HHMMSS>-<slug>``; ``-2``, ``-3``... if it already exists."""
     runs = Path(runs_dir)
     runs.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(time.time() if now is None else now))
@@ -346,7 +346,7 @@ def new_run(runs_dir: str | os.PathLike, name: str, now: float | None = None) ->
             return run_id, runs / run_id
         except FileExistsError:
             continue
-    raise RunError("uso_invalido", f"não consegui criar a pasta do run em {as_posix(runs)}")
+    raise RunError("uso_invalido", f"could not create the run folder in {as_posix(runs)}")
 
 
 def unique_slugs(stems: list[str]) -> list[str]:
@@ -459,23 +459,23 @@ def find_run(home: str | os.PathLike, ref: str) -> Path:
         for d in cands:
             if _run_ok(d):
                 return d
-        raise RunError("run_nao_encontrado", f"nenhum run com run.json em {as_posix(runs)}")
+        raise RunError("run_nao_encontrado", f"no run with run.json in {as_posix(runs)}")
     if any(c in r for c in "/\\:"):
         hits = [p for p in resolve_unicode_paths(r) if p.is_dir()]
         if len(hits) == 1 and _run_ok(hits[0]):
             return hits[0]
-        raise RunError("run_nao_encontrado", f"pasta de run inválida ou sem run.json: {r}")
+        raise RunError("run_nao_encontrado", f"invalid run folder or no run.json: {r}")
     exact = runs / r
     if exact.is_dir():
         if _run_ok(exact):
             return exact
-        raise RunError("run_nao_encontrado", f"o run {r} não tem run.json com workflow_args (o prepare dele falhou?)")
+        raise RunError("run_nao_encontrado", f"run {r} has no run.json with workflow_args (did its prepare fail?)")
     pref = [d for d in (runs.iterdir() if runs.is_dir() else []) if d.is_dir() and d.name.startswith(r) and _run_ok(d)]
     if len(pref) == 1:
         return pref[0]
     if len(pref) > 1:
-        raise RunError("run_nao_encontrado", f"{r!r} é prefixo de {len(pref)} runs: " + ", ".join(sorted(d.name for d in pref)[:5]))
-    raise RunError("run_nao_encontrado", f"run {r!r} não encontrado em {as_posix(runs)}")
+        raise RunError("run_nao_encontrado", f"{r!r} is a prefix of {len(pref)} runs: " + ", ".join(sorted(d.name for d in pref)[:5]))
+    raise RunError("run_nao_encontrado", f"run {r!r} not found in {as_posix(runs)}")
 
 
 def _discard(out_dir: Path, stamp: str) -> list[str]:
@@ -517,7 +517,7 @@ def _settle_final(folder: Path, remains: bool, label: str = "") -> tuple[bool, l
         return False, actions
     if not new.is_file() and old.is_file():
         _move(old, new)
-        actions.append(f"{LEGACY_FINAL_MD}{tag} -> {FINAL_MD} (nome novo do relatório final)")
+        actions.append(f"{LEGACY_FINAL_MD}{tag} -> {FINAL_MD} (new name of the final report)")
     return new.is_file(), actions
 
 
@@ -536,7 +536,7 @@ def resume_video(out_dir: str | os.PathLike, n_batches: int, max_batches: int | 
     ledger = (out / "ledger.md").is_file()
     if not ledger:
         for dst in _discard(out, stamp):
-            actions.append(f"sem ledger: movido para {dst}")
+            actions.append(f"no ledger: moved to {dst}")
         start = 1
     else:
         start = next((n for n in range(1, last + 1) if not (out / "reports" / f"batch_{n:03d}.md").is_file()), last + 1)
@@ -555,7 +555,7 @@ def resume_combined(run_dir: str | os.PathLike, states: list[dict]) -> tuple[boo
     and any of them will run; otherwise, if it exists, the CROSS is skipped. A legacy report.md counts
     as it (``_settle_final``). Returns (combined_exists, actions)."""
     remains = len(states) > 1 and any(not s["final_exists"] for s in states)
-    return _settle_final(Path(run_dir), remains, "combinado")
+    return _settle_final(Path(run_dir), remains, "combined")
 
 
 def estimate_agents(states: list[dict], curation: str = WORKFLOW_DEFAULTS["curation"]) -> int:

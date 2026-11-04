@@ -21,7 +21,7 @@ def overlaps(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
 
 
 def frames_in_range(frames: Sequence[Interval], t0: int, t1: int) -> list[int]:
-    """Indexes of the frames that overlap [t0, t1] (a trecho), in order."""
+    """Indexes of the frames that overlap [t0, t1] (a segment), in order."""
     return [i for i, (s, e) in enumerate(frames) if overlaps(s, e, t0, t1)]
 
 

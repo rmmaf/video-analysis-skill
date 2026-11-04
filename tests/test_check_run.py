@@ -1,4 +1,4 @@
-"""Autoteste de tests/check_run.py com um run sintético montado em tmp_path."""
+"""Self-test of tests/check_run.py with a synthetic run built in tmp_path."""
 from __future__ import annotations
 
 import sys
@@ -11,7 +11,7 @@ from pathlib import Path  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location("va_check_run", Path(__file__).resolve().with_name("check_run.py"))
 check_run = importlib.util.module_from_spec(_spec)
-sys.modules[_spec.name] = check_run  # dataclasses resolvem anotações pelo módulo registrado
+sys.modules[_spec.name] = check_run  # dataclasses resolve annotations through the registered module
 _spec.loader.exec_module(check_run)
 
 HEAD = """# Lote B00{n} de 3 · {rng}
@@ -126,7 +126,7 @@ def make_run(tmp_path: Path, *, run_json: bool = True, ledger_hdr: str = "Integr
                     "start_prompt_exists": False, "final_exists": False}],
     }
     if curation is None:
-        del wa["options"]["curation"]  # run anterior à opção
+        del wa["options"]["curation"]  # run that predates the option
     if run_json:
         (run_dir / "run.json").write_text(json.dumps({"argv": [], "workflow_args": wa}, ensure_ascii=False), encoding="utf-8")
     return run_dir, wa
@@ -150,7 +150,7 @@ def batch_text(n: int, B: str = "C:/va/cache/teste-1a2b3c4d/batches-5e6f7a8b", F
     return HEAD.format(n=n, rng="F0001–F0004" if n == 1 else "F0005–F0007", B=B) + (BATCH1 if n == 1 else BATCH2).format(F=F)
 
 
-def test_parse_batch_le_frames_imagens_e_falas(tmp_path):
+def test_parse_batch_reads_frames_images_and_cues(tmp_path):
     run_dir, wa = make_run(tmp_path)
     b1 = check_run.parse_batch((Path(wa["videos"][0]["batches_dir"]) / "batch_001.md").read_text(encoding="utf-8"))
     b2 = check_run.parse_batch((Path(wa["videos"][0]["batches_dir"]) / "batch_002.md").read_text(encoding="utf-8"))
@@ -158,22 +158,22 @@ def test_parse_batch_le_frames_imagens_e_falas(tmp_path):
     assert b2.frames == ["F0005", "F0006", "F0007"] and b2.images == 3
     assert b1.sheet and b2.sheet and not b1.problems and not b2.problems, (b1.problems, b2.problems)
     assert b1.cues["C0003"].startswith("Aqui aparece a tabela")
-    assert b2.cues["C0005"] == b1.cues["C0005"]  # "(cont.)" e "S1:" saem do texto
+    assert b2.cues["C0005"] == b1.cues["C0005"]  # "(cont.)" and "S1:" are removed from the text
 
 
-def test_parse_batch_aceita_rotulos_em_ingles_e_acusa_desvios_do_formato():
+def test_parse_batch_accepts_english_labels_and_flags_format_deviations():
     en1 = batch_text(1).replace("Folha de contato:", "Contact sheet:").replace("(mesma tela, acima)", "(same screen, above)")
     en2 = batch_text(2).replace("Folha de contato:", "Contact sheet:").replace("(revisita de F0002)", "(revisit of F0002)")
     for text in (en1, en2):
         b = check_run.parse_batch(text)
-        assert b.images == 3 and b.sheet and not b.problems, b.problems  # a folha de contato nunca conta como imagem
+        assert b.images == 3 and b.sheet and not b.problems, b.problems  # the contact sheet never counts as an image
     F = "C:/va/cache/teste-1a2b3c4d/frames-0a0b0c0d"
     cases = {
-        "fora do formato": batch_text(1).replace(f"{F}/F0004_000030.jpg", F.replace("/", "\\") + "\\F0004_000030.jpg"),
-        "revisita no lote com linha de imagem": batch_text(1).replace("(mesma tela, acima)\n", f"(mesma tela, acima)\n{F}/F0003_000020.jpg\n"),
-        'nenhum, esperado "(revisita de F0002)"': batch_text(2).replace(" (revisita de F0002)", ""),
-        "caminho de imagem repetido": batch_text(1).replace(f"{F}/F0004_000030.jpg", f"{F}/F0001_000000.jpg"),
-        "2 linhas de imagem": batch_text(2).replace(f"{F}/F0007_000100.jpg", f"{F}/F0007_000100.jpg\n{F}/F0008_000105.jpg"),
+        "malformed image line": batch_text(1).replace(f"{F}/F0004_000030.jpg", F.replace("/", "\\") + "\\F0004_000030.jpg"),
+        "in-batch revisit with an image line": batch_text(1).replace("(mesma tela, acima)\n", f"(mesma tela, acima)\n{F}/F0003_000020.jpg\n"),
+        'none, expected "(revisita de F0002)"': batch_text(2).replace(" (revisita de F0002)", ""),
+        "image path repeated": batch_text(1).replace(f"{F}/F0004_000030.jpg", f"{F}/F0001_000000.jpg"),
+        "2 image lines": batch_text(2).replace(f"{F}/F0007_000100.jpg", f"{F}/F0007_000100.jpg\n{F}/F0008_000105.jpg"),
     }
     for want, text in cases.items():
         b = check_run.parse_batch(text)
@@ -181,7 +181,7 @@ def test_parse_batch_aceita_rotulos_em_ingles_e_acusa_desvios_do_formato():
     assert not check_run.parse_batch(batch_text(1).replace("Folha de contato", "Prancha")).sheet
 
 
-def test_formato_do_lote_fora_do_contrato_falha(tmp_path, capsys):
+def test_batch_format_outside_the_contract_fails(tmp_path, capsys):
     run_dir, wa = make_run(tmp_path)
     tl = Path(wa["videos"][0]["batches_dir"]) / "batch_002.md"
     tl.write_text(tl.read_text(encoding="utf-8").replace(" (revisita de F0002)", ""), encoding="utf-8")
@@ -190,39 +190,39 @@ def test_formato_do_lote_fora_do_contrato_falha(tmp_path, capsys):
     assert len(bad) == 1 and "lote.formato" in bad[0] and "teste 002" in bad[0] and "F0006" in bad[0], bad
 
 
-def test_run_bom_passa_com_e_sem_retorno(tmp_path, capsys):
+def test_good_run_passes_with_and_without_return(tmp_path, capsys):
     run_dir, _ = make_run(tmp_path)
     assert check_run.main([str(run_dir)]) == 0, fails(capsys)
     assert check_run.main([str(run_dir), "--return", ret()]) == 0, fails(capsys)
-    assert check_run.main([str(run_dir), "--return", ret(frames=None, start=3)]) == 0  # retomada só com o FINAL
+    assert check_run.main([str(run_dir), "--return", ret(frames=None, start=3)]) == 0  # resume with the FINAL only
     t = table(capsys)
     assert not t["FAIL"] and not t["AVISO"], t
 
 
-def test_prompt_que_copia_fala_ou_lista_frames_falha(tmp_path, capsys):
+def test_prompt_that_copies_a_cue_or_lists_frames_fails(tmp_path, capsys):
     ids17 = ", ".join(f"F{k:04d}" for k in [*range(1, 5), *range(10, 23)])
     run_dir, _ = make_run(tmp_path, foco1=f"- {ids17}: tudo.",
                           foco2="- Ele diz: então quando o pedido entra depois da meia noite ele só aparece depois.")
     assert check_run.main([str(run_dir)]) == 1
     bad = fails(capsys)
-    assert any("prompt.copia_fala" in ln and "teste 002" in ln and "C0005 (12 palavras)" in ln for ln in bad), bad
-    assert any("prompt.ids" in ln and "teste 001" in ln and "17 referências" in ln for ln in bad), bad
+    assert any("prompt.copia_fala" in ln and "teste 002" in ln and "C0005 (12 words)" in ln for ln in bad), bad
+    assert any("prompt.ids" in ln and "teste 001" in ln and "17 frame references" in ln for ln in bad), bad
     assert len(bad) == 2, bad
 
 
-def test_citacao_curta_e_ids_acima_do_papel_sao_aviso(tmp_path, capsys):
+def test_short_quote_and_ids_above_the_role_are_warn(tmp_path, capsys):
     ids10 = ", ".join(f"F{k:04d}" for k in range(1, 11))
     run_dir, _ = make_run(tmp_path, foco1=f"- {ids10}: confira cada um.",
                           foco2='- Note o horário de corte ("quando o pedido entra depois da meia noite").')
     assert check_run.main([str(run_dir)]) == 0
     t = table(capsys)
     assert not t["FAIL"], t
-    assert any("prompt.ids" in ln and "teste 001" in ln and "10 referências" in ln for ln in t["AVISO"]), t
-    assert any("prompt.copia_fala" in ln and "teste 002" in ln and "C0005 (8 palavras)" in ln for ln in t["AVISO"]), t
+    assert any("prompt.ids" in ln and "teste 001" in ln and "10 frame references" in ln for ln in t["AVISO"]), t
+    assert any("prompt.copia_fala" in ln and "teste 002" in ln and "C0005 (8 words)" in ln for ln in t["AVISO"]), t
     assert len(t["AVISO"]) == 2, t
 
 
-def test_orcamento_de_palavras_tem_aviso_antes_do_fail(tmp_path, capsys):
+def test_word_budget_has_warn_before_fail(tmp_path, capsys):
     run_dir, _ = make_run(tmp_path, foco2="- " + "detalhe " * 430)
     assert check_run.main([str(run_dir)]) == 0
     t = table(capsys)
@@ -233,16 +233,16 @@ def test_orcamento_de_palavras_tem_aviso_antes_do_fail(tmp_path, capsys):
     assert len(bad) == 1 and "prompt.palavras" in bad[0] and "teste 002" in bad[0], bad
 
 
-def test_copied_cues_separa_citacao_curta_de_copia():
+def test_copied_cues_separates_short_quote_from_copy():
     words = [f"w{k}" for k in range(1, 15)]
     cues = {"C1": " ".join(words[:8]), "C2": " ".join(words)}
     hits = {cid: (k, hard) for cid, k, hard in check_run.copied_cues("ele disse " + " ".join(words[:8]) + " e saiu", cues)}
-    assert hits == {"C1": (8, True), "C2": (8, False)}  # C1 inteira (8 palavras) é cópia; 8 de 14 de C2, citação
+    assert hits == {"C1": (8, True), "C2": (8, False)}  # all of C1 (8 words) is a copy; 8 of the 14 of C2, a quote
     hits = {cid: (k, hard) for cid, k, hard in check_run.copied_cues("x " + " ".join(words[2:14]) + " y", cues)}
     assert hits == {"C2": (12, True)}
 
 
-def test_relatorio_sem_frame_falha_e_intervalo_cobre(tmp_path, capsys):
+def test_report_missing_a_frame_fails_and_a_range_covers(tmp_path, capsys):
     run_dir, _ = make_run(tmp_path, rows2="| F0005 | 00:00:40 | tabela | S1: corte | confirma |\n| F0007 | 00:01:00 | fim | S1: despedida | confirma |")
     assert check_run.main([str(run_dir)]) == 1
     bad = fails(capsys)
@@ -251,7 +251,7 @@ def test_relatorio_sem_frame_falha_e_intervalo_cobre(tmp_path, capsys):
     assert check_run.main([str(run_dir2)]) == 0, fails(capsys)
 
 
-def test_ledger_fora_do_formato_e_retorno_divergente_falham(tmp_path, capsys):
+def test_malformed_ledger_and_divergent_return_fail(tmp_path, capsys):
     run_dir, _ = make_run(tmp_path, ledger_hdr="Integrado até o lote: 001")
     assert check_run.main([str(run_dir), "--return", ret(frames="5/6", status="ok")]) == 1
     bad = " ".join(fails(capsys))
@@ -259,23 +259,23 @@ def test_ledger_fora_do_formato_e_retorno_divergente_falham(tmp_path, capsys):
         assert check in bad, bad
 
 
-def test_curadoria_plan_aceita_ledger_000_e_so_o_prompt_do_lote_1(tmp_path, capsys):
-    """No padrão plan não há NEXT: o INIT grava o ledger com 000 e só o prompt do lote 1."""
+def test_plan_curation_accepts_ledger_000_and_only_the_prompt_of_batch_1(tmp_path, capsys):
+    """With plan, the default, there is no NEXT: the INIT writes the ledger with 000 and only the prompt of batch 1."""
     run_dir, wa = make_run(tmp_path, curation="plan", ledger_hdr="Integrado até o lote: 000 de 003")
     (Path(wa["videos"][0]["out_dir"]) / "prompts" / "batch_002.md").unlink()
     assert check_run.main([str(run_dir)]) == 0, fails(capsys)
     assert check_run.main([str(run_dir), "--return", ret()]) == 0, fails(capsys)
     t = table(capsys)
     assert not t["FAIL"] and not t["AVISO"], t
-    run_dir2, _ = make_run(tmp_path / "b", curation="plan")  # ledger em 001: NEXT antes de retomar como plan
+    run_dir2, _ = make_run(tmp_path / "b", curation="plan")  # ledger at 001: NEXT before resuming as plan
     assert check_run.main([str(run_dir2)]) == 0, fails(capsys)
     run_dir3, _ = make_run(tmp_path / "c", curation="plan", ledger_hdr="Integrado até o lote: 003 de 003")
     assert check_run.main([str(run_dir3)]) == 1
     bad = fails(capsys)
-    assert len(bad) == 1 and "ledger.integrado" in bad[0] and "esperado 000–002 de 003" in bad[0], bad
+    assert len(bad) == 1 and "ledger.integrado" in bad[0] and "expected 000–002 de 003" in bad[0], bad
 
 
-def test_curadoria_plan_exige_o_prompt_do_lote_1_e_confere_os_outros_que_existem(tmp_path, capsys):
+def test_plan_curation_requires_the_prompt_of_batch_1_and_checks_the_others_that_exist(tmp_path, capsys):
     run_dir, wa = make_run(tmp_path, curation="plan", ledger_hdr="Integrado até o lote: 000 de 003")
     for n in (1, 2):
         (Path(wa["videos"][0]["out_dir"]) / "prompts" / f"batch_00{n}.md").unlink()
@@ -289,20 +289,20 @@ def test_curadoria_plan_exige_o_prompt_do_lote_1_e_confere_os_outros_que_existem
     assert len(bad) == 1 and "prompt.copia_fala" in bad[0] and "teste 002" in bad[0], bad
 
 
-def test_curadoria_lotes_ou_sem_a_chave_exige_ledger_integrado_e_todos_os_prompts(tmp_path, capsys):
-    """Sem options.curation, o run é anterior à opção e tinha o NEXT: vale como batches."""
+def test_batches_curation_or_no_key_requires_integrated_ledger_and_all_prompts(tmp_path, capsys):
+    """Without options.curation, the run predates the option and had the NEXT: it counts as batches."""
     for cur in ("batches", None):
         run_dir, wa = make_run(tmp_path / str(cur), curation=cur, ledger_hdr="Integrado até o lote: 000 de 003")
         (Path(wa["videos"][0]["out_dir"]) / "prompts" / "batch_002.md").unlink()
         assert check_run.main([str(run_dir)]) == 1
         bad = fails(capsys)
-        assert any("ledger.integrado" in ln and "esperado 001 de 003" in ln for ln in bad), (cur, bad)
+        assert any("ledger.integrado" in ln and "expected 001 de 003" in ln for ln in bad), (cur, bad)
         assert any("prompt.existe" in ln and "teste 002" in ln for ln in bad), (cur, bad)
         assert len(bad) == 2, (cur, bad)
 
 
-def test_relatorio_final_so_com_o_nome_novo(tmp_path, capsys):
-    """O relatório final é relatorio.md: o harness bloqueia subagentes de gravar report.md."""
+def test_final_report_only_with_the_new_name(tmp_path, capsys):
+    """The final report is relatorio.md: the harness blocks subagents from writing report.md."""
     run_dir, wa = make_run(tmp_path)
     out = Path(wa["videos"][0]["out_dir"])
     (out / "relatorio.md").rename(out / "report.md")
@@ -311,7 +311,7 @@ def test_relatorio_final_so_com_o_nome_novo(tmp_path, capsys):
     assert len(bad) == 1 and "final.existe" in bad[0] and "relatorio.md" in bad[0], bad
 
 
-def test_args_por_flag_e_erro_de_uso(tmp_path, capsys):
+def test_args_by_flag_and_usage_error(tmp_path, capsys):
     run_dir, wa = make_run(tmp_path, run_json=False)
     assert check_run.main([str(run_dir)]) == 2
     args_file = tmp_path / "workflow_args.json"

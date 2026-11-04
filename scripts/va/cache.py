@@ -231,7 +231,7 @@ def _load_shim() -> Any:
     if path not in _shim_cache:
         spec = importlib.util.spec_from_file_location("va_stages_shim", path)
         if spec is None or spec.loader is None:
-            raise StageUnavailable(f"{SHIM_ENV}={path!r} não é um módulo Python")
+            raise StageUnavailable(f"{SHIM_ENV}={path!r} is not a Python module")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         _shim_cache[path] = module
@@ -249,10 +249,10 @@ def stage_fn(name: str) -> Callable[..., Any]:
     try:
         module = importlib.import_module(module_name)
     except ImportError as exc:
-        raise StageUnavailable(f"{module_name} não pôde ser importado ({exc})") from exc
+        raise StageUnavailable(f"{module_name} could not be imported ({exc})") from exc
     fn = getattr(module, attr, None)
     if fn is None:
-        raise StageUnavailable(f"{module_name} não define {attr}()")
+        raise StageUnavailable(f"{module_name} does not define {attr}()")
     return fn
 
 
@@ -383,7 +383,7 @@ def touch_last_used(video_dir: str | os.PathLike) -> None:
 class LockTimeout(TimeoutError):
     def __init__(self, path: Path, waited_s: float, holder: str):
         self.path, self.waited_s, self.holder = path, waited_s, holder
-        super().__init__(f"trava {as_posix(path)} ocupada há {waited_s:.0f} s ({holder or 'dono desconhecido'})")
+        super().__init__(f"lock {as_posix(path)} busy for {waited_s:.0f} s ({holder or 'unknown owner'})")
 
 
 def _read_text(path: Path) -> str | None:
@@ -419,7 +419,7 @@ class VideoLock:
         text = _read_text(self.path) or ""
         try:
             d = json.loads(text)
-            return f"pid {d.get('pid')} em {d.get('host')}, desde {d.get('created')}"
+            return f"pid {d.get('pid')} on {d.get('host')}, since {d.get('created')}"
         except ValueError:
             return ""
 
@@ -479,7 +479,7 @@ class VideoLock:
             if waited >= self.wait_s:
                 raise LockTimeout(self.path, waited, self._holder())
             if not announced and self.on_wait is not None:
-                self.on_wait(f"esperando a trava {as_posix(self.path)} ({self._holder() or 'outro processo'})")
+                self.on_wait(f"waiting for the lock {as_posix(self.path)} ({self._holder() or 'another process'})")
                 announced = True
             time.sleep(min(self.poll_s, max(0.0, self.wait_s - waited)) or 0.01)
 
@@ -547,7 +547,7 @@ def gc_cache(cache_dir: str | os.PathLike, days: float, *, now: float | None = N
         lock = entry / ".lock"
         try:
             if now - lock.stat().st_mtime < stale_s:
-                skipped.append({"key": entry.name, "reason": "em uso (trava ativa)"})
+                skipped.append({"key": entry.name, "reason": "in use (active lock)"})
                 continue
         except OSError:
             pass
@@ -629,24 +629,24 @@ def _batches_list(index: Any) -> list[dict]:
     else:
         lst = index
     if not isinstance(lst, list) or not all(isinstance(b, Mapping) for b in lst):
-        raise ValueError("run_batches_stage não devolveu a lista de lotes")
+        raise ValueError("run_batches_stage did not return the list of batches")
     return lst
 
 
 def _batch_result(index: Any, summary: Any, warnings: list[str]) -> dict:
     lst = _batches_list(index)
     if not lst:
-        raise ValueError("nenhum lote gerado")
+        raise ValueError("no batch generated")
     images, frames = [], []
     for b in lst:
         nf = b.get("n_frames")
         ni = b.get("n_images")
         if ni is None:
             ni = nf
-            if "sem n_images" not in " ".join(warnings):
-                warnings.append("lotes sem n_images: usando n_frames (revisitas contam como imagem)")
+            if "without n_images" not in " ".join(warnings):
+                warnings.append("batches without n_images: using n_frames (revisits count as an image)")
         if not isinstance(ni, int) or isinstance(ni, bool) or ni < 1:
-            raise ValueError(f"lote {b.get('n') or b.get('id')}: n_images inválido ({ni!r})")
+            raise ValueError(f"batch {b.get('n') or b.get('id')}: invalid n_images ({ni!r})")
         images.append(ni)
         frames.append(nf if isinstance(nf, int) and not isinstance(nf, bool) else ni)
     n_frames = sum(frames)
@@ -730,10 +730,10 @@ def prepare_video(job: dict) -> dict:
                 def need_info() -> Any:
                     nonlocal info, fresh
                     if not os.path.isfile(video_path):
-                        raise FileNotFoundError(f"vídeo ausente: {video_path} (o cache precisa ser refeito)")
+                        raise FileNotFoundError(f"video missing: {video_path} (the cache must be rebuilt)")
                     expected = job.get("expected_fp")
                     if expected and video_fingerprint(video_path) != expected:
-                        raise RuntimeError(f"o vídeo mudou desde o run (tamanho ou data): {video_path}")
+                        raise RuntimeError(f"the video changed since the run (size or date): {video_path}")
                     if info is None or not fresh:
                         log("ffprobe")
                         info = stage_fn("probe_video")(Path(video_path))
@@ -750,7 +750,7 @@ def prepare_video(job: dict) -> dict:
                     sdir = fresh_dir(dirs["cues"])
                     duration = info_get(need_info(), "duration_s", "duration")
                     if not os.path.isfile(vtt_path):
-                        raise FileNotFoundError(f"legenda ausente: {vtt_path}")
+                        raise FileNotFoundError(f"subtitles missing: {vtt_path}")
                     log.state("cues", "processando")
                     t0 = time.perf_counter()
                     cues_doc = stage_fn("run_cues_stage")(Path(vtt_path), params["cues"], sdir, duration)
@@ -760,7 +760,7 @@ def prepare_video(job: dict) -> dict:
                     write_stage_json(sdir, "cues", keys["cues"], video_key=job["video_key"], params=params["cues"],
                                      inputs={"vtt": as_posix(vtt_path)}, timing_s=out["timing_s"]["cues"],
                                      result={"n_cues": len(cues_doc.get("cues") or []) if isinstance(cues_doc, Mapping) else None})
-                    log(f"legenda pronta ({out['timing_s']['cues']:.1f} s)")
+                    log(f"subtitles ready ({out['timing_s']['cues']:.1f} s)")
                 else:
                     out["cache_hit"]["cues"] = True
 
@@ -769,7 +769,7 @@ def prepare_video(job: dict) -> dict:
                     sdir = fresh_dir(dirs["frames"])
                     vinfo = need_info()
                     log.state("frames", "processando")
-                    log("extraindo frames")
+                    log("extracting frames")
                     t0 = time.perf_counter()
                     frames_doc = stage_fn("run_frames_stage")(Path(video_path), vinfo, params["frames"], sdir,
                                                               log.progress("frames"))
@@ -782,7 +782,7 @@ def prepare_video(job: dict) -> dict:
                                      timing_s=out["timing_s"]["frames"],
                                      result={"n_frames": n, "n_unique": frames_doc.get("n_unique") if isinstance(frames_doc, Mapping) else None})
                     if not stage_valid(sdir, "frames", keys["frames"]):
-                        raise RuntimeError("o estágio de frames terminou sem frames.json válido ou sem os JPEGs listados")
+                        raise RuntimeError("the frames stage finished without a valid frames.json or without the listed JPEGs")
                     log(f"{n} frames ({out['timing_s']['frames']:.1f} s)")
                 else:
                     out["cache_hit"]["frames"] = True
@@ -805,7 +805,7 @@ def prepare_video(job: dict) -> dict:
                     t0 = time.perf_counter()
                     res = stage_fn("run_batches_stage")(frames_doc, cues_doc, params["batches"], sdir, meta)
                     if not isinstance(res, Mapping):
-                        raise ValueError("run_batches_stage não devolveu um dicionário")
+                        raise ValueError("run_batches_stage did not return a dictionary")
                     result = _batch_result(res.get("batches"), res.get("summary"), out["warnings"])
                     if not (sdir / "batches.json").is_file():
                         index = res.get("batches")
@@ -818,8 +818,8 @@ def prepare_video(job: dict) -> dict:
                                      inputs={"cues": keys["cues"], "frames": keys["frames"]},
                                      timing_s=out["timing_s"]["batches"], result=result, language=language)
                     if not stage_valid(sdir, "batches", keys["batches"]):
-                        raise RuntimeError("o estágio de lotes terminou sem summary.json, batches.json ou batch_NNN.md")
-                    log(f"{result['n_batches']} lotes ({out['timing_s']['batches']:.1f} s)")
+                        raise RuntimeError("the batches stage finished without summary.json, batches.json or batch_NNN.md")
+                    log(f"{result['n_batches']} batches ({out['timing_s']['batches']:.1f} s)")
                 else:
                     out["cache_hit"]["batches"] = True
 
@@ -840,14 +840,14 @@ def prepare_video(job: dict) -> dict:
             raise
         except LockTimeout as exc:
             out["error"] = {"code": "video_falhou",
-                            "detail": f"{exc}: outro prepare.py está usando este vídeo; espere ele terminar ou confira se ficou preso"}
+                            "detail": f"{exc}: another prepare.py is using this video; wait for it to finish or check whether it is stuck"}
         except StageUnavailable as exc:
             out["error"] = {"code": "instalacao_incompleta", "detail": str(exc)}
         except Exception as exc:  # one video failing must not stop the others
             import traceback  # lazy: only on failures (keeps the warm path light)
             out["error"] = {"code": "video_falhou", "detail": f"{stage_now}: {type(exc).__name__}: {exc}"}
-            log("ERRO " + "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip(), echo=False)
+            log("ERROR " + "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip(), echo=False)
         if out["error"]:
-            log(f"falhou: {out['error']['detail']}")
+            log(f"failed: {out['error']['detail']}")
             log.state(stage_now, "falhou", out["error"])
     return out

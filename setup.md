@@ -1,139 +1,144 @@
-# `/video-analysis setup`: preparar a máquina
+# `/video-analysis setup`: prepare the machine
 
-Este é o roteiro do comando `setup`. **Nesta chamada não se analisa vídeo.** O objetivo é o
-`verificar_ambiente.py` sair com código 0 ("Pronto."). O setup pode rodar quantas vezes for preciso: o
-que já está pronto sai `[OK]` e é pulado.
+This is the procedure for the `setup` command. **No video is analysed in this call.** The goal is for
+`verificar_ambiente.py` to exit with code 0 ("Ready."). The setup can run as many times as needed:
+whatever is already in place comes out `[OK]` and is skipped.
 
-**O que o código 0 quer dizer:** Python 3.10 ou mais novo, `ffmpeg` e `ffprobe` no PATH, numpy e Pillow
-instalados, a pasta central `C:\Users\digom\video-analysis\` aceita gravação, e as regras de permissão
-cobrem essa pasta. Com isso os agentes do Workflow leem frames e gravam relatórios sem pedir permissão a
-cada arquivo.
+**What code 0 means:** Python 3.10 or newer, `ffmpeg` and `ffprobe` on PATH, numpy and Pillow installed,
+the central folder `C:\Users\digom\video-analysis\` accepts writes, and the permission rules cover that
+folder. With that, the Workflow's agents read frames and write reports without asking for permission for
+each file.
 
-**Os agentes e o workflow instalados nunca saem `[FALTA]`, só `[AVISO]`.** Sem as cópias em
-`~/.claude/agents/`, ou com cópias diferentes das da skill, a análise roda no modo `inline`, que funciona
-igual e gasta um pouco mais por agente. Sem o workflow salvo em `~/.claude/workflows/`, ou com uma cópia
-diferente da da skill, a skill passa o script inteiro ao Workflow a cada run, o que custa ~13k tokens a
-mais.
+**The installed agents and workflow never come out `[FALTA]`, only `[AVISO]`.** Without the copies in
+`~/.claude/agents/`, or with copies different from the skill's, the analysis runs in `inline` mode,
+which works the same and spends a little more per agent. Without the workflow saved in
+`~/.claude/workflows/`, or with a copy different from the skill's, the skill passes the whole script to
+the Workflow on every run, which costs ~13k more tokens.
 
-O que só se confirma no uso:
+What is only confirmed in use:
 
-- a primeira análise prova as regras de permissão: nenhum pedido de permissão durante o run. Comece por
-  uma curta, com `--max-lotes 1` ou `2`;
-- a primeira análise numa sessão aberta depois do setup prova o modo `agents` e o workflow chamado pelo
-  nome (`name: "video-analysis"`).
+- the first analysis proves the permission rules: no permission prompt during the run. Start with a
+  short one, with `--max-lotes 1` or `2`;
+- the first analysis in a session opened after the setup proves `agents` mode and the workflow called
+  by name (`name: "video-analysis"`).
 
-## O que o setup não pede
+## What the setup does not ask for
 
-A skill não usa **nenhum segredo** nem login: trabalha com arquivos locais, o `ffmpeg` e o Python. Fora
-da pasta central, o setup grava em só três lugares, e só depois do "sim" da pessoa:
+The skill uses **no secrets** and no login: it works with local files, `ffmpeg` and Python. Outside the
+central folder, the setup writes to only three places, and only after the person's "yes":
 
-| o quê | onde | como desfazer |
+| what | where | how to undo |
 |---|---|---|
-| os dois papéis dos agentes | `C:\Users\digom\.claude\agents\video-analysis-*.md` | apagar os dois arquivos |
-| o workflow salvo | `C:\Users\digom\.claude\workflows\video-analysis.js` | apagar o arquivo |
-| as regras de permissão da pasta central | `C:\Users\digom\.claude\settings.json` | restaurar o `settings.json.bak-<data>` |
+| the two agent roles | `C:\Users\digom\.claude\agents\video-analysis-*.md` | delete the two files |
+| the saved workflow | `C:\Users\digom\.claude\workflows\video-analysis.js` | delete the file |
+| the permission rules for the central folder | `C:\Users\digom\.claude\settings.json` | restore `settings.json.bak-<date>` |
 
-Você também não aceita termos nem faz instalação que peça elevação em nome da pessoa.
+You also do not accept terms or run an installation that asks for elevation on the person's behalf.
 
-## Como conduzir
+## How to conduct the setup
 
-1. **Veja primeiro se há Python e ffmpeg**, só lendo, porque o verificador é um script Python. Em
-   PowerShell:
+1. **First check whether Python and ffmpeg are present**, read-only, because the verifier is a Python
+   script. In PowerShell:
    `Get-Command python, py, ffmpeg, ffprobe, winget -ErrorAction SilentlyContinue | Select-Object Name, Source`.
-   Um `python` em `...\WindowsApps\` só conta se `python --version` mostrar a versão: sem o Python da
-   Microsoft Store instalado, ele é só o atalho que abre a loja. Sem Python, comece pelo passo 1.
-2. **Rode o verificador completo** e mostre o resultado à pessoa. Use o comando da seção **Setup** do
-   `SKILL.md`, que já vem com o caminho da skill resolvido e casa com a pré-aprovação; rode pela
-   ferramenta Bash:
+   A `python` in `...\WindowsApps\` only counts if `python --version` shows the version: without the
+   Microsoft Store Python installed, it is only the shortcut that opens the store. Without Python, start
+   with step 1.
+2. **Run the full verifier** and show the result to the person. Use the command in the **Setup** section
+   of `SKILL.md`, which already comes with the skill path resolved and matches the pre-approval; run it
+   through the Bash tool:
 
    ```bash
-   python "<pasta da skill>/verificar_ambiente.py"
+   python "<skill folder>/verificar_ambiente.py"
    ```
 
-   - `<pasta da skill>` é o `${CLAUDE_SKILL_DIR}` do `SKILL.md` (o *base directory* informado quando a
-     skill carrega). O verificador fica na raiz da skill, não em `scripts\`.
-   - Com `--json`, os itens saem em formato de máquina.
-   - A saída marca cada item com `[OK]`, `[FALTA]` ou `[AVISO]`, e cada `[FALTA]`/`[AVISO]` aponta o passo
-     deste roteiro que o resolve. Saída 0 = "Pronto." (aviso não conta); 1 = falta alguma coisa.
-   - `--home` e `--claude-home` (ou a variável `VA_CLAUDE_HOME`) apontam outra pasta central ou outra
-     pasta do Claude Code; servem para teste, não para o setup normal.
-3. **Resolva os `[FALTA]` na ordem dos passos, um de cada vez.** A ordem segue as dependências: cada
-   passo só precisa do que os anteriores deixaram pronto. Os passos 4 e 5 valem mesmo com o resto `[OK]`.
-4. **Cada ação traz uma de duas marcas:**
-   - **você executa**: mostre o comando, diga em uma frase o que ele muda na máquina e rode só depois do
-     "sim" da pessoa;
-   - **a pessoa faz**: entregue o passo a passo, espere ela dizer que terminou e rode o verificador de
-     novo.
-5. **Um item vale como feito quando o verificador mostra `[OK]`**, não quando a pessoa diz que fez.
-6. **Termine** quando o verificador sair com código 0. Não declare o setup pronto com código 1.
-7. **Se o setup começou no meio de uma análise** (o `prepare.py` saiu com 3, ou acusou
-   `permissions_ok: false`), ofereça retomá-la quando terminar.
+   - `<skill folder>` is the `${CLAUDE_SKILL_DIR}` of `SKILL.md` (the *base directory* given when the
+     skill loads). The verifier sits at the root of the skill, not in `scripts\`.
+   - With `--json`, the items come out in machine format.
+   - The output marks each item with `[OK]`, `[FALTA]` or `[AVISO]`, and each `[FALTA]`/`[AVISO]` points
+     to the step of this procedure that resolves it. Exit code 0 = "Ready." (a warning does not
+     count); 1 = something is missing.
+   - `--home` and `--claude-home` (or the `VA_CLAUDE_HOME` variable) point to another central folder or
+     another Claude Code folder; they are for testing, not for the normal setup.
+3. **Resolve the `[FALTA]` items in step order, one at a time.** The order follows the
+   dependencies: each step only needs what the previous ones left ready. Steps 4 and 5 apply even
+   when the rest is `[OK]`.
+4. **Each action carries one of two marks:**
+   - **you run it**: show the command, say in one sentence what it changes on the machine and run it
+     only after the person's "yes";
+   - **the person does it**: hand over the step-by-step instructions, wait for them to say they are
+     done and run the verifier again.
+5. **An item counts as done when the verifier shows `[OK]`**, not when the person says they did it.
+6. **Finish** when the verifier exits with code 0. Do not declare the setup ready with code 1.
+7. **If the setup started in the middle of an analysis** (`prepare.py` exited with 3, or reported
+   `permissions_ok: false`), offer to resume it when you finish.
 
-## Passo 1 — ferramentas: Python e ffmpeg
+## Step 1 — tools: Python and ffmpeg
 
-**A pessoa faz, no terminal dela.** Na primeira execução, o `winget` pode pedir o aceite dos termos da
-fonte, e o Windows pode pedir elevação (UAC). São aceites que só ela dá. Entregue só os comandos do que
-saiu ausente:
+**The person does it, in their own terminal.** On the first run, `winget` may ask for the source's terms
+to be accepted, and Windows may ask for elevation (UAC). Only the person can accept those. Hand over only
+the commands for what came out missing:
 
 ```powershell
 winget install --id Python.Python.3.12 -e
 winget install --id Gyan.FFmpeg -e
 ```
 
-- Qualquer Python 3.10 ou mais novo serve; quem já tem um não precisa trocar.
-- O pacote `Gyan.FFmpeg` traz o `ffmpeg` e o `ffprobe` juntos.
-- Sem `winget`, use os instaladores oficiais: <https://www.python.org/downloads/> e
-  <https://www.gyan.dev/ffmpeg/builds/> (acrescentando a pasta `bin` ao PATH).
+- Any Python 3.10 or newer works; whoever already has one does not need to switch.
+- The `Gyan.FFmpeg` package brings `ffmpeg` and `ffprobe` together.
+- Without `winget`, use the official installers: <https://www.python.org/downloads/> and
+  <https://www.gyan.dev/ffmpeg/builds/> (adding the `bin` folder to PATH).
 
-**Depois de instalar**, a pessoa fecha e abre o Claude Code e chama `/video-analysis setup` de novo. O
-PATH só é relido por processo novo: `[FALTA]` logo depois da instalação costuma ser isso, e não falha da
-instalação.
+**After installing**, the person closes and reopens Claude Code and calls `/video-analysis setup` again.
+PATH is only reread by a new process: `[FALTA]` right after the installation is usually that, not an
+installation failure.
 
-## Passo 2 — bibliotecas: numpy e Pillow
+## Step 2 — libraries: numpy and Pillow
 
-**Você executa**, depois do "sim":
+**You run it**, after the "yes":
 
 ```bash
 python -m pip install numpy Pillow
 ```
 
-Se o pip recusar por permissão, repita com `--user`. A skill não usa OpenCV nem outra dependência.
+If pip refuses because of permissions, repeat with `--user`. The skill does not use OpenCV or any other
+dependency.
 
-## Passo 3 — pasta central
+## Step 3 — central folder
 
-A pasta `C:\Users\digom\video-analysis\` e as subpastas (`cache`, `runs`, `pedidos`, `roles`, `logs`) são
-criadas no primeiro uso. As regras de permissão e o `pedido.md` apontam para ela: não a troque de lugar.
+The folder `C:\Users\digom\video-analysis\` and its subfolders (`cache`, `runs`, `pedidos`, `roles`,
+`logs`) are created on first use. The permission rules and `pedido.md` point to it: do not move it.
 
-Se o item sair `[FALTA]`, a pasta existe mas não aceita gravação. **A pessoa faz:** confere se há um
-arquivo, e não uma pasta, com esse nome; se o disco tem espaço; e se um antivírus bloqueia a gravação.
-Depois, rode o verificador de novo.
+If the item comes out `[FALTA]`, the folder exists but does not accept writes. **The person does it:**
+they check whether there is a file, and not a folder, with that name; whether the disk has space; and
+whether an antivirus blocks writing. Then run the verifier again.
 
-## Passo 4 — agentes: instalar os papéis e o workflow
+## Step 4 — agents: install the roles and the workflow
 
-**Você executa**, depois do "sim":
+**You run it**, after the "yes":
 
 ```bash
-python "<pasta da skill>/verificar_ambiente.py" --instalar-agentes
+python "<skill folder>/verificar_ambiente.py" --instalar-agentes
 ```
 
-- Cria `C:\Users\digom\.claude\agents\`, se não existir, e copia para lá `video-analysis-curator.md` e
-  `video-analysis-analyst.md`, da pasta `agents\` da skill.
-- Cria `C:\Users\digom\.claude\workflows\`, se não existir, e copia para lá `video-analysis.js`, da pasta
-  `workflow\` da skill. É o workflow salvo que o passo 6 do `SKILL.md` chama pelo nome, sem passar o
-  script inline.
-- Se o workflow mudou, o verificador avisa (`[AVISO]`): esta sessão pode manter na memória a versão
-  anterior, então nesta conversa o passo 6 do `SKILL.md` não o chama pelo nome; numa conversa nova, sim.
+- Creates `C:\Users\digom\.claude\agents\`, if it does not exist, and copies `video-analysis-curator.md`
+  and `video-analysis-analyst.md` there, from the skill's `agents\` folder.
+- Creates `C:\Users\digom\.claude\workflows\`, if it does not exist, and copies `video-analysis.js`
+  there, from the skill's `workflow\` folder. It is the saved workflow that step 6 of `SKILL.md` calls by
+  name, without passing the script inline.
+- If the workflow changed, the verifier warns (`[AVISO]`): this session may keep the previous version in
+  memory, so in this conversation step 6 of `SKILL.md` does not call it by name; in a new conversation,
+  it does.
 
-Rode de novo sempre que a skill for atualizada: o verificador avisa quando as cópias instaladas diferem
-das da skill. Enquanto isso, o `prepare.py` usa o modo `inline` e acusa `env.workflow_current: false`,
-e a skill passa o script inline ao Workflow em vez de chamar pelo nome a cópia antiga.
+Run it again whenever the skill is updated: the verifier warns when the installed copies differ from the
+skill's. In the meantime, `prepare.py` uses `inline` mode and reports `env.workflow_current: false`, and
+the skill passes the script inline to the Workflow instead of calling the old copy by name.
 
-## Passo 5 — permissões: ler e gravar na pasta central sem perguntar
+## Step 5 — permissions: read and write in the central folder without asking
 
-Sem estas regras, cada frame que um agente abre e cada relatório que ele grava pede permissão: centenas
-de pedidos por run.
+Without these rules, every frame an agent opens and every report it writes asks for permission: hundreds
+of prompts per run.
 
-1. **Mostre o trecho à pessoa** antes de gravar:
+1. **Show the snippet to the person** before writing:
 
    ```json
    "permissions": { "allow": [
@@ -142,27 +147,27 @@ de pedidos por run.
    ]}
    ```
 
-   - As regras valem só para a pasta central: nada fora dela fica liberado.
-   - As duas grafias (`~/…` e `//c/…`) ficam até a primeira análise mostrar qual o Windows aceita; depois,
-     a que não funcionar pode sair.
-2. **Você executa**, só depois do "sim":
+   - The rules apply only to the central folder: nothing outside it becomes allowed.
+   - The two spellings (`~/…` and `//c/…`) stay until the first analysis shows which one Windows
+     accepts; after that, the one that does not work can be removed.
+2. **You run it**, only after the "yes":
 
    ```bash
-   python "<pasta da skill>/verificar_ambiente.py" --aplicar-permissoes
+   python "<skill folder>/verificar_ambiente.py" --aplicar-permissoes
    ```
 
-   O verificador faz backup em `settings.json.bak-<data>` e mescla as regras no `settings.json`, sem
-   mexer em `enabledPlugins` nem no resto.
+   The verifier makes a backup at `settings.json.bak-<date>` and merges the rules into `settings.json`,
+   without touching `enabledPlugins` or anything else.
 
-## Ao terminar
+## When you finish
 
-Rode o verificador uma última vez e mostre o resultado. Lembre à pessoa:
+Run the verifier one last time and show the result. Remind the person:
 
-- **Agente novo em `~/.claude/agents` só é carregado quando o Claude Code abre.** Depois de instalar,
-  feche e abra o Claude Code; até lá a skill roda no modo `inline`, que funciona igual, gastando um pouco
-  mais por agente.
-- O workflow salvo em `~/.claude/workflows` pode precisar do mesmo: se o Workflow disser que não conhece
-  o nome `video-analysis`, feche e abra o Claude Code. Até lá a skill passa o script inline, que funciona
-  igual e custa ~13k tokens a mais por run.
-- Se os pedidos de permissão continuarem depois de gravar as regras, feche e abra o Claude Code.
-- Se havia uma análise antes do setup, ofereça retomá-la.
+- **A new agent in `~/.claude/agents` is only loaded when Claude Code opens.** After installing, close
+  and reopen Claude Code; until then the skill runs in `inline` mode, which works the same, spending a
+  little more per agent.
+- The workflow saved in `~/.claude/workflows` may need the same: if the Workflow says it does not know
+  the name `video-analysis`, close and reopen Claude Code. Until then the skill passes the script inline,
+  which works the same and costs ~13k more tokens per run.
+- If the permission prompts continue after the rules are written, close and reopen Claude Code.
+- If there was an analysis before the setup, offer to resume it.

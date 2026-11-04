@@ -594,7 +594,7 @@ def evaluate(doc: dict, truth: dict) -> tuple[bool, list[str]]:
             fail(f"{len(fr)} frames > {truth['max_frames']}")
         if any(f["kind"] != "heartbeat" for f in fr[1:]):
             fail("camera frames after the first must be heartbeat")
-        if not any("câmera" in w for w in doc["warnings"]):
+        if not any("camera" in w for w in doc["warnings"]):
             fail("no camera-like warning")
     return ok, msgs
 

@@ -1,4 +1,4 @@
-"""Roda frames.py nos 7 vídeos, achando os caminhos por glob (o nome tem ’ e acentos)."""
+"""Runs frames.py on the 7 videos, finding the paths by glob (the names have ’ and accents)."""
 import sys
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -30,4 +30,4 @@ if __name__ == "__main__":
     alvos = sys.argv[1:] or list(VIDEOS)
     with ProcessPoolExecutor(max_workers=3) as ex:
         for s in ex.map(um, alvos):
-            print("feito", s, flush=True)
+            print("done", s, flush=True)

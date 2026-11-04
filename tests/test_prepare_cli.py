@@ -350,7 +350,7 @@ def test_node_accepts_workflow_args(sb, capsys):
     assert code == 0
     res = node_validate(sb.tmp, env["workflow_args"])
     assert res["ok"], res
-    assert f"~{env['estimate']['agents']} agentes" in res["log"]   # the Workflow's own count matches DL-12
+    assert f"~{env['estimate']['agents']} agents" in res["log"]   # the Workflow's own count matches DL-12
 
 
 def test_second_run_hits_cache_and_force(sb, capsys):
@@ -483,7 +483,7 @@ def test_vtt_missing_teams_pattern(sb, capsys):
     code, env, err = run_cli(capsys, "--pedido", ped)
     assert code == 2 and env["ok"] is False and env["error"]["code"] == "vtt_ausente"
     d = env["error"]["detail"]
-    assert "Indicador PES.vtt (prefixo do nome do vídeo)" in d
+    assert "Indicador PES.vtt (prefix of the video name)" in d
     assert ("Rename-Item -LiteralPath '" + os.path.normpath(str(folder / "Indicador PES.vtt")) +
             "' -NewName 'Indicador PES-20260610_150844-Gravação de Reunião.vtt'") in d
     assert "--vtt" in d and "--skip-missing" in d
@@ -512,7 +512,7 @@ def test_skip_missing_and_vtt_flag(sb, capsys):
     assert code == 0 and [v["slug"] for v in env["workflow_args"]["videos"]] == ["a"]
     assert any("b sem legenda.mp4" in w for w in env["warnings"])
     code, env, _ = run_cli(capsys, "--pedido", write_pedido(sb, [folder]), "--vtt", folder / "a.vtt")
-    assert code == 2 and env["error"]["code"] == "uso_invalido" and "exatamente 1 vídeo" in env["error"]["detail"]
+    assert code == 2 and env["error"]["code"] == "uso_invalido" and "exactly 1 video" in env["error"]["detail"]
     other = fake_vtt(sb.vids / "legendas" / "qualquer nome.vtt")
     code, env, _ = run_cli(capsys, "--pedido", write_pedido(sb, [folder / "b sem legenda.mp4"]), "--vtt", other)
     assert code == 0 and env["videos"][0]["vtt_path"] == as_posix(other)
@@ -614,7 +614,7 @@ def test_size_guard_and_forcar(sb, capsys):
                            "--forcar")
     assert code == 0 and any("--forcar" in w for w in env["warnings"])
     # the Workflow refuses > 800 agents (reference/sem-workflow.md: do not run it either): split the run
-    assert any("recusa mais de 800" in w and "divida o run" in w for w in env["warnings"])
+    assert any("refuses more than 800" in w and "split the run" in w for w in env["warnings"])
     code, env, _ = run_cli(capsys, "--pedido", write_pedido(sb, [big], options={"papeis": "inline", "max_lotes": "10",
                                                                                "curadoria": "lotes"}),
                            "--batch-frames", "1")
@@ -699,7 +699,7 @@ def test_resume_cases(sb, capsys):
     code, env, _ = run_cli(capsys, "--resume", as_posix(run_dir), "--max-lotes", "0")
     v = env["workflow_args"]["videos"][0]
     assert (v["start_batch"], v["final_exists"]) == (4, True) and env["estimate"]["agents"] == 0
-    assert any("completo" in w for w in env["warnings"]) and (out / "relatorio.md").exists()
+    assert any("already complete" in w for w in env["warnings"]) and (out / "relatorio.md").exists()
     (out / "reports" / "batch_003.md").unlink()
     code, env, _ = run_cli(capsys, "--resume", "ultimo")
     v = env["workflow_args"]["videos"][0]
@@ -711,11 +711,11 @@ def test_resume_cases(sb, capsys):
     assert (v["start_batch"], v["ledger_exists"]) == (1, False)
     assert list((out / "_descartado").glob("*/reports/batch_001.md"))
     rj = read_json(run_dir / "run.json")
-    assert len(rj["resumes"]) == 6 and rj["workflow_args"] == env["workflow_args"]   # 6 retomadas acima
+    assert len(rj["resumes"]) == 6 and rj["workflow_args"] == env["workflow_args"]   # 6 resumes above
     assert read_json(run_dir / "prepare.json") == env
 
 
-def test_resume_run_antigo_pasta_slug(sb, capsys):
+def test_resume_old_run_slug_folder(sb, capsys):
     code, env, _ = run_cli(capsys, "--pedido", write_pedido(sb, [sb.v1], options={"papeis": "inline", "max_lotes": "2"}))
     assert code == 0
     run_dir = Path(env["run_dir"])
@@ -770,13 +770,13 @@ def test_resume_legacy_report_md_counts_as_final(sb, capsys):
     code, env, _ = run_cli(capsys, "--resume", "ultimo")
     wa = env["workflow_args"]
     assert code == 0 and wa["combined_exists"] is True and all(v["final_exists"] for v in wa["videos"])
-    assert env["estimate"]["agents"] == 1 and any("completo" in w for w in env["warnings"])
+    assert env["estimate"]["agents"] == 1 and any("already complete" in w for w in env["warnings"])
     for v in wa["videos"]:
         assert (Path(v["out_dir"]) / "relatorio.md").read_text(encoding="utf-8") == "final"
         assert not (Path(v["out_dir"]) / "report.md").exists()
     assert (run_dir / "relatorio.md").read_text(encoding="utf-8") == "combinado" and not (run_dir / "report.md").exists()
     acts = read_json(run_dir / "run.json")["resumes"][-1]["actions"]
-    assert sum("-> relatorio.md (nome novo" in a for a in acts) == 3, acts                # 2 videos + the combined
+    assert sum("-> relatorio.md (new name" in a for a in acts) == 3, acts                 # 2 videos + the combined
 
 
 def test_resume_rebuilds_missing_cache_and_refuses_changed_source(sb, capsys):
@@ -792,7 +792,7 @@ def test_resume_rebuilds_missing_cache_and_refuses_changed_source(sb, capsys):
     time.sleep(0.01)
     sb.v2.write_text(json.dumps({"duration_s": 441.2165, "n_frames": 31}), encoding="utf-8")
     code, env3, _ = run_cli(capsys, "--resume", "ultimo")
-    assert code == 4 and env3["error"]["code"] == "video_falhou" and "mudou" in env3["error"]["detail"]
+    assert code == 4 and env3["error"]["code"] == "video_falhou" and "changed" in env3["error"]["detail"]
 
 
 # --- other modes ---------------------------------------------------------------------------------------------
@@ -821,7 +821,7 @@ def test_trecho_reuses_frames_and_gets_its_own_batches(sb, capsys):
     assert read_json(Path(part["run_dir"]) / "run.json")["params"]["batches"]["range"] == [60.0, 120.0]
     code, late, _ = run_cli(capsys, "--pedido", write_pedido(sb, [sb.v2], options={"papeis": "inline",
                                                                                    "trecho": "00:07:00-00:09:00"}))
-    assert code == 0 and any("depois do fim" in w for w in late["videos"][0]["warnings"])
+    assert code == 0 and any("after the end" in w for w in late["videos"][0]["warnings"])
     assert late["workflow_args"]["videos"][0]["duration"] == "00:00:21"
 
 
@@ -907,6 +907,6 @@ def test_jobs_2_spawn_pool_subprocess(sb, skill_dir):
     assert [v["slug"] for v in res["workflow_args"]["videos"]] == ["repasse-fluxo-de-carga-20260818-160841",
                                                                    "venda-zero-clientes", "aula-3"]
     assert contracts.check_workflow_args(res["workflow_args"]) == []
-    assert "2 em paralelo" in err
+    assert "2 in parallel" in err
     assert sorted(calls(sb)) == sorted(["cues", "frames", "batches"] * 3)
     assert not list((skill_dir / "scripts").rglob("__pycache__"))

@@ -205,8 +205,8 @@ def test_lock_second_waits_then_times_out(tmp_path):
         t0 = time.monotonic()
         with pytest.raises(K.LockTimeout) as exc:
             K.VideoLock(p, wait_s=0.3, poll_s=0.05, on_wait=msgs.append).acquire()
-        assert time.monotonic() - t0 >= 0.3 and "ocupada" in str(exc.value)
-        assert msgs and "esperando a trava" in msgs[0]
+        assert time.monotonic() - t0 >= 0.3 and "busy" in str(exc.value)
+        assert msgs and "waiting for the lock" in msgs[0]
 
 
 def test_lock_second_gets_it_after_release(tmp_path):
@@ -358,10 +358,10 @@ def test_prepare_video_failures(tmp_path, fakes):
     missing = _job(tmp_path / "m", fakes)
     Path(missing["video_path"]).unlink()
     r = K.prepare_video(missing)
-    assert not r["ok"] and "vídeo ausente" in r["error"]["detail"]
+    assert not r["ok"] and "video missing" in r["error"]["detail"]
     changed = _job(tmp_path / "c", fakes, expected_fp="00000000")
     r = K.prepare_video(changed)
-    assert not r["ok"] and "mudou" in r["error"]["detail"]
+    assert not r["ok"] and "changed" in r["error"]["detail"]
 
 
 def test_prepare_video_lock_timeout(tmp_path, fakes):
@@ -369,7 +369,7 @@ def test_prepare_video_lock_timeout(tmp_path, fakes):
     Path(job["video_dir"]).mkdir(parents=True)
     with K.VideoLock(Path(job["video_dir"]) / ".lock"):
         r = K.prepare_video(job)
-    assert not r["ok"] and r["error"]["code"] == "video_falhou" and "outro prepare.py" in r["error"]["detail"]
+    assert not r["ok"] and r["error"]["code"] == "video_falhou" and "another prepare.py" in r["error"]["detail"]
 
 
 def test_prepare_video_interrupt_releases_lock(tmp_path, fakes):
@@ -384,7 +384,7 @@ def test_prepare_video_stage_unavailable(tmp_path, fakes, monkeypatch):
     job = _job(tmp_path, fakes)
 
     def broken(name):
-        raise K.StageUnavailable("va.render não pôde ser importado (teste)")
+        raise K.StageUnavailable("va.render could not be imported (test)")
     monkeypatch.delitem(K.STAGE_OVERRIDES, "run_batches_stage")
     monkeypatch.setattr(K, "stage_fn", lambda name: broken(name) if name == "run_batches_stage" else fakes[name])
     r = K.prepare_video(job)

@@ -1,275 +1,285 @@
-# Problemas: sintoma, causa e o que fazer
+# Problems: symptom, cause and what to do
 
-O `prepare.py` grava o progresso em `C:\Users\digom\video-analysis\logs\` e o estado em
-`runs\<run_id>\status.json`. Os erros dele saem como `{"ok": false, "error": {"code", "detail"}}`, com o
-código de saída `2` (entrada), `3` (ambiente), `4` (um vídeo falhou), `130` (interrompido) ou `1` (erro
-interno); a tabela dos `error.code` está em [`contratos.md`](contratos.md), seção 2. Erro no prepare
-renomeia o pedido para `pedido.erro.md` (o `--estimar` não mexe nele). Os comandos citados aqui são os do
-`SKILL.md`, com o mesmo prefixo pré-aprovado.
+`prepare.py` writes its progress to `C:\Users\digom\video-analysis\logs\` and its state to
+`runs\<run_id>\status.json`. Its errors come out as `{"ok": false, "error": {"code", "detail"}}`, with exit
+code `2` (input), `3` (environment), `4` (a video failed), `130` (interrupted) or `1` (internal error);
+the table of the `error.code` values is in [`contratos.md`](contratos.md), section 2. An error in the
+prepare renames the request to `pedido.erro.md` (`--estimar` does not touch it). The commands cited here
+are those of `SKILL.md`, with the same pre-approved prefix.
 
-## Preparação (`prepare.py`)
+## Preparation (`prepare.py`)
 
-### Legenda `.vtt` não encontrada (saída 2)
+### `.vtt` subtitles not found (exit code 2)
 
-- **Causa:** a regra é estrita: a legenda tem **o mesmo nome do vídeo**, só com a extensão `.vtt`, na
-  mesma pasta. O `detail` lista os candidatos da pasta (nomes que são prefixo do vídeo ou parecidos) e
-  sugere um `Rename-Item`. Nada é renomeado sozinho.
-- **Padrão do Teams:** a gravação sai como `<Reunião>-AAAAMMDD_HHMMSS-Gravação de Reunião.mp4` (ou
-  `…-Meeting Recording.mp4`), e a transcrição baixada, como `<Reunião>.vtt`. Exemplo:
+- **Cause:** the rule is strict: the subtitles have **the same name as the video**, only with the `.vtt`
+  extension, in the same folder. The `detail` lists the candidates in the folder (names that are a prefix
+  of the video name or similar to it) and suggests a `Rename-Item`. Nothing is renamed on its own.
+- **Teams pattern:** the recording comes out as `<Meeting>-YYYYMMDD_HHMMSS-Gravação de Reunião.mp4` (or
+  `…-Meeting Recording.mp4`), and the downloaded transcript as `<Meeting>.vtt`. Example:
 
   ```powershell
   Rename-Item -LiteralPath 'C:\…\Indicador PES.vtt' -NewName 'Indicador PES-20260610_150844-Gravação de Reunião.vtt'
   ```
 
-- **O que fazer:** mostre os candidatos e o comando sugerido (também em `missing_vtt`). Rode-o, no
-  PowerShell, só depois do "sim" do usuário, ou deixe que ele rode. Depois, repita: se o erro veio do
-  prepare, grave o pedido de novo (o anterior virou `pedido.erro.md`); se veio do `--estimar`, o
-  `pedido.md` continua lá.
-  - Renomeie a `.vtt`, não o vídeo: vídeo renomeado ganha outra chave de cache e é extraído de novo.
-  - Use `-LiteralPath`: com `-Path`, colchetes no nome (`[PES] …`) viram curinga.
-  - No PowerShell, `’` e `‘` também fecham string entre aspas simples: dentro dela, dobre-os (`’’`).
-  - Com um vídeo só, a alternativa é apontar a legenda: `--vtt "<caminho da .vtt>"` no comando do prepare.
-  - Numa pasta com vídeos sem legenda, `--skip-missing` no comando do prepare pula esses vídeos.
+- **What to do:** show the candidates and the suggested command (also in `missing_vtt`). Run it, in
+  PowerShell, only after the user's "yes", or let the user run it. Then repeat: if the error came from
+  the prepare, write the request again (the previous one became `pedido.erro.md`); if it came from
+  `--estimar`, `pedido.md` is still there.
+  - Rename the `.vtt`, not the video: a renamed video gets another cache key and is extracted again.
+  - Use `-LiteralPath`: with `-Path`, brackets in the name (`[PES] …`) become wildcards.
+  - In PowerShell, `’` and `‘` also close a single-quoted string: inside it, double them (`’’`).
+  - With a single video, the alternative is to point to the subtitles: `--vtt "<path of the .vtt>"` in
+    the prepare command.
+  - In a folder with videos without subtitles, `--skip-missing` in the prepare command skips those videos.
 
-### Vídeo não encontrado (saída 2)
+### Video not found (exit code 2)
 
-- **Causa:** caminho errado, ou cortado errado ao separar do objetivo (pasta com espaços, sem aspas).
-  Acentos, `’`, nomes vindos do Mac, espaços duplos e colchetes o `prepare.py` já resolve.
-- **O que fazer:** confirme o caminho com o usuário e grave o pedido de novo. A busca numa pasta não
-  entra em subpastas: liste cada subpasta numa linha de `# videos`.
+- **Cause:** a wrong path, or one cut wrongly when separating it from the objective (a folder with spaces,
+  without quotes). Accents, `’`, names coming from a Mac, double spaces and brackets are already handled by
+  `prepare.py`.
+- **What to do:** confirm the path with the user and write the request again. The search in a folder does
+  not go into subfolders: list each subfolder on its own line of `# videos`.
 
-### Pedido ou opção inválidos (saída 2)
+### Invalid request or option (exit code 2)
 
-- **Causa:** `pedido_invalido` (seção faltando ou repetida, texto antes de `# videos`, linha de opção sem
-  `:`), `objetivo_ausente`, `opcao_invalida` (chave desconhecida ou valor fora do aceito) ou
-  `uso_invalido` (opções do comando que não combinam). O `detail` diz qual.
-- **O que fazer:** corrija e grave o pedido de novo, no formato de [`contratos.md`](contratos.md), seção 1.
+- **Cause:** `pedido_invalido` (a missing or repeated section, text before `# videos`, an option line
+  without `:`), `objetivo_ausente`, `opcao_invalida` (an unknown key or a value outside the accepted ones)
+  or `uso_invalido` (command options that do not go together). The `detail` says which.
+- **What to do:** fix it and write the request again, in the format of [`contratos.md`](contratos.md),
+  section 1.
 
-### ffmpeg, ffprobe, Python, numpy ou Pillow ausentes (saída 3)
+### ffmpeg, ffprobe, Python, numpy or Pillow missing (exit code 3)
 
-- **O que fazer:** `/video-analysis setup`. Logo depois de instalar algo, o PATH novo só vale num Claude
-  Code reaberto. `workspace_inacessivel` é a pasta central sem gravação (passo 3 do setup);
-  `instalacao_incompleta` é a pasta da skill sem `scripts\va` inteiro: reinstale a skill.
+- **What to do:** `/video-analysis setup`. Right after installing something, the new PATH only applies in
+  a reopened Claude Code. `workspace_inacessivel` is the central folder without write access (step 3 of
+  the setup); `instalacao_incompleta` is the skill folder without the whole of `scripts\va`: reinstall the
+  skill.
 
-### Um vídeo falhou (saída 4)
+### A video failed (exit code 4)
 
-- **Causa:** arquivo corrompido, sem faixa de vídeo, ou ainda sendo baixado ou gravado. O motivo está em
-  `errors` e no log.
-- **O que fazer:** diga qual vídeo e por quê, numa frase, e pergunte se segue com os outros. O run deles
-  está pronto: `run.json` gravado e `workflow_args` no JSON (passo 6 do `SKILL.md`, com esse JSON). O pedido
-  virou `pedido.erro.md`, com uma cópia na pasta do run.
+- **Cause:** a corrupted file, one without a video track, or one still being downloaded or recorded. The
+  reason is in `errors` and in the log.
+- **What to do:** say which video and why, in one sentence, and ask whether to go on with the others.
+  Their run is ready: `run.json` written and `workflow_args` in the JSON (step 6 of `SKILL.md`, with that
+  JSON). The request became `pedido.erro.md`, with a copy in the run folder.
 
-### Erro interno (saída 1)
+### Internal error (exit code 1)
 
-- **Causa:** um bug do `prepare.py` (`erro_interno`). O traceback fica no log em `logs\`.
-- **O que fazer:** diga o `detail` e o caminho do log numa frase; não tente contornar com outro comando
-  nem com script próprio.
+- **Cause:** a bug in `prepare.py` (`erro_interno`). The traceback is in the log in `logs\`.
+- **What to do:** give the `detail` and the path of the log in one sentence; do not try to work around it
+  with another command or with a script of your own.
 
-### Interrompido (saída 130), ou cortado pelo limite de 600 s do Bash
+### Interrupted (exit code 130), or cut off by the 600 s limit of Bash
 
-- **Causa:** Ctrl+C, Claude Code fechado, ou extração longa rodando em primeiro plano.
-- **O que fazer:** rode de novo, em segundo plano (`run_in_background`). Estágios completos ficam no
-  cache; uma extração de frames interrompida recomeça do zero, porque não há ponto de retomada no meio
-  dela. Em 1080p60, conte ~0,15× a duração do vídeo; em Teams 1080p, ~0,06×.
+- **Cause:** Ctrl+C, Claude Code closed, or a long extraction running in the foreground.
+- **What to do:** run it again, in the background (`run_in_background`). Completed stages stay in the
+  cache; an interrupted frame extraction starts over from scratch, because there is no resume point in
+  the middle of it. At 1080p60, count on ~0.15× the duration of the video; for Teams at 1080p, ~0.06×.
 
-### A última linha do stdout não veio inteira
+### The last line of stdout did not come through whole
 
-- **O que fazer:** leia `<run_dir>\prepare.json`, que tem o mesmo JSON. O `run_dir` é a primeira linha do
-  stderr (`run_dir: …`).
+- **What to do:** read `<run_dir>\prepare.json`, which has the same JSON. The `run_dir` is the first line
+  of stderr (`run_dir: …`).
 
-### "File has not been read yet" ao gravar o `pedido.md`
+### "File has not been read yet" when writing `pedido.md`
 
-- **Causa:** sobrou um `pedido.md`, por exemplo depois de um `--estimar` sem o prepare em seguida.
-- **O que fazer:** leia o arquivo e grave de novo.
+- **Cause:** a `pedido.md` was left over, for example after an `--estimar` not followed by the prepare.
+- **What to do:** read the file and write it again.
 
-### O prepare parece parado logo no começo
+### The prepare seems stuck right at the start
 
-- **Causa:** outro `prepare.py` está usando o mesmo vídeo (trava do cache). Ele espera até 30 min; trava
-  sem sinal de vida há 10 min é descartada.
-- **O que fazer:** espere, ou confira se há outro run do mesmo vídeo em andamento.
+- **Cause:** another `prepare.py` is using the same video (cache lock). It waits up to 30 min; a lock with
+  no sign of life for 10 min is discarded.
+- **What to do:** wait, or check whether there is another run of the same video in progress.
 
-### Caracteres estranhos na saída, ou `python` abre a Microsoft Store
+### Strange characters in the output, or `python` opens the Microsoft Store
 
-- **Causa:** comando rodado pelo PowerShell, que redecodifica a saída em cp1252, ou com `python3`, que no
-  Windows é o atalho da loja.
-- **O que fazer:** sempre a ferramenta Bash e sempre `python`, exatamente como no `SKILL.md`.
+- **Cause:** a command run through PowerShell, which re-decodes the output as cp1252, or with `python3`,
+  which on Windows is the Store shortcut.
+- **What to do:** always the Bash tool and always `python`, exactly as in `SKILL.md`.
 
-### Mais de 80 agentes, ou "run grande demais" (mais de 800)
+### More than 80 agents, or "run too large" (more than 800)
 
-- **Causa:** vídeo longo, vários vídeos no mesmo run ou `--curadoria lotes`, que quase dobra a conta. Por
-  vídeo, são 1 agente por lote e mais 2 (com `lotes`, 2 por lote e mais 1); com dois vídeos ou mais, o run
-  tem mais 1. Uma reunião de 55 min dá ≈ 50 lotes, ≈ 52 agentes (≈ 100 com `lotes`) e horas em série.
-- **O que fazer:** acima de 80, confirme com o usuário antes de disparar. Acima de 800, o prepare sai
-  com `run_grande_demais` e o Workflow recusa (o teto dele é 1000); `--forcar` só faz o prepare aceitar.
-  Divida em runs menores, use `--trecho` no que importa, ou `--max-lotes` para testar o objetivo antes;
-  com `--curadoria lotes`, rodar sem ela corta a conta quase pela metade. Na retomada, só `--max-lotes` e
-  `--curadoria plano` mudam a conta: sem `--curadoria`, vale a do run (um run anterior à opção volta com
-  `lotes`).
+- **Cause:** a long video, several videos in the same run, or `--curadoria lotes`, which almost doubles
+  the count. Per video, there is 1 agent per batch plus 2 (with `lotes`, 2 per batch plus 1); with two or
+  more videos, the run has 1 more. A 55 min meeting gives ≈ 50 batches, ≈ 52 agents (≈ 100 with `lotes`)
+  and hours in series.
+- **What to do:** above 80, confirm with the user before launching. Above 800, the prepare exits with
+  `run_grande_demais` and the Workflow refuses (its cap is 1000); `--forcar` only makes the prepare
+  accept it. Split into smaller runs, use `--trecho` on what matters, or `--max-lotes` to test the
+  objective first; with `--curadoria lotes`, running without it cuts the count almost in half. On resume,
+  only `--max-lotes` and `--curadoria plano` change the count: without `--curadoria`, the run's applies (a
+  run older than the option comes back with `lotes`).
 
-## Frames e legenda
+## Frames and subtitles
 
-### Aviso de densidade: frames demais por minuto
+### High-density warning: too many frames per minute
 
-- **Causa:** mais de 12 frames/min no vídeo, ou mais de 30 num minuto qualquer. Em geral, uma região que
-  muda sozinha escapou da máscara automática: webcam, relógio, animação, notificação.
-- **O que fazer:** se o aviso trouxer região sugerida, ofereça repetir com `--ignorar-regiao x,y,w,h` (no
-  pedido, `ignorar_regiao`). Sem sugestão, `--sensibilidade low`. A legenda vem do cache; os frames são
-  extraídos de novo. Detalhes em [`parametros.md`](parametros.md).
+- **Cause:** more than 12 frames/min in the video, or more than 30 in any one minute. Usually a region
+  that changes by itself escaped the automatic mask: webcam, clock, animation, notification.
+- **What to do:** if the warning brings a suggested region to ignore, offer to repeat with
+  `--ignorar-regiao x,y,w,h` (in the request, `ignorar_regiao`). Without a suggestion,
+  `--sensibilidade low`. The subtitles come from the cache; the frames are extracted again. Details in
+  [`parametros.md`](parametros.md).
 
-### Uma mudança pequena não virou frame
+### A small change did not become a frame
 
-- **Causa:** é de propósito: um dígito ou até ~4 caracteres parecem cursor e contam como duplicado. Elas
-  se acumulam contra o último frame mantido, então uma sequência delas acaba aparecendo.
-- **O que fazer:** `--sensibilidade high` (mais frames, mais custo).
+- **Cause:** it is on purpose: a digit or up to ~4 characters look like a cursor and count as a duplicate.
+  They accumulate against the last kept frame, so a sequence of them ends up showing.
+- **What to do:** `--sensibilidade high` (more frames, more cost).
 
-### Troca só de cor não aparece
+### A color-only change does not show
 
-- **Causa:** a comparação é em tons de cinza: vermelho ↔ verde com o mesmo brilho não muda nada. Ícone
-  que também muda de forma é detectado.
-- **O que fazer:** nada nesta versão; é limitação conhecida.
+- **Cause:** the comparison is in grayscale: red ↔ green with the same brightness changes nothing. An icon
+  that also changes shape is detected.
+- **What to do:** nothing in this version; it is a known limitation.
 
-### Filmagem de câmera com poucos frames
+### Camera footage with few frames
 
-- **Causa:** em câmera tudo se mexe, então a extração cai para ~2 frames/min e avisa.
-- **O que fazer:** nada: é o esperado. O conteúdo vem mais da fala.
+- **Cause:** in camera footage everything moves, so the extraction drops to ~2 frames/min and warns.
+- **What to do:** nothing: it is expected. The content comes more from the speech.
 
-### Painel que se atualiza sozinho sumiu da comparação
+### A panel that updates by itself dropped out of the comparison
 
-- **Causa:** a máscara de regiões quentes pegou uma animação longa da própria tela; aparece nos avisos.
-- **O que fazer:** só manual: `--hot-mode off` na linha de comando do prepare.
+- **Cause:** the hot-region mask caught a long animation of the screen itself; it shows in the warnings.
+- **What to do:** manual only: `--hot-mode off` on the prepare command line.
 
-### A legenda cobre menos da metade do vídeo, ou passa do fim
+### The subtitles cover less than half of the video, or go past the end
 
-- **Causa:** legenda de outro vídeo, ou transcrição do Teams que começou depois da gravação.
-- **O que fazer:** confira se é a `.vtt` certa. Para deslocar todas as falas: `--vtt-offset SEC` na linha
-  de comando do prepare (uso manual).
+- **Cause:** subtitles of another video, or a Teams transcript that started after the recording.
+- **What to do:** check that it is the right `.vtt`. To shift all the cues: `--vtt-offset SEC` on the
+  prepare command line (manual use).
 
-## Workflow e agentes
+## Workflow and agents
 
-### Pedido de permissão a cada frame ou relatório
+### Permission prompt for every frame or report
 
-- **Causa:** faltam as regras de permissão da pasta central, a grafia não pegou, ou o Claude Code ainda
-  não releu o `settings.json`. O `prepare.py` acusa com `env.permissions_ok: false`.
-- **O que fazer:** `/video-analysis setup` e, depois, Claude Code reaberto. Se continuar com as regras
-  gravadas, é a grafia: as duas formas (`~/…` e `//c/…`) ficam até a primeira análise mostrar qual vale.
+- **Cause:** the permission rules for the central folder are missing, their spelling did not match, or
+  Claude Code has not reread `settings.json` yet. `prepare.py` flags it with `env.permissions_ok: false`.
+- **What to do:** `/video-analysis setup` and, afterwards, a reopened Claude Code. If it continues with the
+  rules written, it is the spelling: both forms (`~/…` and `//c/…`) stay until the first analysis shows
+  which one works.
 
-### Pedido de permissão para o próprio `prepare.py` ou para o verificador
+### Permission prompt for `prepare.py` itself or for the verifier
 
-- **Causa:** o comando não casou com a pré-aprovação da skill: PowerShell em vez de Bash, `python3`,
-  outro caminho, ou o jeito como `${CLAUDE_SKILL_DIR}` é substituído no Windows.
-- **O que fazer:** use o comando exatamente como no `SKILL.md`. Se ainda pedir, o usuário aprova uma vez,
-  com "não perguntar de novo".
+- **Cause:** the command did not match the skill's pre-approval: PowerShell instead of Bash, `python3`,
+  another path, or the way `${CLAUDE_SKILL_DIR}` is substituted on Windows.
+- **What to do:** use the command exactly as in `SKILL.md`. If it still asks, the user approves it once,
+  with "don't ask again".
 
-### Tipo de agente não encontrado (`video-analysis-curator`, `video-analysis-analyst`)
+### Agent type not found (`video-analysis-curator`, `video-analysis-analyst`)
 
-- **Causa:** os agentes foram instalados depois que esta sessão abriu; agente novo só carrega com o
-  Claude Code reaberto.
-- **O que fazer:** `--papeis inline` agora, ou reabra o Claude Code. Cópia instalada desatualizada o
-  `prepare.py` já rebaixa para `inline` sozinho, com aviso.
+- **Cause:** the agents were installed after this session opened; a new agent only loads with Claude Code
+  reopened.
+- **What to do:** `--papeis inline` now, or reopen Claude Code. An out-of-date installed copy is already
+  downgraded to `inline` by `prepare.py` on its own, with a warning.
 
-### A ferramenta Workflow não existe nesta sessão
+### The Workflow tool does not exist in this session
 
-- **O que fazer:** siga [`sem-workflow.md`](sem-workflow.md).
+- **What to do:** follow [`sem-workflow.md`](sem-workflow.md).
 
-### O Workflow recusa o `scriptPath`, ou não conhece o nome `video-analysis`
+### The Workflow refuses the `scriptPath`, or does not know the name `video-analysis`
 
-- **Sintoma:** "scriptPath must be a script path this tool returned, or a file you can already read…", ou
-  a ferramenta diz que não há workflow com o nome `video-analysis`.
-- **Causa:** em `scriptPath`, a ferramenta só aceita o caminho que ela mesma devolveu ou um arquivo da
-  pasta da sessão, nunca o `script_path` da pasta da skill. O nome só existe com o workflow salvo em
-  `C:\Users\digom\.claude\workflows\video-analysis.js`, que o setup instala (passo 4) e que pode só
-  aparecer num Claude Code reaberto.
-- **O que fazer:** agora, chame o Workflow com `script` = o conteúdo do `script_path` (lido com Read, sem
-  editar) e os mesmos `args`. Custa ~13k tokens; na mesma conversa, um run seguinte pode passar em
-  `scriptPath` o caminho que o Workflow devolveu. Depois, `/video-analysis setup`; se o nome continuar
-  desconhecido, reabra o Claude Code. Com `env.workflow_current: false` no JSON do `prepare.py` (cópia
-  salva ausente ou de outra versão), faça o mesmo sem tentar o nome, que rodaria o script antigo.
+- **Symptom:** "scriptPath must be a script path this tool returned, or a file you can already read…", or
+  the tool says there is no workflow with the name `video-analysis`.
+- **Cause:** in `scriptPath`, the tool only accepts the path it returned itself or a file of the session
+  folder, never the `script_path` of the skill folder. The name only exists with the workflow saved in
+  `C:\Users\digom\.claude\workflows\video-analysis.js`, which the setup installs (step 4) and which may
+  only show up in a reopened Claude Code.
+- **What to do:** now, call the Workflow with `script` = the content of the `script_path` (read with Read,
+  without editing) and the same `args`. It costs ~13k tokens; in the same conversation, a later run can
+  pass in `scriptPath` the path the Workflow returned. Afterwards, `/video-analysis setup`; if the name is
+  still unknown, reopen Claude Code. With `env.workflow_current: false` in the `prepare.py` JSON (saved
+  copy missing or from another version), do the same without trying the name, which would run the old
+  script.
 
-### `workflow_args inválido (…)`
+### `invalid workflow_args (…)`
 
-- **Causa:** os args foram editados ou passados como string, ou o workflow salvo em
-  `~/.claude/workflows/` é de uma versão anterior da skill.
-- **O que fazer:** passe `workflow_args` como objeto JSON, exatamente como o `prepare.py` imprimiu. Se o
-  JSON se perdeu, `--resume <run_id>` imprime de novo. Se os args estavam certos e o verificador acusa o
-  workflow `diferente` (o `prepare.py`, com `env.workflow_current: false`), rode o setup (passo 4) e, até
-  lá, passe o script inline (passo 6 do `SKILL.md`).
+- **Cause:** the args were edited or passed as a string, or the workflow saved in
+  `~/.claude/workflows/` is from an earlier version of the skill.
+- **What to do:** pass `workflow_args` as a JSON object, exactly as `prepare.py` printed it. If the JSON
+  was lost, `--resume <run_id>` prints it again. If the args were right and the verifier flags the
+  workflow as `diferente` (`prepare.py`, with `env.workflow_current: false`), run the setup (step 4) and,
+  until then, pass the script inline (step 6 of `SKILL.md`).
 
-### Agente não grava o relatório: "Subagents should return findings as text…"
+### Agent does not write the report: "Subagents should return findings as text…"
 
-- **Sintoma:** o Write de um agente falha com "Subagents should return findings as text, not write report
-  files. Include this content in your final response instead.", e o relatório final ou o combinado não
-  aparece (`relatório final falhou duas vezes`, `síntese falhou duas vezes`).
-- **Causa:** o Claude Code bloqueia subagentes de gravar arquivos chamados exatamente `report.md`,
-  `summary.md` ou `findings.md`; outros nomes, como `relatorio.md`, passam. Por isso o relatório final é
-  `relatorio.md`, e os dois papéis proíbem esses três nomes e mandam gravar exatamente no caminho da
-  chamada. Com a skill atualizada, só aparece num run disparado com uma cópia antiga do workflow ou dos
-  papéis.
-- **O que fazer:** `/video-analysis setup` (o `--instalar-agentes` renova os papéis em `~/.claude/agents/`
-  e o workflow salvo) e `/video-analysis retomar`: os lotes prontos não são refeitos, só o que falta roda,
-  e um `report.md` de run antigo vale como relatório pronto. Na conversa do setup, dispare o `retomar` sem
-  o nome (seção seguinte).
+- **Symptom:** an agent's Write fails with "Subagents should return findings as text, not write report
+  files. Include this content in your final response instead.", and the final report or the combined one
+  does not show up (`final report failed twice`, `synthesis failed twice`).
+- **Cause:** Claude Code blocks subagents from writing files named exactly `report.md`, `summary.md` or
+  `findings.md`; other names, such as `relatorio.md`, go through. That is why the final report is
+  `relatorio.md`, and both roles forbid those three names and require writing exactly to the path in the
+  call. With the skill up to date, it only shows up in a run launched with an old copy of the workflow or
+  of the roles.
+- **What to do:** `/video-analysis setup` (`--instalar-agentes` renews the roles in `~/.claude/agents/`
+  and the saved workflow) and `/video-analysis retomar`: the finished batches are not redone, only what is
+  missing runs, and a `report.md` from an old run counts as a finished report. In the setup conversation,
+  launch `retomar` without the name (next section).
 
-### O Workflow roda a versão antiga (tenta gravar `report.md`, ou o retorno traz `output_tokens`)
+### The Workflow runs the old version (it tries to write `report.md`, or the return carries `output_tokens`)
 
-- **Causa:** o workflow salvo em `~/.claude/workflows/` mudou com esta sessão aberta, em geral pelo
-  `--instalar-agentes` do setup (o verificador avisa). A ferramenta Workflow guarda na memória, por
-  sessão, o workflow salvo que já leu: até o Claude Code reabrir, `name: "video-analysis"` segue rodando a
-  versão anterior, mesmo com o arquivo novo e `env.workflow_current: true`.
-- **O que fazer:** nesta conversa, não use o nome. Se o Workflow já devolveu um caminho de script nela,
-  copie o `script_path` por cima dele com Bash (`cp "<script_path>" "<caminho devolvido>"`, sem gastar
-  tokens) e chame com `scriptPath` = esse caminho e os mesmos `args`; sem ele, passe `script` = o conteúdo
-  do `script_path`, lido com Read, sem editar (~13k tokens). Ou feche e abra o Claude Code: numa sessão
-  nova, o nome lê o arquivo novo. O run que a versão antiga deixou incompleto segue com
-  `/video-analysis retomar`, disparado do mesmo jeito.
+- **Cause:** the workflow saved in `~/.claude/workflows/` changed while this session was open, usually
+  through the setup's `--instalar-agentes` (the verifier warns about it). The Workflow tool keeps in
+  memory, per session, the saved workflow it has already read: until Claude Code is reopened,
+  `name: "video-analysis"` keeps running the previous version, even with the new file and
+  `env.workflow_current: true`.
+- **What to do:** in this conversation, do not use the name. If the Workflow has already returned a script
+  path in it, copy the `script_path` over it with Bash (`cp "<script_path>" "<returned path>"`, without
+  spending tokens) and call with `scriptPath` = that path and the same `args`; without one, pass `script` =
+  the content of the `script_path`, read with Read, without editing (~13k tokens). Or close and reopen
+  Claude Code: in a new session, the name reads the new file. The run that the old version left
+  incomplete continues with `/video-analysis retomar`, launched the same way.
 
-### Lote `partial` ou `failed`
+### Batch `partial` or `failed`
 
-- **Causa:** o analista não abriu todas as imagens, nem na segunda tentativa, ou não gravou o relatório.
-  O relatório final lista as lacunas.
-- **O que fazer:** se o trecho importa, rode um run com `--trecho` cobrindo-o; o cache é reaproveitado.
+- **Cause:** the analyst did not open all the images, not even on the second attempt, or did not write the
+  report. The final report lists the gaps.
+- **What to do:** if the segment matters, start a run with `--trecho` covering it; the cache is reused.
 
-### Vídeo `failed`: "falhou em 2 lotes seguidos"
+### Video `failed`: "failed in 2 batches in a row"
 
-- **Causa:** quase sempre sistêmica: permissão, papel ilegível em `roles\`, cota.
-- **O que fazer:** resolva a causa (setup, cota) e `/video-analysis retomar`: nada pronto é refeito.
+- **Cause:** almost always systemic: permission, unreadable role in `roles\`, quota.
+- **What to do:** fix the cause (setup, quota) and `/video-analysis retomar`: nothing finished is redone.
 
-### Run interrompido: Claude Code fechado, cota, erro
+### Run interrupted: Claude Code closed, quota, error
 
-- **O que fazer:** `/video-analysis retomar`, para o mais recente, ou `retomar <run_id>`. A retomada é
-  pelos arquivos: recomeça no 1º lote sem relatório (`reports\batch_NNN.md`). Se o cache tiver sido
-  apagado (`--gc`), o `--resume` reconstrói os estágios com os mesmos parâmetros e pode demorar como uma
-  extração nova.
+- **What to do:** `/video-analysis retomar`, for the most recent one, or `retomar <run_id>`. Resuming
+  works from the files: it restarts at the 1st batch without a report (`reports\batch_NNN.md`). If the
+  cache has been deleted (`--gc`), `--resume` rebuilds the stages with the same parameters and may take
+  as long as a new extraction.
 
-### Limite de taxa ou cota
+### Rate limit or quota
 
-- **O que fazer:** `--paralelo 1`, `--esforco-analista medium` (ou `low`) e `--max-lotes` para testar; sem
-  `--curadoria lotes` (na retomada, `--curadoria plano`).
+- **What to do:** `--paralelo 1`, `--esforco-analista medium` (or `low`) and `--max-lotes` to test;
+  without `--curadoria lotes` (on resume, `--curadoria plano`).
 
-### Aviso "orçamento de tokens no fim"
+### "token budget running out" warning
 
-- **Causa:** a meta de tokens da conversa (um `+500k`, por exemplo) acabou, e o vídeo parou antes de um
-  lote.
-- **O que fazer:** `retomar` com meta maior, ou sem meta.
+- **Cause:** the conversation's token target (a `+500k`, for example) ran out, and the video stopped
+  before a batch.
+- **What to do:** `retomar` with a larger target, or without one.
 
-### Modo `inline` mais caro que o esperado
+### `inline` mode more expensive than expected
 
-- **Causa:** cada agente inline carrega o prompt padrão de subagente, a lista de ferramentas da sessão e
-  o CLAUDE.md da pasta.
-- **O que fazer:** setup com `--instalar-agentes` e Claude Code reaberto, para usar o modo `agents`.
+- **Cause:** each inline agent loads the default subagent prompt, the session's tool list and the
+  folder's CLAUDE.md.
+- **What to do:** setup with `--instalar-agentes` and Claude Code reopened, to use the `agents` mode.
 
-### Resposta fraca, ou `answered: no`
+### Weak answer, or `answered: no`
 
-- **Causa:** objetivo vago ou amplo demais.
-- **O que fazer:** reformule o objetivo e rode de novo: a extração vem do cache, só os agentes rodam.
+- **Cause:** an objective that is vague or too broad.
+- **What to do:** rephrase the objective and run again: the extraction comes from the cache, only the
+  agents run.
 
-### `retomar` não faz nada
+### `retomar` does nothing
 
-- **Causa:** o run já está completo, com `relatorio.md` em todo vídeo.
-- **O que fazer:** para outra pergunta sobre o mesmo vídeo, um run novo; o cache é reaproveitado.
+- **Cause:** the run is already complete, with `relatorio.md` in every video.
+- **What to do:** for another question about the same video, a new run; the cache is reused.
 
-### `retomar` falha com `run_nao_encontrado` ou `run_inconsistente` (saída 2)
+### `retomar` fails with `run_nao_encontrado` or `run_inconsistente` (exit code 2)
 
-- **Causa:** o id não existe em `runs\` (ou é prefixo de mais de um run), o prepare daquele run falhou
-  antes de gravar o `run.json`, ou faltam `run.json`/`objective.md` na pasta do run.
-- **O que fazer:** confira o id com o usuário (os runs ficam em `C:\Users\digom\video-analysis\runs\`); um
-  run sem `run.json` não tem como ser retomado: rode a análise de novo, que o cache é reaproveitado.
+- **Cause:** the id does not exist in `runs\` (or is a prefix of more than one run), that run's prepare
+  failed before writing `run.json`, or `run.json`/`objective.md` are missing from the run folder.
+- **What to do:** check the id with the user (the runs are in `C:\Users\digom\video-analysis\runs\`); a
+  run without `run.json` cannot be resumed: run the analysis again, and the cache is reused.

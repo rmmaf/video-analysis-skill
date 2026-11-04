@@ -1,4 +1,4 @@
-"""Data contracts of the video-analysis skill (spec section 6 + plan "Contrato unificado").
+"""Data contracts of the video-analysis skill (spec section 6 + plan "Unified contract").
 
 TypedDicts document the JSON shapes (key order in the files follows the field order here).
 Validators return a list of error strings; an empty list means the document is valid.
@@ -312,7 +312,7 @@ class WorkflowVideo(TypedDict):
     duration: str                  # "HH:MM:SS"
     n_frames: int
     batches_dir: str               # batch_NNN.md, sheet_NNN.jpg, transcript.md, summary.json, overview.jpg
-    out_dir: str                   # <run_dir>/v<N> (runs antigos: <run_dir>/<slug>): ledger.md, relatorio.md, prompts/, reports/
+    out_dir: str                   # <run_dir>/v<N> (older runs: <run_dir>/<slug>): ledger.md, relatorio.md, prompts/, reports/
     batch_images: list[int]        # images to open per batch (revisits within the batch excluded)
     start_batch: int               # first batch without reports/batch_NNN.md (1-based)
     ledger_exists: bool

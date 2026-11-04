@@ -80,7 +80,7 @@ _WARN_EXAMPLES = 3
 # --- parameters ------------------------------------------------------------------------------
 
 def parse_speaker_names(value: Any) -> dict[str, str]:
-    """``--speaker-names`` / pedido ``falantes`` -> {original name or tag: display name}.
+    """``--speaker-names`` / the request's ``falantes`` -> {original name or tag: display name}.
 
     Accepts a dict, a list of "A=B" strings, or one string "SPEAKER_01=Ana;SPEAKER_03=Bruno"
     (";" or newlines between entries). Keys are matched case-insensitively against the name
@@ -213,7 +213,7 @@ class _Cue:
 
 
 class _Warnings:
-    """Collects warnings by kind (count + first examples) and renders them once, in pt-BR."""
+    """Collects warnings by kind (count + first examples) and renders them once, in English."""
 
     def __init__(self) -> None:
         self.flags: list[str] = []
@@ -233,7 +233,7 @@ class _Warnings:
 
     def ex(self, kind: str) -> str:
         items = self.examples.get(kind) or []
-        return f" (ex.: {', '.join(items)})" if items else ""
+        return f" (e.g. {', '.join(items)})" if items else ""
 
 
 # --- read and blocks ---------------------------------------------------------------------------
@@ -245,7 +245,7 @@ def _decode(data: bytes, fallback: str, w: _Warnings) -> str:
         text = data.decode(fallback, errors="replace")
         if text.startswith("ï»¿"):      # a UTF-8 BOM seen through cp1252
             text = text[3:]
-        w.flag(f"legenda: não é UTF-8 válido; lida como {fallback}")
+        w.flag(f"subtitles: not valid UTF-8; read as {fallback}")
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     return unicodedata.normalize("NFC", text)
 
@@ -273,7 +273,7 @@ def _parse_blocks(text: str, w: _Warnings) -> tuple[str | None, list[tuple], int
     raw = 0
     has_header = bool(blocks) and blocks[0][0].startswith("WEBVTT")
     if not has_header:
-        w.flag("legenda: sem o cabeçalho WEBVTT")
+        w.flag("subtitles: missing the WEBVTT header")
     for b, block in enumerate(blocks):
         timing = [i for i, line in enumerate(block) if _TIMING_RE.match(line)]
         id_allowed = True
@@ -659,28 +659,28 @@ def _render_warnings(w: _Warnings, cues: list[_Cue], dur_ms: int | None, p: dict
     out = list(w.flags)
     n = w.counts
     if n.get("bad_time"):
-        out.append(f"legenda: {n['bad_time']} fala(s) com horário inválido (minutos ou segundos >= 60) "
-                   f"ignorada(s){w.ex('bad_time')}")
+        out.append(f"subtitles: {n['bad_time']} cue(s) with an invalid time (minutes or seconds >= 60) "
+                   f"ignored{w.ex('bad_time')}")
     if n.get("end_before_start"):
-        out.append(f"legenda: {n['end_before_start']} fala(s) com fim antes do início; fim = início + "
+        out.append(f"subtitles: {n['end_before_start']} cue(s) with end before start; end = start + "
                    f"{p['end_before_start_s']:g} s{w.ex('end_before_start')}")
     if n.get("junk_block"):
-        out.append(f"legenda: {n['junk_block']} bloco(s) sem horário ignorado(s)")
+        out.append(f"subtitles: {n['junk_block']} block(s) without a timing line ignored")
     if n.get("before_start"):
-        out.append(f"legenda: {n['before_start']} fala(s) antes do início do vídeo descartada(s) "
-                   f"(deslocamento {p['offset_s']:g} s)")
+        out.append(f"subtitles: {n['before_start']} cue(s) before the start of the video dropped "
+                   f"(offset {p['offset_s']:g} s)")
     if n.get("past_end") and dur_ms is not None:
-        out.append(f"legenda: {n['past_end']} fala(s) começam depois do fim do vídeo ({fmt_hms(dur_ms / 1000)}) "
-                   f"e foram descartadas; talvez precise de --vtt-offset{w.ex('past_end')}")
+        out.append(f"subtitles: {n['past_end']} cue(s) start after the end of the video ({fmt_hms(dur_ms / 1000)}) "
+                   f"and were dropped; you may need --vtt-offset{w.ex('past_end')}")
     if not cues:
-        out.append("legenda: nenhuma fala na legenda")
+        out.append("subtitles: no cues in the subtitles")
     elif dur_ms:
         first = min(c.start for c in cues)
         last = max(c.end for c in cues)
         share = (last - first) / dur_ms
         if share < p["warn_coverage_below"]:
-            out.append(f"legenda: as falas cobrem só {int(share * 100)}% do vídeo ({fmt_hms(first / 1000, 0)}–"
-                       f"{fmt_hms(last / 1000, 0)}); confira se é a .vtt certa ou use --vtt-offset")
+            out.append(f"subtitles: the cues cover only {int(share * 100)}% of the video ({fmt_hms(first / 1000, 0)}–"
+                       f"{fmt_hms(last / 1000, 0)}); check that it is the right .vtt or use --vtt-offset")
     return out
 
 

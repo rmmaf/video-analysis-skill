@@ -1,39 +1,40 @@
-"""Confere um run concluído da skill video-analysis (plano de testes, passo 2).
+"""Checks a finished run of the video-analysis skill (test plan, step 2).
 
-Uso:
-    python check_run.py <run_dir> [--args <workflow_args.json>] [--return <retorno.json | '{...}'>]
+Usage:
+    python check_run.py <run_dir> [--args <workflow_args.json>] [--return <return.json | '{...}'>]
 
-Os workflow_args (para achar batches_dir e out_dir de cada vídeo) vêm de --args ou de <run_dir>/run.json
-(chave "workflow_args"); <run_dir>/prepare.json é a reserva. Analisa os lotes 1..last de cada vídeo, com
-last = min(nº de lotes, options.max_batches), ou batches.planned do retorno quando --return é dado. A
-curadoria é options.curation: plan (o padrão do prepare.py) ou batches (--curadoria lotes, com o NEXT antes
-de cada lote depois do 1º); sem a chave, batches, porque o run é anterior à opção e tinha o NEXT.
+The workflow_args (to find the batches_dir and out_dir of each video) come from --args or from
+<run_dir>/run.json (key "workflow_args"); <run_dir>/prepare.json is the fallback. Examines batches 1..last
+of each video, with last = min(number of batches, options.max_batches), or batches.planned of the return
+when --return is given. The curation is options.curation: plan (the prepare.py default) or batches
+(--curadoria lotes, with the NEXT before each batch after the 1st); without the key, batches, because the
+run predates the option and had the NEXT.
 
-Checagens (uma linha cada: PASS, AVISO ou FAIL; só FAIL reprova):
-  args        o run_dir dos args é a pasta conferida
-  lote        imagens: linhas de imagem de batch_NNN.md = batch_images[n-1]. formato: o contrato de
-              scripts/va/render.py: a linha de imagem é só o caminho absoluto, com "/", de um .jpg, mais
-              " (revisita de Fxxxx)" quando o cabeçalho termina em "· = Fxxxx" (aceita também a forma
-              antiga em inglês, " (revisit of Fxxxx)"); revisita no lote ("· = Fxxxx (mesma tela, acima)"
-              ou "(same screen, above)") não tem linha de imagem; nenhum caminho se repete no lote; há uma
-              linha "Folha de contato:" (ou "Contact sheet:"), que nunca conta como imagem
-  ledger      existe; "Integrado até o lote: NNN de BBB" com BBB = nº de lotes e NNN = last-1 (ou last) com
-              batches, ou de 000 a last com plan (o INIT grava 000; sem o NEXT, ninguém reescreve o ledger);
-              palavras (orçamento 1.500); tabela do plano (cabeçalho com "lotes")
-  prompt      existe (com plan, só o do lote 1 é exigido; os dos outros lotes são conferidos se existirem);
-              cita o caminho absoluto de batch_NNN.md; fala copiada: 8 a 11 palavras seguidas de uma fala
-              do lote = citação curta (AVISO), 12 ou mais, ou a fala inteira = cópia (FAIL); referências a
-              frames, com um intervalo F0041–F0045 contando como 1: até 8 (os 3–6 itens de Foco e os até 2
-              frames de referência do papel do curador), até 16 AVISO, acima FAIL (lista de frames
-              copiada); palavras (orçamento 450)
-  relatório   cita todos os frames do lote, um a um ou dentro de um intervalo (F0042–F0045)
-  final       <out_dir>/relatorio.md tem "Resposta ao objetivo" e "Cobertura: lotes x/B" com x = last; frames
-              a/b iguais ao retorno
-  combinado   <run_dir>/relatorio.md quando há 2+ vídeos
-  retorno     (--return) frames vistos = esperados; status ≠ failed; partial quando planned < total
+Checks (one line each: PASS, AVISO or FAIL; only FAIL fails the run):
+  args        the run_dir of the args is the folder being checked
+  batch       images: image lines of batch_NNN.md = batch_images[n-1]. format: the contract of
+              scripts/va/render.py: the image line is only the absolute path, with "/", of a .jpg, plus
+              " (revisita de Fxxxx)" when the header ends in "· = Fxxxx" (also accepts the old English
+              form, " (revisit of Fxxxx)"); an in-batch revisit ("· = Fxxxx (mesma tela, acima)" or
+              "(same screen, above)") has no image line; no path repeats in the batch; there is a
+              "Folha de contato:" line (or "Contact sheet:"), which never counts as an image
+  ledger      exists; "Integrado até o lote: NNN de BBB" with BBB = number of batches and NNN = last-1 (or
+              last) with batches, or from 000 to last with plan (the INIT writes 000; without the NEXT,
+              nobody rewrites the ledger); words (budget 1,500); plan table (header with "lotes")
+  prompt      exists (with plan, only the one of batch 1 is required; those of the other batches are
+              checked if they exist); cites the absolute path of batch_NNN.md; copied cue: 8 to 11
+              consecutive words of a cue of the batch = short quote (AVISO), 12 or more, or the whole cue =
+              copy (FAIL); references to frames, with a range F0041–F0045 counting as 1: up to 8 (the 3–6
+              Foco items and up to 2 reference frames of the curator role), up to 16 AVISO, above FAIL
+              (copied frame list); words (budget 450)
+  report      cites every frame of the batch, one by one or inside a range (F0042–F0045)
+  final       <out_dir>/relatorio.md has "Resposta ao objetivo" and "Cobertura: lotes x/B" with x = last;
+              frames a/b equal to the return
+  combined    <run_dir>/relatorio.md when there are 2+ videos
+  return      (--return) frames seen = expected; status ≠ failed; partial when planned < total
 
-Orçamentos de palavras: até o limite, PASS; até 1,5 vez o limite, AVISO; acima, FAIL.
-Saída: 0 nenhum FAIL (pode haver AVISO) · 1 alguma checagem falhou · 2 erro de uso.
+Word budgets: up to the limit, PASS; up to 1.5 times the limit, AVISO; above, FAIL.
+Exit code: 0 no FAIL (there may be AVISO) · 1 some check failed · 2 usage error.
 """
 from __future__ import annotations
 
@@ -48,14 +49,14 @@ from dataclasses import dataclass, field  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 PASS, AVISO, FAIL = "PASS", "AVISO", "FAIL"
-FINAL_MD = "relatorio.md"   # relatório final, por vídeo e combinado (nunca report.md: o harness bloqueia subagentes)
+FINAL_MD = "relatorio.md"   # final report, per video and combined (never report.md: the harness blocks subagents)
 MAX_LEDGER_WORDS = 1500
 MAX_PROMPT_WORDS = 450
-SOFT_FACTOR = 1.5      # orçamento estourado até 1,5x: AVISO; acima: FAIL
-MAX_FRAME_REFS = 8     # papel do curador: Foco com 3-6 itens por id/tempo + até 2 frames de referência
-HARD_FRAME_REFS = 16   # acima disso o prompt está listando os frames do lote
-COPY_WORDS = 8         # 8+ palavras seguidas de uma fala: citação curta (AVISO)
-HARD_COPY_WORDS = 12   # 12+ palavras seguidas, ou a fala inteira (com 8+ palavras): cópia (FAIL)
+SOFT_FACTOR = 1.5      # budget exceeded up to 1.5x: AVISO; above: FAIL
+MAX_FRAME_REFS = 8     # curator role: Foco with 3-6 items by id/time + up to 2 reference frames
+HARD_FRAME_REFS = 16   # above this the prompt is listing the frames of the batch
+COPY_WORDS = 8         # 8+ consecutive words of a cue: short quote (AVISO)
+HARD_COPY_WORDS = 12   # 12+ consecutive words, or the whole cue (with 8+ words): copy (FAIL)
 
 FRAME_HDR = re.compile(r"^###\s+(F\d{4,5})\b(.*)$")
 SAME_ABOVE = re.compile(r"·\s*=\s*(F\d{4,5})\s*\((?:mesma tela, acima|same screen, above)\)\s*$")
@@ -111,9 +112,9 @@ def count_words(text: str) -> int:
 
 
 def parse_batch(text: str) -> Batch:
-    """Frames, falas, linhas de imagem e desvios do formato de batch_NNN.md (scripts/va/render.py).
-    Linha de imagem = linha que começa com um caminho absoluto; a da folha de contato começa com o
-    rótulo e nunca conta."""
+    """Frames, cues, image lines and format deviations of batch_NNN.md (scripts/va/render.py).
+    Image line = a line that starts with an absolute path; the contact sheet line starts with the
+    label and never counts."""
     b = Batch()
     cur: dict | None = None
     paths: set[str] = set()
@@ -124,14 +125,14 @@ def parse_batch(text: str) -> Batch:
         fid, n = cur["id"], cur["images"]
         if cur["kind"] == "above":
             if n:
-                b.problems.append(f"{fid}: revisita no lote com linha de imagem")
+                b.problems.append(f"{fid}: in-batch revisit with an image line")
             return
         if n != 1:
-            b.problems.append(f"{fid}: {n} linhas de imagem (esperado 1)")
+            b.problems.append(f"{fid}: {n} image lines (expected 1)")
         elif not cur["bad"] and cur["suffix"] != cur["ref"]:
-            want = f'"(revisita de {cur["ref"]})"' if cur["ref"] else "nenhum"
-            got = f'"(revisita de {cur["suffix"]})"' if cur["suffix"] else "nenhum"
-            b.problems.append(f"{fid}: sufixo da linha de imagem {got}, esperado {want}")
+            want = f'"(revisita de {cur["ref"]})"' if cur["ref"] else "none"
+            got = f'"(revisita de {cur["suffix"]})"' if cur["suffix"] else "none"
+            b.problems.append(f"{fid}: image line suffix {got}, expected {want}")
 
     for line in text.splitlines():
         m = FRAME_HDR.match(line)
@@ -146,7 +147,7 @@ def parse_batch(text: str) -> Batch:
         if SHEET_LINE.match(line):
             b.sheet = True
             if cur is not None:
-                b.problems.append(f"{cur['id']}: linha da folha de contato dentro da lista de frames")
+                b.problems.append(f"{cur['id']}: contact sheet line inside the frame list")
             continue
         if cur is None:
             continue
@@ -160,11 +161,11 @@ def parse_batch(text: str) -> Batch:
             s = IMG_STRICT.match(line)
             if not s:
                 cur["bad"] = True
-                b.problems.append(f"{cur['id']}: linha de imagem fora do formato: {line.strip()[:90]}")
+                b.problems.append(f"{cur['id']}: malformed image line: {line.strip()[:90]}")
                 continue
             cur["suffix"] = s.group(2)
             if s.group(1).lower() in paths:
-                b.problems.append(f"{cur['id']}: caminho de imagem repetido no lote")
+                b.problems.append(f"{cur['id']}: image path repeated in the batch")
             paths.add(s.group(1).lower())
     close()
     return b
@@ -175,7 +176,7 @@ def tokens(text: str) -> list[str]:
 
 
 def longest_run(a: list[str], b: list[str]) -> int:
-    """Maior sequência de palavras seguidas comum às duas listas."""
+    """Longest run of consecutive words common to both lists."""
     best, prev = 0, [0] * (len(b) + 1)
     for x in a:
         cur = [0] * (len(b) + 1)
@@ -189,8 +190,8 @@ def longest_run(a: list[str], b: list[str]) -> int:
 
 
 def copied_cues(prompt: str, cues: dict[str, str], n: int = COPY_WORDS) -> list[tuple[str, int, bool]]:
-    """(id, palavras seguidas reproduzidas, é cópia) das falas com n+ palavras seguidas no prompt.
-    É cópia com HARD_COPY_WORDS+ palavras seguidas, ou com a fala inteira; abaixo disso, citação curta."""
+    """(id, consecutive words reproduced, is a copy) of the cues with n+ consecutive words in the prompt.
+    It is a copy with HARD_COPY_WORDS+ consecutive words, or with the whole cue; below that, a short quote."""
     toks = tokens(prompt)
     grams = {tuple(toks[i:i + n]) for i in range(len(toks) - n + 1)}
     hits = []
@@ -203,7 +204,7 @@ def copied_cues(prompt: str, cues: dict[str, str], n: int = COPY_WORDS) -> list[
 
 
 def frame_refs(text: str) -> set[tuple[int, int]]:
-    """Referências distintas a frames; um intervalo F0041–F0045 conta como uma."""
+    """Distinct frame references; a range F0041–F0045 counts as one."""
     refs = {(int(a), int(b)) for a, b in RANGE_RE.findall(text)}
     refs |= {(int(a), int(a)) for a in SINGLE_RE.findall(RANGE_RE.sub(" ", text))}
     return refs
@@ -243,11 +244,11 @@ def load_workflow_args(run_dir: Path, args_path: str | None) -> tuple[dict, Path
         try:
             wa = find_workflow_args(json.loads(read(p)))
         except json.JSONDecodeError as e:
-            raise UsageError(f"{p}: JSON inválido ({e})") from e
+            raise UsageError(f"{p}: invalid JSON ({e})") from e
         if wa:
             return wa, p
-    raise UsageError("workflow_args não encontrados em " + ", ".join(str(p) for p in candidates)
-                     + " (use --args <arquivo com workflow_args>)")
+    raise UsageError("workflow_args not found in " + ", ".join(str(p) for p in candidates)
+                     + " (use --args <file with workflow_args>)")
 
 
 def load_return(arg: str) -> dict:
@@ -255,9 +256,9 @@ def load_return(arg: str) -> dict:
     try:
         data = json.loads(s) if s.startswith("{") else json.loads(read(Path(s)))
     except (OSError, json.JSONDecodeError) as e:
-        raise UsageError(f"--return ilegível: {e}") from e
+        raise UsageError(f"--return unreadable: {e}") from e
     if not isinstance(data, dict) or not isinstance(data.get("videos"), list):
-        raise UsageError("--return não tem a forma do retorno do workflow (falta videos[])")
+        raise UsageError("--return does not have the shape of the workflow return (videos[] missing)")
     return data
 
 
@@ -275,7 +276,7 @@ class Checker:
     def budget(self, value: int, limit: int, check: str, target: str, unit: str) -> None:
         hard = int(limit * SOFT_FACTOR)
         level = PASS if value <= limit else AVISO if value <= hard else FAIL
-        self.add_level(level, check, target, f"{value} {unit} · orçamento {limit} (FAIL acima de {hard})")
+        self.add_level(level, check, target, f"{value} {unit} · budget {limit} (FAIL above {hard})")
 
     def count(self, level: str) -> int:
         return sum(1 for r in self.rows if r.level == level)
@@ -285,11 +286,11 @@ class Checker:
         return self.count(FAIL)
 
     def table(self) -> str:
-        w1 = max([len("CHECAGEM")] + [len(r.check) for r in self.rows])
-        w2 = max([len("ALVO")] + [len(r.target) for r in self.rows])
-        out = [f"{'RESULT':6}  {'CHECAGEM':{w1}}  {'ALVO':{w2}}  DETALHE"]
+        w1 = max([len("CHECK")] + [len(r.check) for r in self.rows])
+        w2 = max([len("TARGET")] + [len(r.target) for r in self.rows])
+        out = [f"{'RESULT':6}  {'CHECK':{w1}}  {'TARGET':{w2}}  DETAIL"]
         out += [f"{r.level:6}  {r.check:{w1}}  {r.target:{w2}}  {r.detail}" for r in self.rows]
-        out.append(f"\n{len(self.rows)} checagens: {self.count(PASS)} PASS, {self.count(AVISO)} AVISO, {self.failed} FAIL")
+        out.append(f"\n{len(self.rows)} checks: {self.count(PASS)} PASS, {self.count(AVISO)} AVISO, {self.failed} FAIL")
         return "\n".join(out)
 
 
@@ -302,8 +303,8 @@ def check_video(chk: Checker, wa: dict, v: dict, rv: dict | None) -> None:
     last = min(total, int(maxb)) if int(maxb) > 0 else total
     if rv and isinstance(rv.get("batches"), dict) and isinstance(rv["batches"].get("planned"), int):
         last = rv["batches"]["planned"]
-    cur = (wa.get("options") or {}).get("curation") or "batches"  # sem a chave: run anterior à opção, tinha o NEXT
-    plan = cur == "plan"  # sem o NEXT: o INIT grava o ledger com 000 e só o prompt do lote 1
+    cur = (wa.get("options") or {}).get("curation") or "batches"  # without the key: the run predates the option and had the NEXT
+    plan = cur == "plan"  # without the NEXT: the INIT writes the ledger with 000 and only the prompt of batch 1
 
     batches: dict[int, Batch] = {}
     for n in range(1, last + 1):
@@ -313,9 +314,9 @@ def check_video(chk: Checker, wa: dict, v: dict, rv: dict | None) -> None:
             continue
         b = batches[n] = parse_batch(read(tl))
         want = images[n - 1] if n - 1 < len(images) else None
-        chk.add(b.images == want, "lote.imagens", tgt, f"{b.images} linhas de imagem · batch_images {want} · {len(b.frames)} frames")
-        probs = b.problems + ([] if b.sheet else ['sem a linha "Folha de contato:"'])
-        detail = "; ".join(probs[:3]) + (f" … (+{len(probs) - 3})" if len(probs) > 3 else "") if probs else "formato do render.py"
+        chk.add(b.images == want, "lote.imagens", tgt, f"{b.images} image lines · batch_images {want} · {len(b.frames)} frames")
+        probs = b.problems + ([] if b.sheet else ['missing the "Folha de contato:" line'])
+        detail = "; ".join(probs[:3]) + (f" … (+{len(probs) - 3})" if len(probs) > 3 else "") if probs else "render.py format"
         chk.add(not probs, "lote.formato", tgt, detail)
 
     ledger = out / "ledger.md"
@@ -323,16 +324,16 @@ def check_video(chk: Checker, wa: dict, v: dict, rv: dict | None) -> None:
         text = read(ledger)
         m = LEDGER_HDR.search(text)
         if not m:
-            chk.add(False, "ledger.integrado", slug, 'sem "Integrado até o lote: NNN de BBB"')
+            chk.add(False, "ledger.integrado", slug, 'missing "Integrado até o lote: NNN de BBB"')
         else:
             k, bb = int(m.group(1)), m.group(2)
             lo = 0 if plan else max(0, last - 1)
             ok = bb is not None and int(bb) == total and lo <= k <= last
-            want = f"{lo:03d}–{last:03d} de {total:03d} (curadoria plan)" if plan else f"{lo:03d} de {total:03d}"
-            fmt = "" if bb is not None else ' · formato esperado "NNN de BBB"'
-            chk.add(ok, "ledger.integrado", slug, f"{m.group(0)} · esperado {want}{fmt}")
-        chk.budget(count_words(text), MAX_LEDGER_WORDS, "ledger.palavras", slug, "palavras")
-        chk.add(has_plan_table(text), "ledger.plano", slug, "tabela do plano" if has_plan_table(text) else "sem tabela com cabeçalho \"lotes\"")
+            want = f"{lo:03d}–{last:03d} de {total:03d} (plan curation)" if plan else f"{lo:03d} de {total:03d}"
+            fmt = "" if bb is not None else ' · expected format "NNN de BBB"'
+            chk.add(ok, "ledger.integrado", slug, f"{m.group(0)} · expected {want}{fmt}")
+        chk.budget(count_words(text), MAX_LEDGER_WORDS, "ledger.palavras", slug, "words")
+        chk.add(has_plan_table(text), "ledger.plano", slug, "plan table" if has_plan_table(text) else "no table with a \"lotes\" header")
 
     for n in range(1, last + 1):
         tgt = f"{slug} {n:03d}"
@@ -340,43 +341,43 @@ def check_video(chk: Checker, wa: dict, v: dict, rv: dict | None) -> None:
         if (n == 1 or not plan or p.is_file()) and chk.add(p.is_file(), "prompt.existe", tgt, "" if p.is_file() else str(p)):
             text = read(p)
             want = norm(f"{v['batches_dir']}/batch_{n:03d}.md")
-            chk.add(want in norm(text), "prompt.caminho", tgt, "cita batch_NNN.md" if want in norm(text) else f"não cita {want}")
+            chk.add(want in norm(text), "prompt.caminho", tgt, "cites batch_NNN.md" if want in norm(text) else f"does not cite {want}")
             if n in batches:
                 hits = copied_cues(text, batches[n].cues)
-                copies = [f"{cid} ({k} palavras)" for cid, k, hard in hits if hard]
-                quotes = [f"{cid} ({k} palavras)" for cid, k, hard in hits if not hard]
+                copies = [f"{cid} ({k} words)" for cid, k, hard in hits if hard]
+                quotes = [f"{cid} ({k} words)" for cid, k, hard in hits if not hard]
                 if copies:
-                    chk.add_level(FAIL, "prompt.copia_fala", tgt, "copia " + ", ".join(copies[:6]))
+                    chk.add_level(FAIL, "prompt.copia_fala", tgt, "copies " + ", ".join(copies[:6]))
                 elif quotes:
-                    chk.add_level(AVISO, "prompt.copia_fala", tgt, "cita trecho de " + ", ".join(quotes[:6]))
+                    chk.add_level(AVISO, "prompt.copia_fala", tgt, "quotes an excerpt of " + ", ".join(quotes[:6]))
                 else:
-                    chk.add_level(PASS, "prompt.copia_fala", tgt, f"nenhum trecho de fala com {COPY_WORDS}+ palavras")
+                    chk.add_level(PASS, "prompt.copia_fala", tgt, f"no cue excerpt with {COPY_WORDS}+ words")
             refs = len(frame_refs(text))
             level = PASS if refs <= MAX_FRAME_REFS else AVISO if refs <= HARD_FRAME_REFS else FAIL
-            chk.add_level(level, "prompt.ids", tgt, f"{refs} referências a frames · até {MAX_FRAME_REFS} (FAIL acima de {HARD_FRAME_REFS})")
-            chk.budget(count_words(text), MAX_PROMPT_WORDS, "prompt.palavras", tgt, "palavras")
+            chk.add_level(level, "prompt.ids", tgt, f"{refs} frame references · up to {MAX_FRAME_REFS} (FAIL above {HARD_FRAME_REFS})")
+            chk.budget(count_words(text), MAX_PROMPT_WORDS, "prompt.palavras", tgt, "words")
         r = out / "reports" / f"batch_{n:03d}.md"
         if chk.add(r.is_file(), "relatorio.existe", tgt, "" if r.is_file() else str(r)) and n in batches:
             nums = covered_numbers(read(r))
             missing = [f for f in batches[n].frames if int(f[1:]) not in nums]
-            detail = f"faltam {', '.join(missing[:8])}{' …' if len(missing) > 8 else ''}" if missing else f"{len(batches[n].frames)} frames citados"
+            detail = f"missing {', '.join(missing[:8])}{' …' if len(missing) > 8 else ''}" if missing else f"{len(batches[n].frames)} frames cited"
             chk.add(not missing, "relatorio.frames", tgt, detail)
 
     final = out / FINAL_MD
     if chk.add(final.is_file(), "final.existe", slug, "" if final.is_file() else str(final)):
         text = read(final)
-        chk.add(bool(ANSWER.search(text)), "final.resposta", slug, '"Resposta ao objetivo"' if ANSWER.search(text) else 'sem "Resposta ao objetivo"')
+        chk.add(bool(ANSWER.search(text)), "final.resposta", slug, '"Resposta ao objetivo"' if ANSWER.search(text) else 'missing "Resposta ao objetivo"')
         m = COVERAGE.search(text)
         if not m:
-            chk.add(False, "final.cobertura", slug, 'sem "Cobertura: lotes x/B"')
+            chk.add(False, "final.cobertura", slug, 'missing "Cobertura: lotes x/B"')
         else:
             x, y = int(m.group(1)), int(m.group(2))
-            chk.add(x == last and y == total, "final.cobertura", slug, f"lotes {x}/{y} · esperado {last}/{total}")
+            chk.add(x == last and y == total, "final.cobertura", slug, f"batches {x}/{y} · expected {last}/{total}")
         frames = (rv or {}).get("frames")
         if frames and (rv.get("batches") or {}).get("from") == 1:
             fm = COV_FRAMES.search(text)
             got = f"{fm.group(1)}/{fm.group(2)}" if fm else None
-            chk.add(got == frames, "final.frames", slug, f"frames {got} · retorno {frames}")
+            chk.add(got == frames, "final.frames", slug, f"frames {got} · return {frames}")
 
 
 def check_return(chk: Checker, wa: dict, ret: dict) -> None:
@@ -384,43 +385,43 @@ def check_return(chk: Checker, wa: dict, ret: dict) -> None:
     for v in wa["videos"]:
         slug = str(v.get("slug"))
         rv = by_slug.get(slug)
-        if not chk.add(rv is not None, "retorno.video", slug, "" if rv else "ausente do retorno"):
+        if not chk.add(rv is not None, "retorno.video", slug, "" if rv else "missing from the return"):
             continue
         status, frames, b = rv.get("status"), rv.get("frames"), rv.get("batches") or {}
         if status == "skipped":
-            chk.add(True, "retorno.frames", slug, f"pulado ({FINAL_MD} já existia)")
+            chk.add(True, "retorno.frames", slug, f"skipped ({FINAL_MD} already existed)")
         elif frames is None and isinstance(b.get("from"), int) and isinstance(b.get("planned"), int) and b["from"] > b["planned"]:
-            chk.add(True, "retorno.frames", slug, "nenhum lote novo neste run (retomada só com o FINAL)")
+            chk.add(True, "retorno.frames", slug, "no new batch in this run (resume with the FINAL only)")
         else:
             m = re.fullmatch(r"(\d+)/(\d+)", str(frames or ""))
             chk.add(bool(m) and m.group(1) == m.group(2), "retorno.frames", slug, f"frames {frames}")
         partial_needed = isinstance(b.get("planned"), int) and isinstance(b.get("total"), int) and b["planned"] < b["total"]
         ok = status in ("ok", "partial", "skipped") and (status != "ok" or not partial_needed)
-        chk.add(ok, "retorno.status", slug, f"{status}{' (run limitado: esperado partial)' if partial_needed else ''}")
+        chk.add(ok, "retorno.status", slug, f"{status}{' (limited run: expected partial)' if partial_needed else ''}")
     comb = ret.get("combined")
     if isinstance(comb, dict) and comb.get("error"):
         chk.add(False, "retorno.combinado", "run", str(comb["error"]))
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="check_run.py", description="Confere um run concluído da skill video-analysis.")
-    ap.add_argument("run_dir", help="pasta do run (runs/<run_id>)")
-    ap.add_argument("--args", dest="args_path", help="arquivo com os workflow_args (padrão: <run_dir>/run.json)")
-    ap.add_argument("--return", dest="ret", help="retorno do workflow: arquivo JSON ou o JSON entre aspas")
+    ap = argparse.ArgumentParser(prog="check_run.py", description="Checks a finished run of the video-analysis skill.")
+    ap.add_argument("run_dir", help="run folder (runs/<run_id>)")
+    ap.add_argument("--args", dest="args_path", help="file with the workflow_args (default: <run_dir>/run.json)")
+    ap.add_argument("--return", dest="ret", help="workflow return: a JSON file or the JSON in quotes")
     ns = ap.parse_args(argv)
     run_dir = Path(ns.run_dir)
     try:
         if not run_dir.is_dir():
-            raise UsageError(f"pasta do run não encontrada: {run_dir}")
+            raise UsageError(f"run folder not found: {run_dir}")
         wa, src = load_workflow_args(run_dir, ns.args_path)
         ret = load_return(ns.ret) if ns.ret else None
     except UsageError as e:
-        print(f"erro: {e}", file=sys.stderr)
+        print(f"error: {e}", file=sys.stderr)
         return 2
 
     chk = Checker()
     same = norm(str(wa.get("run_dir", ""))).rstrip("/") == norm(str(run_dir.resolve())).rstrip("/")
-    chk.add(same, "args.run_dir", "run", f"args de {src.name}" if same else f"{src.name} aponta para {wa.get('run_dir')}")
+    chk.add(same, "args.run_dir", "run", f"args from {src.name}" if same else f"{src.name} points to {wa.get('run_dir')}")
     by_slug = {r.get("slug"): r for r in (ret or {}).get("videos", []) if isinstance(r, dict)}
     for v in wa["videos"]:
         check_video(chk, wa, v, by_slug.get(v.get("slug")))

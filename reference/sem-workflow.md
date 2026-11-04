@@ -1,265 +1,269 @@
-# Sem a ferramenta Workflow: o mesmo laço com a ferramenta Agent
+# Without the Workflow tool: the same loop with the Agent tool
 
-Use este roteiro só quando a ferramenta Workflow não existir nesta sessão, nem por `ToolSearch`
-(`select:Workflow`). É o laço de `workflow/video-analysis.js` conduzido por você, com os mesmos prompts,
-palavra por palavra (o script os mantém espelhados aqui). Os valores saem do `workflow_args` que o
-`prepare.py` imprimiu, também na retomada.
+Use this procedure only when the Workflow tool does not exist in this session, not even through
+`ToolSearch` (`select:Workflow`). It is the loop of `workflow/video-analysis.js` driven by you, with the
+same prompts, word for word (the script keeps them mirrored here). The values come from the
+`workflow_args` that `prepare.py` printed, also on resume.
 
-## Regras
+## Rules
 
-- **Não leia nenhum arquivo** do run nem do cache: nem prompt, nem ledger, nem relatório. Os agentes
-  leem; você só monta os prompts abaixo e confere as respostas.
-- Cada resposta de Agent é uma linha JSON (o rodapé pede isso). Guarde só uma tabela compacta por vídeo:
-  lote, estado (`ok`, `partial`, `failed`), imagens vistas/esperadas e avisos.
-- Não mostre prompts nem JSON ao usuário. No fim, apresente como no passo 7 do `SKILL.md`.
-- O laço manual gasta contexto seu, cerca de 1k tokens por lote. Vídeo longo: prefira uma sessão com a
-  ferramenta Workflow, ou divida com `--trecho`. Acima de 800 agentes estimados, não rode: divida.
+- **Do not read any file** of the run or of the cache: no prompt, no ledger, no report. The agents
+  read; you only assemble the prompts below and check the responses.
+- Each Agent response is one JSON line (the footer asks for it). Keep only a compact table per video:
+  batch, state (`ok`, `partial`, `failed`), images seen/expected and warnings.
+- Do not show prompts or JSON to the user. At the end, present as in step 7 of `SKILL.md`.
+- The manual loop spends your context, about 1k tokens per batch. Long video: prefer a session with the
+  Workflow tool, or split with `--trecho`. Above 800 estimated agents, do not run it: split.
 
-## Como chamar a ferramenta Agent
+## How to call the Agent tool
 
-| papel | `subagent_type` | `model` | `prompt` |
+| role | `subagent_type` | `model` | `prompt` |
 |---|---|---|---|
-| curador: INIT, NEXT, FINAL, CROSS | `video-analysis-curator`; no modo `inline`, `general-purpose` | `opus` | [preâmbulo, só no `inline`] + texto do modo + [nota de 2ª tentativa] + rodapé |
-| analista | `video-analysis-analyst`; no modo `inline`, `general-purpose` | `sonnet` | [preâmbulo, só no `inline`] + texto do analista + [nota de 2ª tentativa] + rodapé |
+| curator: INIT, NEXT, FINAL, CROSS | `video-analysis-curator`; in `inline` mode, `general-purpose` | `opus` | [preamble, only in `inline`] + mode text + [2nd-attempt note] + footer |
+| analyst | `video-analysis-analyst`; in `inline` mode, `general-purpose` | `sonnet` | [preamble, only in `inline`] + analyst text + [2nd-attempt note] + footer |
 
-- O modo vem de `roles_mode` nos args. As partes do prompt se juntam com uma linha em branco entre elas.
-- `description`: o rótulo do Workflow, `plano · <slug>`, `curadoria · <slug> 3/7`, `análise · <slug> 3/7`,
-  `relatório · <slug>` ou `síntese`, com ` · 2ª` na segunda tentativa.
-- **Um vídeo:** passe `run_in_background: false`, se o parâmetro existir; o passo seguinte depende do
-  resultado. **Vários vídeos:** até `options.max_parallel_videos` ao mesmo tempo; mande na mesma mensagem
-  a próxima chamada de cada vídeo ativo e avance cada um com a resposta dele. Os lotes de um vídeo são
-  sempre em série.
-- **Sem o parâmetro `model`**, no modo `inline` o analista roda no modelo da sessão (Opus, bem mais caro).
-  Para trabalho longo, rode o setup e reabra o Claude Code antes, para usar o modo `agents`.
-- **Esforço:** INIT, FINAL e CROSS em `high`; NEXT em `options.curator_effort`; analista em
-  `options.analyst_effort` (os dois `high` por padrão). Sem parâmetro de esforço na ferramenta Agent, vale
-  o `effort` do frontmatter do papel (modo `agents`) ou o da sessão (`inline`).
-- **Resposta:** a última linha da resposta é o JSON. Resposta que não é JSON válido é tentativa perdida.
-- **Motivo de uma falha:** os `warnings` da resposta unidos por `; ` (no FINAL e no CROSS, o `summary`),
-  até 160 caracteres. Nos avisos abaixo, `{motivo}` entra como ` (<motivo>)` e some quando não houver.
+- The mode comes from `roles_mode` in the args. The parts of the prompt are joined with a blank line
+  between them.
+- `description`: the Workflow label, `plan · <slug>`, `curation · <slug> 3/7`, `analysis · <slug> 3/7`,
+  `report · <slug>` or `synthesis`, with ` · 2nd` on the second attempt.
+- **One video:** pass `run_in_background: false`, if the parameter exists; the next step depends on the
+  result. **Several videos:** up to `options.max_parallel_videos` at the same time; send in the same
+  message the next call of each active video and advance each one with its own response. The batches of a
+  video are always in series.
+- **Without the `model` parameter**, in `inline` mode the analyst runs on the session model (Opus, much
+  more expensive). For long work, run the setup and reopen Claude Code first, to use `agents` mode.
+- **Effort:** INIT, FINAL and CROSS at `high`; NEXT at `options.curator_effort`; analyst at
+  `options.analyst_effort` (both `high` by default). Without an effort parameter in the Agent tool, the
+  `effort` of the role's frontmatter applies (`agents` mode), or the session's (`inline`).
+- **Response:** the last line of the response is the JSON. A response that is not valid JSON is a lost
+  attempt.
+- **Reason for a failure:** the `warnings` of the response joined by `; ` (in FINAL and CROSS, the
+  `summary`), up to 160 characters. In the warnings below, `{reason}` goes in as ` (<reason>)` and is left
+  out when there is none.
 
-## O laço, por vídeo
+## The loop, per video
 
-Para cada vídeo de `videos`:
+For each video in `videos`:
 
-0. **Já concluído** (`final_exists: true`): nenhuma chamada. Status `skipped`, relatório
+0. **Already done** (`final_exists: true`): no call. Status `skipped`, report
    `{out_dir}/relatorio.md`.
-1. **Contas.** `B` = número de itens de `batch_images`. `last` = `B`, ou `options.max_batches` se for
-   menor e maior que 0 (modo teste). `start` = `start_batch` se `ledger_exists`, senão 1. `pendentes` =
-   lista vazia (lotes analisados que nenhuma curadoria integrou ainda). `retomada` = `ledger_exists` e
-   `start` > 1. Contadores de falha seguida do curador e do analista em 0.
-2. **Plano.** Sem ledger (`ledger_exists: false`): INIT, que vale com `status: "ok"`; senão, repita uma
-   vez com a nota de 2ª tentativa do curador. Falhou nas duas → vídeo `failed`, aviso
-   `plano (INIT) falhou duas vezes{motivo}`, fim do vídeo. Com INIT bom, o lote 1 já tem prompt. Com
-   ledger, o lote `start` tem prompt se `start_prompt_exists`.
-3. **Lotes**, para `n` de `start` até `last`, em série:
-   1. **Curadoria**, só se `options.curation` é `batches` e o lote `n` ainda não tem prompt: NEXT `n`, que
-      vale com `status: "ok"` (2 tentativas, como o INIT). Sem `curation` ou com `plan`, não há NEXT: o lote
-      sem prompt vai direto ao analista de contingência (texto 4).
-      - Valeu: `pendentes` volta a vazio, `retomada` = falso, falhas do curador = 0. Para cada item de
-        `coverage` com `state` diferente de `complete`, rebaixe o lote (`incomplete` → `partial`,
-        `missing` → `failed`) e avise `lote {batch}: relatório incompleto` ou `… relatório ausente`. Se
-        `integrated_through` < `n` − 1, avise `ledger integrado só até o lote {integrated_through} ao
-        preparar o {n}`.
-      - Falhou nas duas: avise `curadoria do lote {n} falhou{motivo}: prompt de contingência` e siga com o
-        analista de contingência. Se foi a segunda curadoria seguida a falhar → vídeo `failed`, aviso
-        `curador falhou em 2 lotes seguidos: vídeo interrompido`, fim do vídeo.
-   2. **Análise:** o analista do lote `n`, com o texto 3 (há prompt do curador) ou o 4 (contingência).
-      Esperado = `batch_images[n-1]`. **Caminho errado:** resposta com `status` ≠ `failed` cujo
-      `report_path` difere de `{out_dir}/reports/batch_{NNN}.md` mesmo lido com `\` como `/`, barras
-      repetidas como uma, sem espaços nas pontas e sem distinguir maiúsculas. Vale se `status` ≠ `failed`,
-      o caminho não está errado, `frames_seen` ≥ esperado e `frames_missing` vazio. Senão, segunda
-      tentativa: o mesmo texto + a nota 5, ou a 5b se a primeira veio com caminho errado. Na segunda,
-      `frames_seen` já soma as duas tentativas.
-      - Valeu numa das duas → `ok`. Senão, a resposta com mais `frames_seen` entre as que têm `status` ≠
-        `failed`, caminho certo e `frames_seen` > 0 → `partial`; nenhuma → `failed`, com aviso
-        `lote {n}: relatório gravado em caminho errado ({onde})` se alguma veio com caminho errado
-        (`{onde}` como na nota 5b, da segunda se foi ela), senão `lote {n}: análise falhou{motivo}` se
-        houver motivo.
-      - Imagens vistas = min(`frames_seen`, esperado), 0 se `failed`; some vistas e esperadas do vídeo.
-      - Acrescente o lote a `pendentes`, com estado e contagem.
-      - Segundo lote seguido `failed` → vídeo `failed`, aviso
-        `analista falhou em 2 lotes seguidos: vídeo interrompido`, fim do vídeo. Lote que não falhou
-        zera o contador.
-4. **Relatório:** FINAL, que vale com `status` ≠ `failed` (2 tentativas). Falhou nas duas → vídeo
-   `failed`, aviso `relatório final falhou duas vezes{motivo}: rode /video-analysis retomar`. Valeu →
-   guarde `report_path` (vazio: `{out_dir}/relatorio.md`), `summary` e `answered`. Status do vídeo:
-   `partial` se houve lote `partial` ou `failed`, se o FINAL voltou `partial` ou se `last` < `B`; senão
-   `ok`.
+1. **Counts.** `B` = number of items in `batch_images`. `last` = `B`, or `options.max_batches` if it is
+   smaller and greater than 0 (test mode). `start` = `start_batch` if `ledger_exists`, else 1. `pending` =
+   empty list (analysed batches that no curation has integrated yet). `resumed` = `ledger_exists` and
+   `start` > 1. Counters of consecutive failures of the curator and of the analyst at 0.
+2. **Plan.** Without a ledger (`ledger_exists: false`): INIT, which succeeds with `status: "ok"`; otherwise,
+   repeat it once with the curator's 2nd-attempt note. Failed both times → video `failed`, warning
+   `plan (INIT) failed twice{reason}`, end of the video. With a good INIT, batch 1 already has a prompt.
+   With a ledger, batch `start` has a prompt if `start_prompt_exists`.
+3. **Batches**, for `n` from `start` to `last`, in series:
+   1. **Curation**, only if `options.curation` is `batches` and batch `n` has no prompt yet: NEXT `n`, which
+      succeeds with `status: "ok"` (2 attempts, like the INIT). Without `curation` or with `plan`, there is
+      no NEXT: the batch without a prompt goes straight to the contingency analyst (text 4).
+      - Succeeded: `pending` goes back to empty, `resumed` = false, curator failures = 0. For each item of
+        `coverage` with a `state` other than `complete`, demote the batch (`incomplete` → `partial`,
+        `missing` → `failed`) and warn `batch {batch}: report incomplete` or `… report missing`. If
+        `integrated_through` < `n` − 1, warn `ledger integrated only up to batch {integrated_through} when
+        preparing batch {n}`.
+      - Failed both times: warn `curation of batch {n} failed{reason}: contingency prompt` and go on with
+        the contingency analyst. If it was the second curation in a row to fail → video `failed`, warning
+        `curator failed in 2 batches in a row: video interrupted`, end of the video.
+   2. **Analysis:** the analyst of batch `n`, with text 3 (there is a curator prompt) or 4 (contingency).
+      Expected = `batch_images[n-1]`. **Wrong path:** a response with `status` ≠ `failed` whose
+      `report_path` differs from `{out_dir}/reports/batch_{NNN}.md` even when read with `\` as `/`,
+      repeated slashes as one, without spaces at the ends and without telling upper from lower case. It
+      succeeds if `status` ≠ `failed`, the path is not wrong, `frames_seen` ≥ expected and `frames_missing`
+      is empty. Otherwise, second attempt: the same text + note 5, or 5b if the first came with a wrong
+      path. In the second, `frames_seen` already adds up both attempts.
+      - Succeeded in either → `ok`. Otherwise, the response with the most `frames_seen` among those with
+        `status` ≠ `failed`, the right path and `frames_seen` > 0 → `partial`; none → `failed`, with the
+        warning `batch {n}: report written to the wrong path ({where})` if any came with a wrong path
+        (`{where}` as in note 5b, from the second if it was that one), otherwise
+        `batch {n}: analysis failed{reason}` if there is a reason.
+      - Images seen = min(`frames_seen`, expected), 0 if `failed`; add up the seen and expected of the
+        video.
+      - Add the batch to `pending`, with state and count.
+      - Second batch in a row `failed` → video `failed`, warning
+        `analyst failed in 2 batches in a row: video interrupted`, end of the video. A batch that did not
+        fail resets the counter.
+4. **Report:** FINAL, which succeeds with `status` ≠ `failed` (2 attempts). Failed both times → video
+   `failed`, warning `final report failed twice{reason}: run /video-analysis retomar`. Succeeded →
+   keep `report_path` (empty: `{out_dir}/relatorio.md`), `summary` and `answered`. Status of the video:
+   `partial` if there was a `partial` or `failed` batch, if the FINAL came back `partial` or if `last` <
+   `B`; otherwise `ok`.
 
-Depois de todos os vídeos: **CROSS**, se dois ou mais vídeos têm relatório e status diferente de `failed`
-(`ok`, `partial` ou `skipped`) e `combined_exists` é falso. Vale com `status` ≠ `failed` (2 tentativas):
-`combined` = `{report_path, answered, summary}` (caminho vazio: `{run_dir}/relatorio.md`); falhou nas
-duas, `combined` = `{error: "síntese falhou duas vezes{motivo}"}`.
+After all the videos: **CROSS**, if two or more videos have a report and a status other than `failed`
+(`ok`, `partial` or `skipped`) and `combined_exists` is false. It succeeds with `status` ≠ `failed` (2
+attempts): `combined` = `{report_path, answered, summary}` (empty path: `{run_dir}/relatorio.md`); failed
+both times, `combined` = `{error: "synthesis failed twice{reason}"}`.
 
-Avisos: até 6 por vídeo; com mais, os 4 primeiros, `+N avisos omitidos` e o último (num vídeo
-interrompido, o motivo). Vídeo interrompido deixa os
-arquivos para `/video-analysis retomar`.
+Warnings: up to 6 per video; with more, the first 4, `+N warnings omitted` and the last one (in an
+interrupted video, the reason). An interrupted video leaves the
+files for `/video-analysis retomar`.
 
 ## Prompts
 
-Copie cada linha como está. `{…}` é um valor a substituir: os nomes iguais aos dos args (`{slug}`,
+Copy each line as it is. `{…}` is a value to substitute: the names equal to those of the args (`{slug}`,
 `{duration}`, `{objective_path}`, `{batches_dir}`, `{out_dir}`, `{language}`, `{run_id}`, `{run_dir}`,
-`{roles_dir}`) vêm deles. `{n}` é o número do lote sem zeros e `{NNN}`, com 3 dígitos (`003`). Os demais
-estão definidos abaixo de cada bloco; quando a condição não vale, entram vazios.
+`{roles_dir}`) come from them. `{n}` is the batch number without zeros and `{NNN}`, with 3 digits (`003`).
+The others are defined below each block; when the condition does not hold, they go in empty.
 
-### Preâmbulo (só no modo inline), antes do texto do modo
+### Preamble (only in inline mode), before the mode text
 
 ```text
-Antes de qualquer outra ação, leia com Read o arquivo {roles_dir}/{papel}.md. Ele define seu papel e suas regras: siga-o como suas instruções de sistema (ignore o bloco entre --- no topo). Se não conseguir lê-lo, devolva status "failed" com warnings ["papel ilegível"].
+Before any other action, use Read to read the file {roles_dir}/{role}.md. It defines your role and your rules: follow it as your system instructions (ignore the block between --- at the top). If you cannot read it, return status "failed" with warnings ["unreadable role"].
 ```
 
-- `{papel}`: `video-analysis-curator` ou `video-analysis-analyst`.
+- `{role}`: `video-analysis-curator` or `video-analysis-analyst`.
 
-### Nota de 2ª tentativa do curador (INIT, NEXT, FINAL e CROSS), depois do texto do modo
+### Curator's 2nd-attempt note (INIT, NEXT, FINAL and CROSS), after the mode text
 
 ```text
-SEGUNDA TENTATIVA: a anterior falhou. Se algum arquivo de saída já existir, leia-o antes de sobrescrever (o Write exige) e complete o que faltar.
+SECOND ATTEMPT: the previous one failed. If any output file already exists, read it before overwriting (Write requires it) and complete what is missing.
 ```
 
 ### 1. INIT
 
 ```text
-MODO: INIT
-Vídeo: {slug} · {duration} · {B} lotes{teste}
-Objetivo (literal) e opções: {objective_path}
-Resumo do vídeo e dos lotes: {batches_dir}/summary.json
-Transcrição: {batches_dir}/transcript.md
-Visão geral (se existir): {batches_dir}/overview.jpg
-Lote 1: linha do tempo {batches_dir}/batch_001.md · prancha {batches_dir}/sheet_001.jpg · {batch_images[0]} imagens
-Idioma dos relatórios: {language}
-Grave: ledger em {out_dir}/ledger.md; depois o prompt do lote 1 em {out_dir}/prompts/batch_001.md.
+MODE: INIT
+Video: {slug} · {duration} · {B} batches{test}
+Objective (verbatim) and options: {objective_path}
+Summary of the video and the batches: {batches_dir}/summary.json
+Transcript: {batches_dir}/transcript.md
+Overview (if it exists): {batches_dir}/overview.jpg
+Batch 1: timeline {batches_dir}/batch_001.md · contact sheet {batches_dir}/sheet_001.jpg · {batch_images[0]} images
+Language of the reports: {language}
+Write: the ledger to {out_dir}/ledger.md; then the prompt of batch 1 to {out_dir}/prompts/batch_001.md.
 ```
 
-- `{duration}`: a `duration` do vídeo, ou `?` se vier vazia.
-- `{teste}`: ` (este run analisa só os lotes 1–{last}; planeje todos e marque os demais como fora deste run)`
-  quando `last` < `B`.
+- `{duration}`: the `duration` of the video, or `?` if it comes empty.
+- `{test}`: ` (this run analyses only batches 1–{last}; plan all of them and mark the others as outside this run)`
+  when `last` < `B`.
 
 ### 2. NEXT
 
 ```text
-MODO: NEXT
-Vídeo: {slug} · preparar o lote {n}/{last}{último}
-Objetivo: {objective_path}
+MODE: NEXT
+Video: {slug} · prepare batch {n}/{last}{last_of_run}
+Objective: {objective_path}
 Ledger: {out_dir}/ledger.md
-Relatórios a integrar:
-- lote {PPP}: {estado} → {out_dir}/reports/batch_{PPP}.md{falas}
-Confira "Integrado até" no ledger e integre os relatórios existentes em {out_dir}/reports até o lote {MMM}.
-Próximo lote: linha do tempo {batches_dir}/batch_{NNN}.md · prancha {batches_dir}/sheet_{NNN}.jpg · {batch_images[n-1]} imagens
-Grave: ledger atualizado em {out_dir}/ledger.md; depois o prompt em {out_dir}/prompts/batch_{NNN}.md.
+Reports to integrate:
+- batch {PPP}: {state} → {out_dir}/reports/batch_{PPP}.md{speech}
+Check "Integrado até" in the ledger and integrate the existing reports in {out_dir}/reports up to batch {MMM}.
+Next batch: timeline {batches_dir}/batch_{NNN}.md · contact sheet {batches_dir}/sheet_{NNN}.jpg · {batch_images[n-1]} images
+Write: the updated ledger to {out_dir}/ledger.md; then the prompt to {out_dir}/prompts/batch_{NNN}.md.
 ```
 
-- `{último}`: ` (último deste run)` quando `n` = `last`.
-- `Relatórios a integrar:` e as linhas `- lote …` entram só se `pendentes` não estiver vazia: uma linha por
-  lote pendente, na ordem. `{PPP}` é o número dele com 3 dígitos.
-  - `{estado}`: `ok, {vistas}/{esperadas} imagens`, `PARCIAL, {vistas}/{esperadas} imagens` ou
-    `FALHOU, sem relatório confiável`.
-  - `{falas}`: ` (falas do trecho: {batches_dir}/batch_{PPP}.md)` só para lote que falhou.
-- A linha `Confira "Integrado até"…` entra só quando `n` > 1 e (`retomada` ou `pendentes` vazia).
-  `{MMM}` = `n` − 1 com 3 dígitos.
+- `{last_of_run}`: ` (last of this run)` when `n` = `last`.
+- `Reports to integrate:` and the `- batch …` lines go in only if `pending` is not empty: one line per
+  pending batch, in order. `{PPP}` is its number with 3 digits.
+  - `{state}`: `ok, {seen}/{expected} images`, `PARTIAL, {seen}/{expected} images` or
+    `FAILED, no reliable report`.
+  - `{speech}`: ` (speech of the segment: {batches_dir}/batch_{PPP}.md)` only for a batch that failed.
+- The line `Check "Integrado até"…` goes in only when `n` > 1 and (`resumed` or `pending` empty).
+  `{MMM}` = `n` − 1 with 3 digits.
 
-### 3. Analista, com prompt do curador
+### 3. Analyst, with a curator prompt
 
 ```text
-Lote {n}/{last} do vídeo {slug}.
-Prompt do curador: {out_dir}/prompts/batch_{NNN}.md (leia primeiro e siga).
-Linha do tempo: {batches_dir}/batch_{NNN}.md
-Relatório: grave em {out_dir}/reports/batch_{NNN}.md
-Imagens do lote: {batch_images[n-1]} · Idioma do relatório: {language}
+Batch {n}/{last} of video {slug}.
+Curator prompt: {out_dir}/prompts/batch_{NNN}.md (read it first and follow it).
+Timeline: {batches_dir}/batch_{NNN}.md
+Report: write it to {out_dir}/reports/batch_{NNN}.md
+Images in the batch: {batch_images[n-1]} · Language of the report: {language}
 ```
 
-### 4. Analista de contingência, sem prompt do curador
+### 4. Contingency analyst, without a curator prompt
 
 ```text
-Lote {n}/{last} do vídeo {slug}. Não há prompt do curador para este lote: siga o contrato padrão do seu papel.
-Objetivo: {objective_path}. Contexto: seções 4 e 5 de {out_dir}/ledger.md, se existir.
-Linha do tempo: {batches_dir}/batch_{NNN}.md
-Relatório: grave em {out_dir}/reports/batch_{NNN}.md
-Imagens do lote: {batch_images[n-1]} · Idioma do relatório: {language}
+Batch {n}/{last} of video {slug}. There is no curator prompt for this batch: follow the default contract of your role.
+Objective: {objective_path}. Context: sections 4 and 5 of {out_dir}/ledger.md, if it exists.
+Timeline: {batches_dir}/batch_{NNN}.md
+Report: write it to {out_dir}/reports/batch_{NNN}.md
+Images in the batch: {batch_images[n-1]} · Language of the report: {language}
 ```
 
-### 5. Nota de 2ª tentativa do analista, depois do texto 3 ou 4
+### 5. Analyst's 2nd-attempt note, after text 3 or 4
 
 ```text
-SEGUNDA TENTATIVA. A anterior {resultado}. Se {out_dir}/reports/batch_{NNN}.md existir, leia-o antes de sobrescrever; abra as imagens que faltaram (na dúvida, todas) e grave o relatório completo.
+SECOND ATTEMPT. The previous one {result}. If {out_dir}/reports/batch_{NNN}.md exists, read it before overwriting; open the images that were missing (when in doubt, all of them) and write the complete report.
 ```
 
-- `{resultado}`: `abriu {frames_seen} de {batch_images[n-1]} imagens{faltaram}` se a primeira tentativa
-  devolveu JSON; `não terminou` se não devolveu.
-- `{faltaram}`: ` (faltaram: {frames_missing})`, com os ids separados por `, `, quando a lista não está
-  vazia.
+- `{result}`: `opened {frames_seen} of {batch_images[n-1]} images{missing}` if the first attempt returned
+  JSON; `did not finish` if it did not.
+- `{missing}`: ` (missing: {frames_missing})`, with the ids separated by `, `, when the list is not
+  empty.
 
-### 5b. Nota de 2ª tentativa do analista quando a anterior veio com caminho errado, no lugar da 5
+### 5b. Analyst's 2nd-attempt note when the previous one came with a wrong path, instead of 5
 
 ```text
-SEGUNDA TENTATIVA. A anterior {resultado}, mas gravou o relatório em {onde}, e não no caminho pedido. Grave o relatório completo exatamente em {out_dir}/reports/batch_{NNN}.md, copiando o caminho caractere por caractere, e devolva esse mesmo caminho em report_path. Antes, leia o que existir nesses dois caminhos e aproveite o que estiver certo; abra as imagens que faltaram (na dúvida, todas).
+SECOND ATTEMPT. The previous one {result}, but wrote the report to {where}, not to the requested path. Write the complete report exactly to {out_dir}/reports/batch_{NNN}.md, copying the path character by character, and return that same path in report_path. First, read whatever exists at those two paths and keep what is right; open the images that were missing (when in doubt, all of them).
 ```
 
-- `{resultado}`: `abriu {frames_seen} de {batch_images[n-1]} imagens{faltaram}`, como na nota 5.
-- `{onde}`: o `report_path` que a anterior devolveu, com `/` no lugar de `\` e sem espaços nas pontas;
-  `?` se veio vazio.
+- `{result}`: `opened {frames_seen} of {batch_images[n-1]} images{missing}`, as in note 5.
+- `{where}`: the `report_path` that the previous one returned, with `/` in place of `\` and without spaces
+  at the ends; `?` if it came empty.
 
 ### 6. FINAL
 
 ```text
-MODO: FINAL
-Vídeo: {slug} · lotes analisados: {planned} de {B}{parcial}
-Objetivo: {objective_path}
+MODE: FINAL
+Video: {slug} · batches analysed: {planned} of {B}{partial_coverage}
+Objective: {objective_path}
 Ledger: {out_dir}/ledger.md
-Relatórios de lote: {out_dir}/reports/batch_001.md … batch_{LLL}.md
-Ainda não integrados ao ledger (neste run): {não_integrados}; confira também "Integrado até".
-Parciais: {parciais} · Falhos: {falhos}
-{imagens_vistas}
-Transcrição (consulta pontual): {batches_dir}/transcript.md
-Idioma: {language}
-Grave o relatório final em {out_dir}/relatorio.md.
+Batch reports: {out_dir}/reports/batch_001.md … batch_{LLL}.md
+Not yet integrated into the ledger (in this run): {not_integrated}; also check "Integrado até".
+Partial: {partial_batches} · Failed: {failed_batches}
+{images_seen}
+Transcript (for spot checks): {batches_dir}/transcript.md
+Language: {language}
+Write the final report to {out_dir}/relatorio.md.
 ```
 
-- `{planned}` = `last`; `{LLL}` = `last` com 3 dígitos.
-- `{parcial}`: ` (cobertura parcial: diga isso no relatório)` quando `last` < `B`.
-- `{não_integrados}`: cada lote de `pendentes` como `{PPP} ({estado})`, com estado `ok`, `partial` ou
-  `failed`, separados por `, `; ou `nenhum`.
-- `{parciais}` e `{falhos}`: os números dos lotes `partial` e `failed`, sem zeros, separados por `, `; ou
-  `nenhum`.
-- `{imagens_vistas}`, com `{vistas}` e `{esperadas}` somadas neste run, `{SSS}` = `start` e `{RRR}` =
-  `start` − 1, os dois com 3 dígitos:
-  - `start` = 1: `Imagens vistas: {vistas} de {esperadas}`
-  - 1 < `start` ≤ `last`: `Imagens vistas: {vistas} de {esperadas} nos lotes {SSS}–{LLL} deste run; lotes 001–{RRR}: run anterior (veja o ledger)`
-  - `start` > `last` (só o FINAL): `Imagens vistas: nenhum lote novo neste run; lotes 001–{LLL}: run anterior (veja o ledger)`
+- `{planned}` = `last`; `{LLL}` = `last` with 3 digits.
+- `{partial_coverage}`: ` (partial coverage: say so in the report)` when `last` < `B`.
+- `{not_integrated}`: each batch in `pending` as `{PPP} ({state})`, with state `ok`, `partial` or
+  `failed`, separated by `, `; or `none`.
+- `{partial_batches}` and `{failed_batches}`: the numbers of the `partial` and `failed` batches, without
+  zeros, separated by `, `; or `none`.
+- `{images_seen}`, with `{seen}` and `{expected}` added up in this run, `{SSS}` = `start` and `{RRR}` =
+  `start` − 1, both with 3 digits:
+  - `start` = 1: `Images seen: {seen} of {expected}`
+  - 1 < `start` ≤ `last`: `Images seen: {seen} of {expected} in batches {SSS}–{LLL} of this run; batches 001–{RRR}: previous run (see the ledger)`
+  - `start` > `last` (only the FINAL): `Images seen: no new batch in this run; batches 001–{LLL}: previous run (see the ledger)`
 
 ### 7. CROSS
 
 ```text
-MODO: CROSS
+MODE: CROSS
 Run: {run_id}
-Objetivo: {objective_path}
-Relatórios por vídeo:
+Objective: {objective_path}
+Reports per video:
 - {slug}: {report_path} ({status})
-Idioma: {language}
-Grave o relatório combinado em {run_dir}/relatorio.md.
+Language: {language}
+Write the combined report to {run_dir}/relatorio.md.
 ```
 
-- Uma linha `- …` por vídeo com relatório e status diferente de `failed`, na ordem de `videos`.
+- One `- …` line per video with a report and a status other than `failed`, in the order of `videos`.
 
-### Rodapé (só neste roteiro), depois de tudo
+### Footer (only in this procedure), after everything
 
-O Workflow valida as respostas por schema. Aqui não há StructuredOutput, então cada chamada termina com o
-rodapé do papel:
-
-```text
-Não há StructuredOutput nesta chamada: ao terminar, responda só com uma linha JSON com os campos status ("ok" ou "failed"), ledger_path, prompt_path, video_type ("screen", "meeting", "slides", "mixed" ou "other"), focus e, se houver, warnings (lista de textos).
-```
+The Workflow validates the responses by schema. Here there is no StructuredOutput, so each call ends with
+the role's footer:
 
 ```text
-Não há StructuredOutput nesta chamada: ao terminar, responda só com uma linha JSON com os campos status ("ok" ou "failed"), integrated_through (inteiro), coverage (lista de {"batch": inteiro, "state": "complete", "incomplete" ou "missing"}), prompt_path, focus e, se houver, carried e warnings (lista de textos).
+There is no StructuredOutput in this call: when you finish, reply only with one JSON line with the fields status ("ok" or "failed"), ledger_path, prompt_path, video_type ("screen", "meeting", "slides", "mixed" or "other"), focus and, if any, warnings (list of texts).
 ```
 
 ```text
-Não há StructuredOutput nesta chamada: ao terminar, responda só com uma linha JSON com os campos status ("ok", "partial" ou "failed"), report_path, frames_seen (inteiro), frames_missing (lista de ids; [] se nenhum), notable e, se houver, warnings (lista de textos).
+There is no StructuredOutput in this call: when you finish, reply only with one JSON line with the fields status ("ok" or "failed"), integrated_through (integer), coverage (list of {"batch": integer, "state": "complete", "incomplete" or "missing"}), prompt_path, focus and, if any, carried and warnings (list of texts).
 ```
 
 ```text
-Não há StructuredOutput nesta chamada: ao terminar, responda só com uma linha JSON com os campos status ("ok", "partial" ou "failed"), report_path, answered ("yes", "partly" ou "no"), summary (até 120 palavras; em falha, o motivo) e, se houver, gaps (lista de textos).
+There is no StructuredOutput in this call: when you finish, reply only with one JSON line with the fields status ("ok", "partial" or "failed"), report_path, frames_seen (integer), frames_missing (list of ids; [] if none), notable and, if any, warnings (list of texts).
 ```
 
-Na ordem: INIT, NEXT, analista (textos 3 e 4), FINAL e CROSS.
+```text
+There is no StructuredOutput in this call: when you finish, reply only with one JSON line with the fields status ("ok", "partial" or "failed"), report_path, answered ("yes", "partly" or "no"), summary (up to 120 words; on failure, the reason) and, if any, gaps (list of texts).
+```
+
+In order: INIT, NEXT, analyst (texts 3 and 4), FINAL and CROSS.

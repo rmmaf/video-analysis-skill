@@ -388,7 +388,7 @@ def run_batches_stage(frames: dict, cues: dict, params: dict, out_dir: Path, met
     """Plan the batches and write every file of the batches stage into ``out_dir``.
 
     ``params``: batch params (partial is fine; completed by effective_batch_params). With
-    ``"range": [t0, t1]`` (a trecho) only the frames overlapping it are batched; batch numbers
+    ``"range": [t0, t1]`` (a segment) only the frames overlapping it are batched; batch numbers
     restart at 001 and frame ids are kept. ``meta``: {title, video_path, vtt_path, video_key,
     frames_dir, frames_json, cues_json, language (optional label-language override)}; missing
     entries fall back to frames.json / cues.json.
@@ -413,16 +413,16 @@ def run_batches_stage(frames: dict, cues: dict, params: dict, out_dir: Path, met
         entries.append(entry)
         sheet_tokens += sheet["tokens"]
         if entry["over_budget"]:
-            msg = f"lotes: {entry['id']} tem {entry['chars']} caracteres de fala (limite {p['max_text_chars']})"
+            msg = f"batches: {entry['id']} has {entry['chars']} characters of speech (limit {p['max_text_chars']})"
             if entry["n_frames"] == 1:
-                msg += f"; o frame {entry['frames'][0]} sozinho passa do limite"
+                msg += f"; frame {entry['frames'][0]} alone exceeds the limit"
             warnings.append(msg)
     overview_tiles = [{"path": ctx.F[i0].path, "label": f"{batch_id(k + 1)} · {_hms(ctx.F[i0].start, 0)}",
                        "id": batch_id(k + 1)} for k, (i0, _i1) in enumerate(ctx.plan)]
     overview = make_overview(overview_tiles, out_dir / NAMES["overview"], ctx.aspect, p)
     if missing:
-        warnings.append(f"lotes: {len(missing)} imagem(ns) de frame não encontrada(s) para as pranchas "
-                        f"(ex.: {', '.join(missing[:3])})")
+        warnings.append(f"batches: {len(missing)} frame image(s) not found for the contact sheets "
+                        f"(e.g. {', '.join(missing[:3])})")
 
     timeline = {
         "schema": SCHEMA_IDS["timeline"],

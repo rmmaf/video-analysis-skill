@@ -1,7 +1,7 @@
 export const meta = {
   name: 'videos-frame-a-frame',
-  description: 'Analisa os 7 vídeos frame a frame contra a transcrição, uma janela por agente, com verificador adversarial',
-  phases: [{ title: 'Janelas', detail: 'um agente por janela de ~50 frames' }, { title: 'Verificação', detail: 'um verificador por janela com itens' }],
+  description: 'Analyses the 7 videos frame by frame against the transcript, one window per agent, with an adversarial verifier',
+  phases: [{ title: 'Windows', detail: 'one agent per window of ~50 frames' }, { title: 'Verification', detail: 'one verifier per window with items' }],
 }
 
 const KB = 'C:/Users/digom/Documents/solar/databricks  schema'
@@ -10,19 +10,19 @@ const SKILL = 'C:/Users/digom/.claude/skills/ingestao-adf/SKILL.md'
 
 const VIDEOS = {
   da_1508: { titulo: "Repasse - Fluxo de Carga dos DA's (parte das 15:08)", data: '18/08/2026',
-    tema: 'repasse do fluxo de carga dos arquivos dos DAs (distribuidores): do pedido no SFA ao arquivo no FTP/Blob, ao ADF e ao bronze. No kb/adf, pastas DADOS_EXTERNOS/DA e DADOS_EXTERNOS/CONTROL: PL_CONTROLLER_DA_DIARIO, PL_CONTROLLER_DA_FULL_DIARIO, PL_WORKER_DA_* (diário, PS, histórico blob e FTP), PL_WORKER_DA_PARTITION, LS_FORSRP347_DA, LS_FTP_GENERAL.' },
+    tema: 'handover of the load flow of the files from the DAs (distributors): from the order in SFA to the file on FTP/Blob, to ADF and to bronze. In kb/adf, folders DADOS_EXTERNOS/DA and DADOS_EXTERNOS/CONTROL: PL_CONTROLLER_DA_DIARIO, PL_CONTROLLER_DA_FULL_DIARIO, PL_WORKER_DA_* (daily, PS, history blob and FTP), PL_WORKER_DA_PARTITION, LS_FORSRP347_DA, LS_FTP_GENERAL.' },
   da_1608: { titulo: "Repasse - Fluxo de Carga dos DA's (parte das 16:08)", data: '18/08/2026',
-    tema: 'continuação do repasse do fluxo de carga dos DAs; começa falando de IP bloqueado no FTP e fluxo que roda OK sem dado novo.' },
-  adf_overview: { titulo: 'Azure Data Factory - Overview', data: 'desconhecida (confira na tela)',
-    tema: 'visão geral do Azure Data Factory da Solar: estrutura de pastas, pipelines controller/worker, datasets, linked services, integration runtimes, triggers, publish, ambientes.' },
+    tema: 'continuation of the handover of the DA load flow; it starts by talking about a blocked IP on the FTP and a flow that runs OK with no new data.' },
+  adf_overview: { titulo: 'Azure Data Factory - Overview', data: 'unknown (check on the screen)',
+    tema: 'overview of the Solar Azure Data Factory: folder structure, controller/worker pipelines, datasets, linked services, integration runtimes, triggers, publish, environments.' },
   migracao_0_1_p1: { titulo: 'Repasse conhecimento migração de estrutura (0-1), parte 1 de 2', data: '14/10/2024',
-    tema: 'migração da estrutura de ingestão da Arquitetura 0 para a Arquitetura 1: pastas do ADF (ARQUITETURA_0 × DATA_ENG), JSON de configuração, workers, Synapse/Databricks, storage.' },
+    tema: 'migration of the ingestion structure from Architecture 0 to Architecture 1: ADF folders (ARQUITETURA_0 × DATA_ENG), configuration JSON, workers, Synapse/Databricks, storage.' },
   migracao_0_1_p2: { titulo: 'Repasse conhecimento migração de estrutura (0-1), parte 2 de 2', data: '15/10/2024',
-    tema: 'continuação da migração da Arquitetura 0 para a 1.' },
+    tema: 'continuation of the migration from Architecture 0 to 1.' },
   arq1_sharepoint: { titulo: 'Repasse conhecimento ARQ1 Sharepoint', data: '26/06/2025',
-    tema: 'ingestão de arquivos do SharePoint na Arquitetura 1 (LS_HTTP_SHAREPOINT no kb/adf).' },
+    tema: 'ingestion of SharePoint files in Architecture 1 (LS_HTTP_SHAREPOINT in kb/adf).' },
   arquitetura_1812: { titulo: 'Arquitetura de Dados Solar', data: '18/12/2025',
-    tema: 'a engenharia explica a arquitetura de dados atual para a consultoria de governança (Nava/Purview): fontes, ADF, lake, Databricks, Fabric, e como coletar catálogo e linhagem.' },
+    tema: 'the engineering team explains the current data architecture to the governance consultancy (Nava/Purview): sources, ADF, lake, Databricks, Fabric, and how to collect catalog and lineage.' },
 }
 
 const JANELAS = args.janelas   // [{slug, janela, inicio, fim, frames}]
@@ -30,9 +30,9 @@ const JANELAS = args.janelas   // [{slug, janela, inicio, fim, frames}]
 const ITEM = {
   type: 'object',
   properties: {
-    arquivo: { type: 'string', description: 'o vídeo: slug e título' },
-    localizacao: { type: 'string', description: 'hh:mm:ss e frame (ex.: 00:32:20, f0600_003220.jpg)' },
-    trecho_literal: { type: 'string', description: 'fala literal da transcrição ou texto lido na tela, até 400 caracteres' },
+    arquivo: { type: 'string', description: 'the video: slug and title' },
+    localizacao: { type: 'string', description: 'hh:mm:ss and frame (e.g. 00:32:20, f0600_003220.jpg)' },
+    trecho_literal: { type: 'string', description: 'verbatim speech from the transcript or text read on the screen, up to 400 characters' },
     enunciado: { type: 'string' },
     tipo: { type: 'string', enum: ['checklist', 'regra', 'decisao', 'procedimento', 'armadilha', 'fato', 'papel'] },
     forca_no_documento: { type: 'string', enum: ['critico', 'atencao', 'padrao', 'obrigatorio_declarado', 'recomendado', 'informativo', 'nao_declarada'] },
@@ -50,7 +50,7 @@ const ITEM = {
     cobertura_skill: { type: 'string', enum: ['ja_esta', 'parcial', 'ausente'] },
     conflito: { type: 'object', properties: { ids: { type: 'array', items: { type: 'string' } }, explicacao: { type: 'string' } }, required: ['ids', 'explicacao'] },
     relevancia_skill: { type: 'string', enum: ['direta', 'contexto', 'outra_skill'] },
-    evidencia: { type: 'string', description: 'tela | fala | tela+fala, e o que cada uma mostra' },
+    evidencia: { type: 'string', description: 'tela | fala | tela+fala, and what each one shows' },
     observacao: { type: 'string' },
   },
   required: ['arquivo', 'localizacao', 'trecho_literal', 'enunciado', 'tipo', 'vigencia', 'natureza', 'cobertura_kb', 'cobertura_skill', 'relevancia_skill', 'evidencia'],
@@ -66,9 +66,9 @@ const JAN = {
         type: 'object',
         properties: {
           inicio: { type: 'string' }, fim: { type: 'string' }, frames: { type: 'array', items: { type: 'string' } },
-          tela: { type: 'string', description: 'aplicativo e o que está visível: artefato, caminho, parâmetro, código, tabela' },
-          fala: { type: 'string', description: 'o que foi dito, resumido, com o falante' },
-          passo: { type: 'string', description: 'passo do fluxo de dados ou do procedimento' },
+          tela: { type: 'string', description: 'application and what is visible: artifact, path, parameter, code, table' },
+          fala: { type: 'string', description: 'what was said, summarized, with the speaker' },
+          passo: { type: 'string', description: 'step of the data flow or of the procedure' },
         },
         required: ['inicio', 'fim', 'frames', 'tela', 'fala'],
       },
@@ -106,72 +106,72 @@ const VERIF = {
 }
 
 const CONDUTA = `
-## A skill e a natureza do dado
-A skill 'ingestao-adf' (${SKILL}; leia-a antes) opera o repositório 'Ingestao' do Azure Data Factory da Solar. Ela será ampliada com checklists por NATUREZA DO DADO: destino (lakehouse landing -> bronze, ou carga para o SAP S/4HANA na migração), origem (SAP ECC via RFC, SAP particionado por JSON de configuração em config-prd com flag 'able', tabela Z legada, S/4HANA, arquivo externo de DA via FTP/Blob/FileServer, SharePoint, banco relacional, API/nuvem, Fabric), modo de carga (full, incremental, CDC, backfill), sensibilidade (LGPD), geração de arquitetura (0, 1, 02) e etapa (demanda, extração, landing, bronze, orquestração/trigger, validação, governança, PR/deploy, operação/monitoramento). "Relacionado" = afeta como se ingere, valida, documenta, governa, versiona, publica ou opera uma ingestão. dbt (prata/ouro), BI e deploy de Databricks são outras skills.
+## The skill and the nature of the data
+The skill 'ingestao-adf' (${SKILL}; read it first) operates the 'Ingestao' repository of the Solar Azure Data Factory. It will be extended with checklists by NATURE OF THE DATA: destination (lakehouse landing -> bronze, or load into SAP S/4HANA in the migration), source (SAP ECC via RFC, SAP partitioned by configuration JSON in config-prd with flag 'able', legacy Z table, S/4HANA, external DA file via FTP/Blob/FileServer, SharePoint, relational database, API/cloud, Fabric), load mode (full, incremental, CDC, backfill), sensitivity (LGPD), architecture generation (0, 1, 02) and stage (demand, extraction, landing, bronze, orchestration/trigger, validation, governance, PR/deploy, operation/monitoring). "Related" = affects how one ingests, validates, documents, governs, versions, publishes or operates an ingestion. dbt (prata/ouro), BI and Databricks deploy are other skills.
 
-Base de regras (a wiki normalizada, fonte da verdade): ${KB}/kb/rules.jsonl (Grep por termos). Repositório do ADF medido: ${KB}/kb/adf/ (catalogo-pipelines.md, fontes.md, ingestao-sap.md, tabelas-declaradas.md, grafo-chamadas.md); JSON dos pipelines em ${KB}/Ingestao/pipeline/. Procure por nome; não leia inteiro.
+Rule base (the normalized wiki, the source of truth): ${KB}/kb/rules.jsonl (Grep for terms). Measured ADF repository: ${KB}/kb/adf/ (catalogo-pipelines.md, fontes.md, ingestao-sap.md, tabelas-declaradas.md, grafo-chamadas.md); JSON of the pipelines in ${KB}/Ingestao/pipeline/. Search by name; do not read them whole.
 
-## Conduta
-- Só grave arquivos em ${SCR}/videos/<slug>/zoom/ (recortes). Não altere mais nada.
-- Credencial, senha, token, chave, connection string, SAS, IP com usuário, telefone, e-mail ou CPF que apareça na tela ou na fala: NUNCA transcreva o valor. Registre em 'alerta_sensivel' que apareceu e em que instante.
-- Pessoas: use o papel quando possível. Nome só para identificar falante ou atribuir uma decisão.
-- O que é dito numa reunião é relato; vira regra só se for dito como regra ou decisão ("sempre", "tem que", "nunca", "o padrão é"). Marque 'vigencia' e 'forca_no_documento' de acordo. Mostrado na tela como configuração existente é 'fato' do que existia na data do vídeo.
-- 'trecho_literal' é a fala literal (copiada da transcrição, já com a correção que a tela justificar, entre colchetes) ou o texto lido na tela.
-- Se um item contraria a base, preencha 'conflito'. Cuidado com a eng-uarq-008: barra ler TABELA Z/Y nova no medalhão; condição ZTTC na KONV e coluna começando com Z não são tabela Z.
-- Seja exaustivo: todo procedimento, parâmetro, convenção de pasta/nome, cuidado operacional, erro conhecido e verificação que apareça é item.`
+## Conduct
+- Only write files in ${SCR}/videos/<slug>/zoom/ (crops). Do not change anything else.
+- Credential, password, token, key, connection string, SAS, IP with user, phone number, e-mail or CPF that appears on the screen or in the speech: NEVER transcribe the value. Record in 'alerta_sensivel' that it appeared and at what time.
+- People: use the role when possible. A name only to identify a speaker or to attribute a decision.
+- What is said in a meeting is an account; it becomes a rule only if it is said as a rule or a decision ("sempre", "tem que", "nunca", "o padrão é"). Set 'vigencia' and 'forca_no_documento' accordingly. What is shown on the screen as an existing configuration is a 'fato' about what existed on the date of the video.
+- 'trecho_literal' is the verbatim speech (copied from the transcript, already with the correction that the screen justifies, in square brackets) or the text read on the screen.
+- If an item contradicts the base, fill in 'conflito'. Careful with eng-uarq-008: it bars reading a new Z/Y TABLE in the medallion; a ZTTC condition in KONV and a column starting with Z are not a Z table.
+- Be exhaustive: every procedure, parameter, folder/name convention, operational precaution, known error and check that appears is an item.`
 
 const janelaPrompt = j => {
   const v = VIDEOS[j.slug]
   const kk = String(j.janela).padStart(2, '0')
-  return `Você analisa, frame a frame, a janela ${j.janela} (${j.inicio} a ${j.fim}, ${j.frames} frames) do vídeo "${v.titulo}" (${v.data}). Tema do vídeo: ${v.tema}
+  return `You analyse, frame by frame, window ${j.janela} (${j.inicio} to ${j.fim}, ${j.frames} frames) of the video "${v.titulo}" (${v.data}). Video topic: ${v.tema}
 
-Arquivo da janela: ${SCR}/videos/${j.slug}/janela_${kk}.json. Ele traz 'frames' (caminhos dos frames distintos, em ordem; o nome dá o instante: f0600_003220.jpg = 00:32:20) e 'transcricao' (as falas da .vtt da janela com 30 s de folga; cada fala termina com '(tela: <frame>)', o frame que estava na tela quando ela começou). A transcrição é automática, com falantes anônimos (SPEAKER_nn) e erros de reconhecimento.
+Window file: ${SCR}/videos/${j.slug}/janela_${kk}.json. It holds 'frames' (paths of the distinct frames, in order; the name gives the time: f0600_003220.jpg = 00:32:20) and 'transcricao' (the cues of the .vtt in the window, with 30 s of margin; each cue ends with '(tela: <frame>)', the frame that was on the screen when it started). The transcript is automatic, with anonymous speakers (SPEAKER_nn) and recognition errors.
 
-## O que fazer
-1. Leia o JSON. Abra com Read TODOS os frames da janela, na ordem, sem pular nenhum. São frames distintos amostrados a 2 fps: cada um tem alguma mudança na tela.
-2. A tela compartilhada ocupa só parte do frame e o texto fica pequeno. Sempre que houver nome de pipeline, pasta, caminho, parâmetro, JSON, código, tabela ou tela de configuração que você não leia inteiro, recorte e amplie a região com Python (PIL: crop e resize 2x) e salve em ${SCR}/videos/${j.slug}/zoom/ (crie a pasta), depois abra o recorte com Read.
-3. Alinhe fala e tela: resolva "aqui", "esse", "essa pasta", "esse pipeline" pelo frame em que a fala começou e pelos vizinhos.
-4. Corrija a transcrição pelo que a tela mostra (nome de pipeline, sistema, tabela, pessoa) e registre em 'correcoes_transcricao'.
-5. Identifique os falantes quando a tela (rótulo de quem fala, quem compartilha) ou a fala permitir.
-6. Monte a 'linha_do_tempo' (trechos contíguos de mesmo assunto), liste os 'artefatos_vistos' (pipeline, dataset, linked service, container, pasta, arquivo, tabela, notebook, job, trigger, storage) e extraia os 'itens'.
+## What to do
+1. Read the JSON. Open with Read ALL the frames of the window, in order, without skipping any. They are distinct frames sampled at 2 fps: each one has some change on the screen.
+2. The shared screen takes up only part of the frame and the text is small. Whenever there is a pipeline name, folder, path, parameter, JSON, code, table or configuration screen that you cannot read in full, crop and enlarge the region with Python (PIL: crop and resize 2x) and save it in ${SCR}/videos/${j.slug}/zoom/ (create the folder), then open the crop with Read.
+3. Align speech and screen: resolve "aqui", "esse", "essa pasta", "esse pipeline" by the frame in which the cue started and by its neighbors.
+4. Correct the transcript by what the screen shows (name of a pipeline, system, table, person) and record it in 'correcoes_transcricao'.
+5. Identify the speakers when the screen (label of who is speaking, who is sharing) or the speech allows it.
+6. Build the 'linha_do_tempo' (contiguous segments on the same subject), list the 'artefatos_vistos' (pipeline, dataset, linked service, container, folder, file, table, notebook, job, trigger, storage) and extract the 'itens'.
 ${CONDUTA}
 
-Devolva o objeto do schema. Em 'frames_vistos' informe quantos frames você abriu.`
+Return the schema object. In 'frames_vistos' state how many frames you opened.`
 }
 
 const verifPrompt = (j, r) => {
   const v = VIDEOS[j.slug]
   const kk = String(j.janela).padStart(2, '0')
-  return `Você é o verificador adversarial da janela ${j.janela} (${j.inicio} a ${j.fim}) do vídeo "${v.titulo}" (${v.data}). Um analista viu os frames e a transcrição e extraiu os itens abaixo. Derrube o que estiver errado e ache o que faltou. Não presuma que ele acertou.
+  return `You are the adversarial verifier of window ${j.janela} (${j.inicio} to ${j.fim}) of the video "${v.titulo}" (${v.data}). An analyst saw the frames and the transcript and extracted the items below. Knock down what is wrong and find what is missing. Do not assume the analyst got it right.
 
-Arquivo da janela: ${SCR}/videos/${j.slug}/janela_${kk}.json (frames e transcrição). Recortes que o analista fez: ${SCR}/videos/${j.slug}/zoom/.
+Window file: ${SCR}/videos/${j.slug}/janela_${kk}.json (frames and transcript). Crops the analyst made: ${SCR}/videos/${j.slug}/zoom/.
 
-Para cada item (idx): abra o(s) frame(s) da 'localizacao' e os vizinhos, e a fala correspondente no JSON. Confirme que a tela e a fala sustentam o item, que o trecho literal existe, que o enunciado não exagera (relato virou regra, proposta virou obrigação, valor mal lido), que natureza/etapa estão certas, que a cobertura em rules.jsonl confere (Grep) e que o conflito procede. Confira no kb/adf ou nos JSON do repositório se os artefatos citados existem com esse nome. Veredito para TODOS os idx: 'mantido', 'corrigido' (com 'correcoes' só dos campos que mudam) ou 'descartado' (com motivo).
+For each item (idx): open the frame(s) of the 'localizacao' and their neighbors, and the corresponding cue in the JSON. Confirm that the screen and the speech support the item, that the verbatim excerpt exists, that the statement does not exaggerate (an account turned into a rule, a proposal turned into an obligation, a misread value), that nature/stage are right, that the coverage in rules.jsonl checks out (Grep) and that the conflict holds. Check in kb/adf or in the JSON of the repository whether the cited artifacts exist with that name. Verdict for ALL the idx: 'mantido', 'corrigido' (with 'correcoes' only for the fields that change) or 'descartado' (with a reason).
 
-Depois, completude: percorra a transcrição e os frames da janela atrás do que o analista não registrou e acrescente em 'itens_novos'.
+Then, completeness: go through the transcript and the frames of the window looking for what the analyst did not record and add it to 'itens_novos'.
 ${CONDUTA}
 
-## Resumo do analista
+## Analyst summary
 ${r.resumo}
 
-## Linha do tempo do analista
+## Analyst timeline
 ${JSON.stringify(r.linha_do_tempo)}
 
-## Itens do analista
+## Analyst items
 ${r.itens.map((it, i) => `idx ${i}: ${JSON.stringify(it)}`).join('\n')}`
 }
 
 const res = await pipeline(
   JANELAS,
-  j => agent(janelaPrompt(j), { label: `${j.slug}#${j.janela}`, phase: 'Janelas', schema: JAN, effort: 'max' }),
+  j => agent(janelaPrompt(j), { label: `${j.slug}#${j.janela}`, phase: 'Windows', schema: JAN, effort: 'max' }),
   (r, j) => {
-    if (!r) return { slug: j.slug, janela: j.janela, erro: 'sem resultado' }
+    if (!r) return { slug: j.slug, janela: j.janela, erro: 'no result' }
     const base = { slug: j.slug, janela: j.janela, frames: j.frames, frames_vistos: r.frames_vistos, itens: r.itens.length }
     if (!r.itens.length) return base
-    return agent(verifPrompt(j, r), { label: `verif:${j.slug}#${j.janela}`, phase: 'Verificação', schema: VERIF, effort: 'max' })
-      .then(v => ({ ...base, verif: v ? { descartados: v.vereditos.filter(x => x.veredito === 'descartado').length, corrigidos: v.vereditos.filter(x => x.veredito === 'corrigido').length, novos: v.itens_novos.length } : 'sem resultado' }))
+    return agent(verifPrompt(j, r), { label: `verif:${j.slug}#${j.janela}`, phase: 'Verification', schema: VERIF, effort: 'max' })
+      .then(v => ({ ...base, verif: v ? { descartados: v.vereditos.filter(x => x.veredito === 'descartado').length, corrigidos: v.vereditos.filter(x => x.veredito === 'corrigido').length, novos: v.itens_novos.length } : 'no result' }))
   },
 )
 const vistos = res.filter(Boolean).filter(r => r.frames_vistos !== undefined && r.frames_vistos < r.frames)
-if (vistos.length) log(`janelas com menos frames vistos que o total: ${vistos.map(r => r.slug + '#' + r.janela + ' ' + r.frames_vistos + '/' + r.frames).join(', ')}`)
+if (vistos.length) log(`windows with fewer frames seen than the total: ${vistos.map(r => r.slug + '#' + r.janela + ' ' + r.frames_vistos + '/' + r.frames).join(', ')}`)
 return res

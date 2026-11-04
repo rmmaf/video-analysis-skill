@@ -1,136 +1,141 @@
 ---
 name: video-analysis
-description: 'Analisa vídeos frame a frame contra a legenda (.vtt de mesmo nome) para um objetivo dado na chamada: gravações de tela, reuniões gravadas (Teams, Zoom) e aulas com slides. Extrai só os frames únicos (mudança só do cursor não conta), alinha cada um às falas, divide em lotes e dispara um Workflow em que um curador Opus planeja os lotes e um analista Sonnet lê os frames e as falas de cada lote, em sequência; entrega um relatório por vídeo e, com dois vídeos ou mais, um combinado. Use quando pedirem para analisar, resumir, auditar ou extrair passos, decisões, erros ou evidências de um vídeo (.mp4, .mkv, .mov, .webm) ou de uma pasta de vídeos, "frame a frame", "contra a legenda" ou "contra a transcrição", ou o que aparece na tela quando algo é dito, e para retomar uma análise interrompida (`retomar`). Com `setup` (`/video-analysis setup`), prepara a máquina: ffmpeg, Python, agentes, workflow e permissões. Não escreva script ad hoc de frames: use esta skill.'
-argument-hint: "<vídeo(s) ou pasta> <objetivo> [--max-lotes N] [--trecho hh:mm:ss-hh:mm:ss] | retomar [run_id] | setup"
+description: 'Analyses videos frame by frame against the subtitles (same-name .vtt) for an objective given in the call: screen recordings, recorded meetings (Teams, Zoom) and lectures with slides. Extracts only the unique frames (cursor-only changes do not count), aligns each with the speech, splits them into batches and launches a Workflow in which an Opus curator plans the batches and a Sonnet analyst reads the frames and speech of each batch, in sequence; delivers one report per video and, with two or more videos, a combined one. Use when asked to analyse, summarize, audit or extract steps, decisions, errors or evidence from a video (.mp4, .mkv, .mov, .webm) or a folder of videos, "frame a frame", "contra a legenda" or "contra a transcrição", or what appears on screen when something is said, and to resume an interrupted analysis (`retomar`). With `setup` (`/video-analysis setup`), prepares the machine: ffmpeg, Python, agents, workflow and permissions. Do not write an ad hoc frame script: use this skill.'
+argument-hint: "<video(s) or folder> <objective> [--max-lotes N] [--trecho hh:mm:ss-hh:mm:ss] | retomar [run_id] | setup"
 allowed-tools:
   - Bash(python "${CLAUDE_SKILL_DIR}/scripts/prepare.py" *)
   - Bash(python "${CLAUDE_SKILL_DIR}/verificar_ambiente.py" *)
   - Write(~/video-analysis/pedidos/*)
 ---
 
-# Análise de vídeo frame a frame contra a legenda
+# Frame-by-frame video analysis against the subtitles
 
-Esta skill responde a um objetivo sobre um ou mais vídeos (gravação de tela, reunião gravada, aula com
-slides) cruzando cada tela com as falas da `.vtt` de mesmo nome. O `prepare.py` extrai só os frames
-únicos, cada um com o intervalo que representa, e os divide em lotes de até 20. Um Workflow conduz os
-lotes de cada vídeo em série: o curador (Opus) planeja todos os lotes e escreve o prompt do primeiro;
-o analista (Sonnet) abre todos os frames do lote, cruza com as falas e grava o relatório do lote. Com
-`--curadoria lotes`, o curador também escreve o prompt de cada lote seguinte, levando o contexto adiante.
+This skill answers an objective about one or more videos (screen recording, recorded meeting, lecture
+with slides) by cross-checking each screen against the speech in the `.vtt` of the same name. `prepare.py`
+extracts only the unique frames, each with the interval it represents, and splits them into batches of
+up to 20. A Workflow drives the batches of each video in series: the curator (Opus) plans all the batches
+and writes the prompt of the first one; the analyst (Sonnet) opens all the frames of the batch,
+cross-checks them against the speech and writes the batch report. With `--curadoria lotes`, the curator
+also writes the prompt of each following batch, carrying the context forward.
 
-**Regra de ouro: você não lê o vídeo.** Quem abre frame, prancha, lote, transcrição, prompt, ledger e
-relatório de lote são os agentes do Workflow. Você prepara, dispara e apresenta.
+**Golden rule: you do not read the video.** Frames, contact sheets, batches, transcripts, prompts, the
+ledger and batch reports are opened by the Workflow's agents. You prepare, launch and present.
 
-## Comandos
+## Commands
 
-| chamada | o que faz |
+| call | what it does |
 |---|---|
-| `/video-analysis <vídeo(s)\|pasta> <objetivo> [opções]` | análise nova: a seção **Fluxo** |
-| `/video-analysis retomar [run_id]` | continua um run interrompido; sem id, o desta conversa (seção **Retomar**) |
-| `/video-analysis setup` | prepara a máquina: siga [`setup.md`](setup.md) e **não faça mais nada nesta chamada** |
+| `/video-analysis <video(s)\|folder> <objective> [options]` | new analysis: the **Flow** section |
+| `/video-analysis retomar [run_id]` | continues an interrupted run; without an id, the one from this conversation (**Resume** section) |
+| `/video-analysis setup` | prepares the machine: follow [`setup.md`](setup.md) and **do nothing else in this call** |
 
-O argumento chega ao fim da skill como `ARGUMENTS: …`. Pedido para "configurar", "instalar" ou
-"preparar" a skill também é o `setup`; se ele interrompeu uma análise, ofereça retomá-la ao terminar.
+The argument reaches the end of the skill as `ARGUMENTS: …`. A request to "configure", "install" or
+"prepare" the skill is also `setup`; if it interrupted an analysis, offer to resume it at the end.
 
-| opção | no `pedido.md` | efeito |
+| option | in `pedido.md` | effect |
 |---|---|---|
-| `--max-lotes N` | `max_lotes` | modo teste: só os lotes 1–N de cada vídeo |
-| `--trecho hh:mm:ss-hh:mm:ss` | `trecho` | só esse trecho, com lotes próprios sobre o cache do vídeo inteiro |
-| `--paralelo N` | `paralelo` | vídeos em paralelo (padrão 3); `1` contra limite de taxa |
-| `--esforco-analista low\|medium\|high` | `esforco_analista` | esforço do analista Sonnet (padrão `high`; `medium` custa ~13% menos e deixa respostas menos completas) |
-| `--curadoria plano\|lotes` | `curadoria` | `lotes`: curador antes de cada lote, levando o contexto adiante (≈ 2× o custo; padrão `plano`) |
-| `--esforco-curador low\|medium\|high` | `esforco_curador` | esforço do curador Opus nos lotes, só com `--curadoria lotes` (padrão `high`) |
-| `--papeis agents\|inline` | `papeis` | força o modo dos papéis (sem a opção, vale o passo 2) |
-| `--idioma xx` | `idioma` | idioma dos relatórios (padrão: o do objetivo; na dúvida, `pt-BR`) |
-| `--falantes "SPEAKER_01=Nome;…"` | `falantes` | nomes reais dos falantes da legenda |
-| `--sensibilidade low\|normal\|high` | `sensibilidade` | `high` pega mudanças menores (mais frames); `low`, o contrário |
-| `--ignorar-regiao x,y,w,h` | `ignorar_regiao` | região (frações do quadro) fora da comparação: webcam, relógio |
+| `--max-lotes N` | `max_lotes` | test mode: only batches 1–N of each video |
+| `--trecho hh:mm:ss-hh:mm:ss` | `trecho` | only that segment, with its own batches over the cache of the whole video |
+| `--paralelo N` | `paralelo` | videos in parallel (default 3); `1` against rate limits |
+| `--esforco-analista low\|medium\|high` | `esforco_analista` | effort of the Sonnet analyst (default `high`; `medium` costs ~13% less and makes the answers less complete) |
+| `--curadoria plano\|lotes` | `curadoria` | `lotes`: curator before each batch, carrying the context forward (≈ 2× the cost; default `plano`) |
+| `--esforco-curador low\|medium\|high` | `esforco_curador` | effort of the Opus curator in the batches, only with `--curadoria lotes` (default `high`) |
+| `--papeis agents\|inline` | `papeis` | forces the roles mode (without the option, step 2 applies) |
+| `--idioma xx` | `idioma` | language of the reports (default: that of the objective; when in doubt, `pt-BR`) |
+| `--falantes "SPEAKER_01=Name;…"` | `falantes` | real names of the speakers in the subtitles |
+| `--sensibilidade low\|normal\|high` | `sensibilidade` | `high` catches smaller changes (more frames); `low`, the opposite |
+| `--ignorar-regiao x,y,w,h` | `ignorar_regiao` | region (fractions of the frame) left out of the comparison: webcam, clock |
 
-Quando mexer em cada uma: [`reference/parametros.md`](reference/parametros.md).
+When to change each one: [`reference/parametros.md`](reference/parametros.md).
 
-## Economia de tokens (vale para você)
+## Token economy (applies to you)
 
-- **Nunca leia** frames, pranchas, as pastas `batches-*`, `frames.json`, `cues.json`, `timeline.json`,
-  `transcript.md`, `prompts/`, `ledger.md` nem `reports/`. **Nunca rode** ffmpeg nem escreva script ad
-  hoc de frames.
-- Não repita na resposta o JSON do `prepare.py` nem os `workflow_args`.
-- Leia um `relatorio.md` só se o usuário perguntar algo que o `summary` não responde; um frame ou
-  relatório de lote, só se ele o nomear. Para aprofundar um trecho, rode um run novo com `--trecho`.
-- Invocar esta skill **é** o pedido explícito de um Workflow com muitos agentes: 1 por lote e mais 2 por
-  vídeo (com `--curadoria lotes`, 2 por lote e mais 1), e mais 1 com dois vídeos ou mais. Não junte nem
-  pule lotes para caber numa diretriz de 10 agentes.
+- **Never read** frames, contact sheets, the `batches-*` folders, `frames.json`, `cues.json`,
+  `timeline.json`, `transcript.md`, `prompts/`, `ledger.md` or `reports/`. **Never run** ffmpeg or write
+  an ad hoc frame script.
+- Do not repeat the `prepare.py` JSON or the `workflow_args` in your answer.
+- Read a `relatorio.md` only if the user asks something the `summary` does not answer; a frame or a
+  batch report, only if the user names it. To go deeper into a segment, start a new run with `--trecho`.
+- Invoking this skill **is** the explicit request for a Workflow with many agents: 1 per batch plus 2 per
+  video (with `--curadoria lotes`, 2 per batch plus 1), plus 1 with two or more videos. Do not merge or
+  skip batches to fit a 10-agent guideline.
 
-## Fluxo
+## Flow
 
-1. **Interprete.** Separe de `ARGUMENTS` os caminhos (vídeos ou pastas; um caminho termina na extensão
-   do vídeo, como `.mp4`, `.mkv`, `.mov` ou `.webm`, ou vem entre aspas), as opções `--…` e o objetivo:
-   o resto, **literal**. Só pergunte se faltar o objetivo (uma pergunta, com dois exemplos de objetivo)
-   ou se nenhum vídeo puder ser identificado.
-2. **Papéis.** `agents` se `video-analysis-curator` e `video-analysis-analyst` aparecem na lista de tipos
-   de agente disponíveis; senão `inline`, que funciona igual e gasta um pouco mais por agente. A opção
-   `--papeis` do usuário prevalece.
-3. **Pedido.** Com Write, grave `C:\Users\digom\video-analysis\pedidos\pedido.md`; se o arquivo existir,
-   leia antes (o Write exige). O objetivo vai literal, com aspas e quebras de linha: nada passa pelo
-   shell. Em `# opcoes`: `papeis` sempre, `idioma` se o objetivo não estiver em português, e só as
-   demais opções dadas.
+1. **Interpret.** Separate from `ARGUMENTS` the paths (videos or folders; a path ends in the video
+   extension, such as `.mp4`, `.mkv`, `.mov` or `.webm`, or comes in quotes), the `--…` options and the
+   objective: the rest, **verbatim**. Ask only if the objective is missing (one question, with two example
+   objectives) or if no video can be identified.
+2. **Roles.** `agents` if `video-analysis-curator` and `video-analysis-analyst` appear in the list of
+   available agent types; otherwise `inline`, which works the same and spends a little more per agent.
+   The user's `--papeis` option prevails.
+3. **Request.** With Write, save `C:\Users\digom\video-analysis\pedidos\pedido.md`; if the file exists,
+   read it first (Write requires it). The objective goes in verbatim, with quotes and line breaks: nothing
+   goes through the shell. In `# opcoes`: `papeis` always, `idioma` if the objective is not in
+   Portuguese, and only the other options given.
 
    ```
    # videos
    C:/Users/digom/Downloads/venda_zero_clientes.mp4
 
    # objetivo
-   <texto do usuário, literal>
+   <the user's text, verbatim>
 
    # opcoes
    papeis: inline
    max_lotes: 2
    ```
 
-4. **Estime**, com a ferramenta **Bash** (é ela que a skill pré-aprova; não use PowerShell nem `python3`):
+4. **Estimate**, with the **Bash** tool (it is the one the skill pre-approves; do not use PowerShell or
+   `python3`):
 
    ```bash
    python "${CLAUDE_SKILL_DIR}/scripts/prepare.py" --pedido "C:/Users/digom/video-analysis/pedidos/pedido.md" --estimar
    ```
 
-   A estimativa não consome o pedido; erro aqui se trata como no passo 5. Se `estimate.seconds` passar
-   de 400, rode o passo 5 com `run_in_background`, diga numa linha que a extração segue em segundo plano
-   e espere a notificação: o Bash corta em 600 s.
-5. **Prepare.** O mesmo comando sem `--estimar`, com `timeout` 600000. A última linha do stdout é um JSON
-   (campos em [`reference/contratos.md`](reference/contratos.md)); o pedido vai para a pasta do run.
-   - saída diferente de 0, ou `ok: false` → diga o problema numa frase, pelo código de saída:
-     - `2` entrada, pelo `error.code`: `vtt_ausente` → mostre os candidatos e o `Rename-Item` sugerido
-       no `detail` (quem decide renomear é o usuário); `video_nao_encontrado` → confirme o caminho;
-       `run_grande_demais` (mais de 800 agentes) → proponha `--trecho` ou `--max-lotes`; pedido ou
-       opção inválidos → corrija o pedido.
-     - `3` ambiente (ffmpeg, Python, numpy, Pillow): ofereça `/video-analysis setup`.
-     - `4` um vídeo falhou: diga qual (`errors`); se veio `workflow_args`, os outros estão prontos:
-       pergunte se segue com eles (passo 6, com esse JSON).
-     - `130` interrompido: as etapas prontas ficam no cache; ofereça rodar de novo.
-     - `1` erro interno do `prepare.py`: diga o `detail` e o log em `logs\`; não tente contornar.
+   The estimate does not consume the request; an error here is handled as in step 5. If
+   `estimate.seconds` exceeds 400, run step 5 with `run_in_background`, say in one line that the
+   extraction continues in the background and wait for the notification: Bash cuts off at 600 s.
+5. **Prepare.** The same command without `--estimar`, with `timeout` 600000. The last line of stdout is a
+   JSON (fields in [`reference/contratos.md`](reference/contratos.md)); the request moves to the run folder.
+   - exit code other than 0, or `ok: false` → state the problem in one sentence, by exit code:
+     - `2` input, by `error.code`: `vtt_ausente` → show the candidates and the suggested `Rename-Item`
+       from the `detail` (the user is the one who decides to rename); `video_nao_encontrado` → confirm
+       the path; `run_grande_demais` (more than 800 agents) → propose `--trecho` or `--max-lotes`;
+       invalid request or option → fix the request.
+     - `3` environment (ffmpeg, Python, numpy, Pillow): offer `/video-analysis setup`.
+     - `4` a video failed: say which one (`errors`); if `workflow_args` came back, the others are ready:
+       ask whether to go on with them (step 6, with that JSON).
+     - `130` interrupted: the completed stages stay in the cache; offer to run it again.
+     - `1` internal error of `prepare.py`: give the `detail` and the log in `logs\`; do not try to work
+       around it.
 
-     Erro no passo 5 (não no 4) renomeia o pedido para `pedido.erro.md`: para repetir, grave-o de novo.
-   - `env.permissions_ok: false` → avise que cada frame lido vai pedir permissão e ofereça o setup
-     antes de disparar.
-   - `estimate.agents` acima de 80 → diga lotes, agentes e a duração aproximada (≈ 4 min por lote, em
-     série dentro do vídeo, vídeos em paralelo) e pergunte antes de seguir.
-   - aviso de densidade com região sugerida → ofereça repetir com `ignorar_regiao: x,y,w,h` num pedido
-     novo (menos frames, menos custo).
+     An error in step 5 (not in 4) renames the request to `pedido.erro.md`: to retry, write it again.
+   - `env.permissions_ok: false` → warn that every frame read will ask for permission and offer the
+     setup before launching.
+   - `estimate.agents` above 80 → give the batches, the agents and the approximate duration (≈ 4 min per
+     batch, in series within the video, videos in parallel) and ask before going on.
+   - a high-density warning with a suggested region to ignore → offer to repeat with
+     `ignorar_regiao: x,y,w,h` in a new request (fewer frames, lower cost).
 
-   Junte numa pergunta só o que precisar de resposta. Aviso que não pede resposta cabe numa das 3
-   linhas do passo 6. Outros erros e avisos: [`reference/problemas.md`](reference/problemas.md).
-6. **Dispare** pela ferramenta **Workflow** (adiada: carregue-a com `ToolSearch`, `select:Workflow`),
-   com `args` = `workflow_args` **como objeto JSON, não como string, e sem editar**, nesta ordem:
-   - `name: "video-analysis"`, o workflow salvo pelo setup em `~/.claude/workflows/`, só com
-     `env.workflow_current: true` (a cópia salva é idêntica à da skill) e se o setup não o instalou nem
-     renovou nesta conversa: o Workflow segue com a versão anterior na memória até a próxima conversa;
-   - senão, ou se ela não conhecer o nome: se o Workflow já devolveu um caminho de script nesta conversa,
-     copie o `script_path` por cima dele com Bash (`cp`) e passe esse caminho em `scriptPath`; sem ele,
-     `script` = o conteúdo do `script_path`, lido com Read, sem editar (em `scriptPath` ela o recusa).
-     Custa ~13k tokens: com a cópia salva desatualizada, sugira `/video-analysis setup` ao apresentar;
-   - se ela não existir nesta sessão: [`reference/sem-workflow.md`](reference/sem-workflow.md).
+   Gather into a single question whatever needs an answer. A warning that needs no answer fits in one of
+   the 3 lines of step 6. Other errors and warnings: [`reference/problemas.md`](reference/problemas.md).
+6. **Launch** through the **Workflow** tool (deferred: load it with `ToolSearch`, `select:Workflow`),
+   with `args` = `workflow_args` **as a JSON object, not as a string, and without editing**, in this order:
+   - `name: "video-analysis"`, the workflow saved by the setup in `~/.claude/workflows/`, only with
+     `env.workflow_current: true` (the saved copy is identical to the skill's) and if the setup did not
+     install or renew it in this conversation: the Workflow keeps using the previous version in memory
+     until the next conversation;
+   - otherwise, or if the tool does not know the name: if the Workflow has already returned a script path
+     in this conversation, copy the `script_path` over it with Bash (`cp`) and pass that path in
+     `scriptPath`; without one, `script` = the content of the `script_path`, read with Read, without
+     editing (the tool refuses it in `scriptPath`). It costs ~13k tokens: if the saved copy is out of
+     date, suggest `/video-analysis setup` when presenting;
+   - if the tool does not exist in this session: [`reference/sem-workflow.md`](reference/sem-workflow.md).
 
-   Responda em até 3 linhas (run_id, lotes, agentes, pasta do run, "aviso quando terminar") e **encerre
-   o turno**, sem acompanhar.
-7. **Apresente**, quando a notificação chegar, cada vídeo assim:
+   Reply in at most 3 lines (run_id, batches, agents, run folder, "aviso quando terminar") and **end
+   the turn**, without monitoring it.
+7. **Present**, when the notification arrives, each video like this:
 
    ```
    **<slug>** — <status> · lotes <batches.from>–<batches.planned> de <batches.total> (<batches.ok> ok) · imagens <frames>
@@ -138,45 +143,48 @@ Quando mexer em cada uma: [`reference/parametros.md`](reference/parametros.md).
    Relatório: <report_path>
    ```
 
-   Campo nulo sai da linha (`skipped`: vídeo já concluído, só o relatório; `from` maior que `planned`:
-   nenhum lote novo). Depois, os lotes de `batches.partial` e `batches.failed`, até 3 avisos do vídeo e,
-   se houver, o `combined` (summary e caminho; com `error`, a síntese falhou). `partial` com
-   `--max-lotes` é cobertura parcial, não erro; `failed` → o último aviso diz o motivo; ofereça
-   `/video-analysis retomar`. Termine oferecendo abrir um relatório ou rodar um `--trecho`.
+   A null field is left out of the line (`skipped`: video already finished, only the report; `from`
+   greater than `planned`: no new batch). Then the batches in `batches.partial` and `batches.failed`, up to 3
+   warnings of the video and, if present, the `combined` (summary and path; with `error`, the synthesis
+   failed). `partial` with `--max-lotes` is partial coverage, not an error; `failed` → the last warning
+   gives the reason; offer `/video-analysis retomar`. End by offering to open a report or to run a
+   `--trecho`.
 
-## Retomar
+## Resume
 
-Qual run: o run_id que o usuário deu; senão, o `run_id` (ou o `run_dir`) que o `prepare.py` devolveu
-nesta conversa. Sem nenhum dos dois, ou se ele pediu o mais recente (`ultimo`), cuidado: o usuário roda
-várias sessões, e o mais recente é o de **qualquer** uma. Ache-o com Glob em
-`C:/Users/digom/video-analysis/runs/*/run.json` (o de pasta com nome maior, que começa por
-`AAAAMMDD-HHMMSS`), confirme o run_id com o usuário e só então rode com esse id: o `--resume` já mexe
-nos arquivos do run.
+Which run: the run_id the user gave; otherwise, the `run_id` (or the `run_dir`) that `prepare.py` returned
+in this conversation. With neither of the two, or if the user asked for the most recent one (`ultimo`),
+be careful: the user runs several sessions, and the most recent one may come from **any** of them. Find
+it with Glob in `C:/Users/digom/video-analysis/runs/*/run.json` (the one whose folder has the greatest
+name, which starts with `YYYYMMDD-HHMMSS`), confirm the run_id with the user and only then run with that
+id: `--resume` already changes the run's files.
 
 ```bash
 python "${CLAUDE_SKILL_DIR}/scripts/prepare.py" --resume <run_id> --papeis inline
 ```
 
-Troque `inline` pelo modo do passo 2 e acrescente `--max-lotes N` e `--curadoria plano|lotes` só se ele
-pediu cada um; sem `--curadoria`, vale a do run (um run anterior à opção volta com `lotes`). Depois, os
-passos 5 a 7. O Workflow recomeça no 1º lote sem relatório; vídeo com `relatorio.md` pronto fica de fora.
+Replace `inline` with the mode from step 2 and add `--max-lotes N` and `--curadoria plano|lotes` only if
+the user asked for each one; without `--curadoria`, the run's curation applies (a run older than the
+option comes back with `lotes`). Then, steps 5 to 7. The Workflow restarts at the 1st batch without a
+report; a video with a finished `relatorio.md` is left out.
 
 ## Setup
 
-Siga [`setup.md`](setup.md). O verificador fica na raiz da skill; rode-o sempre com este prefixo, que a
-skill pré-aprova, mais as opções que o setup indicar (`--json`, `--instalar-agentes`,
+Follow [`setup.md`](setup.md). The verifier is at the root of the skill; always run it with this prefix,
+which the skill pre-approves, plus the options the setup indicates (`--json`, `--instalar-agentes`,
 `--aplicar-permissoes`):
 
 ```bash
 python "${CLAUDE_SKILL_DIR}/verificar_ambiente.py"
 ```
 
-`--instalar-agentes` e `--aplicar-permissoes` mudam arquivos fora da pasta central: só depois do "sim".
+`--instalar-agentes` and `--aplicar-permissoes` change files outside the central folder: only after the
+"yes".
 
-## Arquivos
+## Files
 
-Pasta central `C:\Users\digom\video-analysis\`: `cache\<slug>-<fp8>\` (legenda, frames e lotes,
-reaproveitados entre runs) · `runs\<AAAAMMDD-HHMMSS>-<slug>\` (`relatorio.md` combinado, com 2+ vídeos;
-por vídeo, `v1\relatorio.md`, `v2\…`, com ledger, prompts e relatórios de lote) · `pedidos\` · `roles\` ·
-`logs\`. Formatos e caminhos: [`reference/contratos.md`](reference/contratos.md). Erros e avisos:
+Central folder `C:\Users\digom\video-analysis\`: `cache\<slug>-<fp8>\` (subtitles, frames and batches,
+reused across runs) · `runs\<YYYYMMDD-HHMMSS>-<slug>\` (combined `relatorio.md`, with 2+ videos; per
+video, `v1\relatorio.md`, `v2\…`, with ledger, prompts and batch reports) · `pedidos\` · `roles\` ·
+`logs\`. Formats and paths: [`reference/contratos.md`](reference/contratos.md). Errors and warnings:
 [`reference/problemas.md`](reference/problemas.md).

@@ -1,5 +1,5 @@
-"""Frame engine on the real fixtures of tests/fixtures.json (design-deterministico.md section 9,
-plano.md Verification 3 and 4). Run with --run-real (or VA_RUN_REAL=1).
+"""Frame engine on the real fixtures of tests/fixtures.json (design-deterministic.md section 9,
+plan.md Verification 3 and 4). Run with --run-real (or VA_RUN_REAL=1).
 
 - Repasse (da_1608): 50 <= frames <= 128 and recall >= 90 % of the significant September
   baseline frames within +-2 s; writes <workspace>/debug/regression/da_1608.md with thumbnails

@@ -80,7 +80,7 @@ _WARN_EXAMPLES = 3
 # --- parameters ------------------------------------------------------------------------------
 
 def parse_speaker_names(value: Any) -> dict[str, str]:
-    """``--speaker-names`` / the request's ``falantes`` -> {original name or tag: display name}.
+    """``--speakers`` / the request's ``speakers`` -> {original name or tag: display name}.
 
     Accepts a dict, a list of "A=B" strings, or one string "SPEAKER_01=Ana;SPEAKER_03=Bruno"
     (";" or newlines between entries). Keys are matched case-insensitively against the name

@@ -1,6 +1,6 @@
 # Contracts: request, prepare, workflow_args, schemas, return and folders
 
-Source of truth: the "Unified contract" section of `docs/plano.md`. The schemas and the return hold as
+Source of truth: the "Unified contract" section of `docs/plan.md`. The schemas and the return hold as
 they are in `workflow/video-analysis.js`; this page repeats them for reference. Every path in JSON and in
 the generated `.md` files is absolute and uses `/` (`C:/Users/digom/...`).
 
@@ -31,64 +31,66 @@ max_batches: 2
 
 | key | values | default | user option | old key |
 |---|---|---|---|---|
-| `roles` | `agents`, `inline` | chosen by the main agent (step 2) | `--papeis` | `papeis` |
-| `max_batches` | integer ≥ 1 (`all` or `0` = no limit) | no limit | `--max-lotes` | `max_lotes` |
-| `range` | `hh:mm:ss-hh:mm:ss` | whole video | `--trecho` | `trecho` |
-| `parallel` | 1 to 6 | 3 | `--paralelo` | `paralelo` |
-| `analyst_effort` | `low`, `medium`, `high`, `xhigh`, `max` | `high` | `--esforco-analista` | `esforco_analista` |
-| `curator_effort` | same (applies only to the NEXT) | `high` | `--esforco-curador` | `esforco_curador` |
-| `curation` | `plan`, `batches` | `plan` | `--curadoria plano\|lotes` | `curadoria` |
-| `language` | `pt-BR`, `en`, `es`… | the objective's; `pt-BR` | `--idioma` | `idioma` |
-| `speakers` | `SPEAKER_01=Name;SPEAKER_03=Other` | the labels in the subtitles | `--falantes` | `falantes` |
-| `sensitivity` | `low`, `normal`, `high` | `normal` | `--sensibilidade` | `sensibilidade` |
-| `ignore_region` | `x,y,w,h` in fractions of the frame (0 to 1, origin at the top left corner) | none | `--ignorar-regiao` | `ignorar_regiao` |
+| `roles` | `agents`, `inline` | chosen by the main agent (step 2) | `--roles` | `papeis` |
+| `max_batches` | integer ≥ 1 (`all` or `0` = no limit) | no limit | `--max-batches` | `max_lotes` |
+| `range` | `hh:mm:ss-hh:mm:ss` | whole video | `--range` | `trecho` |
+| `parallel` | 1 to 6 | 3 | `--parallel` | `paralelo` |
+| `analyst_effort` | `low`, `medium`, `high`, `xhigh`, `max` | `high` | `--analyst-effort` | `esforco_analista` |
+| `curator_effort` | same (applies only to the NEXT) | `high` | `--curator-effort` | `esforco_curador` |
+| `curation` | `plan`, `batches` | `plan` | `--curation plan\|batches` | `curadoria` |
+| `language` | `pt-BR`, `en`, `es`… | the objective's; `pt-BR` | `--language` | `idioma` |
+| `speakers` | `SPEAKER_01=Name;SPEAKER_03=Other` | the labels in the subtitles | `--speakers` | `falantes` |
+| `sensitivity` | `low`, `normal`, `high` | `normal` | `--sensitivity` | `sensibilidade` |
+| `ignore_region` | `x,y,w,h` in fractions of the frame (0 to 1, origin at the top left corner) | none | `--ignore-region` | `ignorar_regiao` |
 
-**Old names.** The request of the earlier version still works: `pedidos/pedido.md`, `--pedido`, the
-sections `# objetivo` and `# opcoes`, the keys of the "old key" column (the same as the command-line
-options) and the values `todos`, `plano` and `lotes`. Write the new names.
+**Old names.** The names of the earlier version still work. In the request: `pedidos/pedido.md`, the
+sections `# objetivo` and `# opcoes`, the keys of the "old key" column and the values `todos`, `plano` and
+`lotes`. On the command line: `--pedido`, the same keys as options (`--papeis`, `--max-lotes`,
+`--esforco-analista`, `--curadoria plano|lotes`…), `--estimar`, `--forcar` and `--retomar ultimo`. Write the
+new names.
 
 **Consumption.** On success, the request is moved to `runs/<run_id>/request.md`; on error, renamed to
 `requests/request.error.md` (a request named `pedido.md` becomes `pedido.erro.md`, as before), replacing the
 previous one, and the next Write needs no Read. On exit code 4 (one video failed, the others form a run), a
-copy also goes to the run. `--estimar` does not consume it: the next Write needs a Read first. An option
+copy also goes to the run. `--estimate` does not consume it: the next Write needs a Read first. An option
 given on the command line prevails over the one in the request.
 
 ## 2. The `prepare.py` command line used by the skill
 
 ```bash
-python "<skill>/scripts/prepare.py" --request "C:/Users/digom/video-analysis/requests/request.md" --estimar
+python "<skill>/scripts/prepare.py" --request "C:/Users/digom/video-analysis/requests/request.md" --estimate
 python "<skill>/scripts/prepare.py" --request "C:/Users/digom/video-analysis/requests/request.md"
-python "<skill>/scripts/prepare.py" --resume <run_id|run_dir|ultimo> [--papeis agents|inline] [--max-lotes N] [--curadoria plano|lotes]
+python "<skill>/scripts/prepare.py" --resume <run_id|run_dir|latest> [--roles agents|inline] [--max-batches N] [--curation plan|batches]
 ```
 
 - `<skill>` is `${CLAUDE_SKILL_DIR}`. Always through the Bash tool and always `python`, never `python3`.
 - Subtitle rule: the `.vtt` has the same name as the video, in the same folder. `--vtt "<path>"` points to
   another one (only with 1 video); `--skip-missing` skips, in a folder, the videos without subtitles.
-- `--resume` accepts only `--papeis`, `--max-lotes`, `--paralelo`, `--esforco-analista`,
-  `--esforco-curador` and `--curadoria`; an option not given keeps the value stored in the run (`--curadoria`
-  of a run older than the option: `lotes`). It refuses `--request` (or `--pedido`), inputs, `--estimar` and
+- `--resume` accepts only `--roles`, `--max-batches`, `--parallel`, `--analyst-effort`,
+  `--curator-effort` and `--curation`; an option not given keeps the value stored in the run (`--curation`
+  of a run older than the option: `batches`). It refuses `--request` (or `--pedido`), inputs, `--estimate` and
   `--force`.
 - Manual use, outside the skill: direct inputs (`<videos…> --objective-file <md> | --objective "…"
   [--run [NAME]]`; without an objective, it only warms the cache, without a run), `--gc [DAYS]` (default 30)
-  and the parameters of [`parametros.md`](parametros.md). General: `--home FOLDER` (default
+  and the parameters of [`parameters.md`](parameters.md). General: `--home FOLDER` (default
   `VIDEO_ANALYSIS_HOME` or `%USERPROFILE%\video-analysis`), `--jobs N` (videos in parallel, default 2),
-  `--force[=all|cues|frames|batches]` (redoes the stage and the following ones), `--forcar` (accepts more
+  `--force[=all|cues|frames|batches]` (redoes the stage and the following ones), `--ignore-agent-limit` (accepts more
   than 800 agents, but the Workflow refuses them anyway), `--recursive`, `--json-out FILE`, `--ascii`,
-  `--quiet`, `--debug`. The request options also exist as command-line options (`--papeis`, `--max-lotes`,
-  `--paralelo`, `--esforco-analista`, `--esforco-curador`, `--curadoria`, `--idioma`, `--trecho`,
-  `--falantes`, `--sensibilidade`, `--ignorar-regiao`). Full reference: `python prepare.py --help` and
-  `docs/design-deterministico.md`, §2.
+  `--quiet`, `--debug`. The request options also exist as command-line options (`--roles`, `--max-batches`,
+  `--parallel`, `--analyst-effort`, `--curator-effort`, `--curation`, `--language`, `--range`,
+  `--speakers`, `--sensitivity`, `--ignore-region`). Full reference: `python prepare.py --help` and
+  `docs/design-deterministic.md`, §2.
 
 **Exit codes**, with the `error.code` of each one:
 
 | exit code | meaning | `error.code` |
 |---|---|---|
 | `0` | ok (there may be `warnings`) | — |
-| `2` | input | `uso_invalido`, `pedido_invalido`, `objetivo_ausente`, `opcao_invalida`, `video_nao_encontrado`, `vtt_ausente`, `run_nao_encontrado`, `run_inconsistente`, `run_grande_demais` |
-| `3` | environment | `ffmpeg_ausente`, `dependencia_ausente`, `workspace_inacessivel`, `instalacao_incompleta` |
-| `4` | one video failed; the others come in the JSON | `video_falhou` |
-| `130` | interrupted; the completed stages stay in the cache | `interrompido` |
-| `1` | internal error (a bug in `prepare.py`; traceback in the log, or on stderr with `--debug`) | `erro_interno` |
+| `2` | input | `invalid_usage`, `invalid_request`, `missing_objective`, `invalid_option`, `video_not_found`, `missing_vtt`, `run_not_found`, `inconsistent_run`, `run_too_large` |
+| `3` | environment | `missing_ffmpeg`, `missing_dependency`, `workspace_not_writable`, `incomplete_install` |
+| `4` | one video failed; the others come in the JSON | `video_failed` |
+| `130` | interrupted; the completed stages stay in the cache | `interrupted` |
+| `1` | internal error (a bug in `prepare.py`; traceback in the log, or on stderr with `--debug`) | `internal_error` |
 
 A video with all three stages in the cache (cues, frames, batches) needs neither ffprobe nor ffmpeg, only
 numpy and Pillow: their absence only matters when some video needs to be probed or extracted.
@@ -122,24 +124,24 @@ after `ok`; `workflow_args` comes as `null` and the fields that do not apply com
 exception is exit code 4 with some video ready, which brings usable `videos` and `workflow_args` (below).
 
 ```json
-{"ok": false, "error": {"code": "vtt_ausente", "detail": "…candidates in the folder and the suggested Rename-Item…"},
+{"ok": false, "error": {"code": "missing_vtt", "detail": "…candidates in the folder and the suggested Rename-Item…"},
  "mode": "prepare", "…": "other fields of the envelope",
  "missing_vtt": [{"video": "C:/…/Reunião-20260610_150844-Gravação de Reunião.mp4",
    "candidates": ["C:/…/Reunião.vtt"], "suggestion": "Rename-Item -LiteralPath '…' -NewName '…'"}]}
 ```
 
-- Extra keys per error, after `warnings`: `vtt_ausente` adds
-  `missing_vtt: [{video, candidates, suggestion}]`; `video_nao_encontrado` adds `inputs: […]`, the
-  inputs not found. In `video_falhou`, `errors` (the usual key) lists `vid, slug, video, code,
+- Extra keys per error, after `warnings`: `missing_vtt` adds
+  `missing_vtt: [{video, candidates, suggestion}]`; `video_not_found` adds `inputs: […]`, the
+  inputs not found. In `video_failed`, `errors` (the usual key) lists `vid, slug, video, code,
   detail` per video.
 - Exit code 4 in the prepare: `run.json`, `objective.md` and a usable `workflow_args` with the videos that
-  succeeded are still written; `error.code` is `video_falhou` and `errors` lists the ones that failed.
+  succeeded are still written; `error.code` is `video_failed` and `errors` lists the ones that failed.
 - `--gc` returns `"mode": "gc"` and the key `gc` (`removed`, `freed_mb`, `kept`, `failed`).
 
 | field | use by the main agent |
 |---|---|
 | `ok`, `error.code`, `error.detail` | the error in one sentence |
-| `estimate.seconds` | with `--estimar`, the estimate of the extraction: above 400 s, the prepare runs in the background. In the prepare and the resume, the time it took |
+| `estimate.seconds` | with `--estimate`, the estimate of the extraction: above 400 s, the prepare runs in the background. In the prepare and the resume, the time it took |
 | `estimate.batches`, `estimate.agents` | above 80 agents, confirm with the user |
 | `env.permissions_ok` | `false`: warn and offer the setup |
 | `env.agents_current` | the copies in `~/.claude/agents/` are identical to the skill's; if not, `roles: agents` becomes `inline`, with a warning |
@@ -151,7 +153,7 @@ exception is exit code 4 with some video ready, which brings usable `videos` and
 - `estimate.agents` = Σ per video (batches to analyse + 2, or + 1 on a resume with a ledger, which has
   no INIT; with `curation: batches`, 2 × batches + 1; a video already finished, with `final_exists`,
   counts 0) + 1 if there is more than one video (the CROSS, counted even with `combined_exists`).
-- With `--estimar`, the envelope is the same, with `"mode": "estimate"`: ffprobe only, so `estimate.seconds`
+- With `--estimate`, the envelope is the same, with `"mode": "estimate"`: ffprobe only, so `estimate.seconds`
   is the estimate of the extraction and the batch fields may come null with a cold cache.
 
 ## 4. `workflow_args` v1
@@ -278,7 +280,7 @@ curator idempotent on resume.
 - `report.md` from a run older than the renaming counts as the final report (in the video and in the
   combined one): without pending work, it is renamed to `relatorio.md`; with pending work, it goes to
   `relatorio.anterior.md` (or `report.anterior.md`, if there was also a `relatorio.md`);
-- `range` (`--trecho`): batches numbered 001… within the segment, with the frame ids of the whole video.
+- `range` (`--range`): batches numbered 001… within the segment, with the frame ids of the whole video.
 
 | ledger | `start_batch` | `start_prompt_exists` | what the Workflow does |
 |---|---|---|---|
@@ -292,7 +294,7 @@ curator idempotent on resume.
 ## 5. Schemas of the agents' returns
 
 Each agent returns the object through the StructuredOutput tool. Without it (procedure
-[`sem-workflow.md`](sem-workflow.md)), it replies with a single JSON line with the same fields. Only the
+[`without-workflow.md`](without-workflow.md)), it replies with a single JSON line with the same fields. Only the
 types `type`, `enum`, `items`, `required` and `description` are used.
 
 ```js
@@ -363,7 +365,7 @@ const S_FINAL = { type: 'object', required: ['status', 'report_path', 'answered'
 ```
 
 - `videos[].status`: `ok` · `partial` (a partial or failed batch, FINAL `partial`, or test mode with
-  `planned` < `total`) · `failed` (video interrupted; the files stay for `retomar`) · `skipped`
+  `planned` < `total`) · `failed` (video interrupted; the files stay for `resume`) · `skipped`
   (already finished).
 - `batches`: `ok` is a count; `partial` and `failed` are lists of batches; `from` is the starting batch
   (> 1 on a resume; greater than `planned` when only the FINAL was missing); `planned` is the last batch of

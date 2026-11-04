@@ -1,4 +1,4 @@
-"""Synthetic videos with ground truth for the frame engine (design-deterministico.md section 9).
+"""Synthetic videos with ground truth for the frame engine (design-deterministic.md section 9).
 
 Frames are rendered with Pillow/numpy at 1280x720, 30 fps (seeded, deterministic) and piped to
 ``ffmpeg -f rawvideo ... -c:v libx264 -preset veryfast -crf 28 -g 180 -bf 0``. Variants: CRF 32,
@@ -537,7 +537,7 @@ SCENARIOS = {
 }
 
 
-# --- acceptance (design-deterministico.md section 9 table) -------------------------------------
+# --- acceptance (design-deterministic.md section 9 table) -------------------------------------
 
 def evaluate(doc: dict, truth: dict) -> tuple[bool, list[str]]:
     """Check a frames.json dict against a scenario's truth. Returns (ok, messages)."""
@@ -649,7 +649,7 @@ def variant_name(name: str, crf: int = 28, bf: int = 0, vfr: bool = False) -> st
 def render(name: str, out_dir: str | os.PathLike | None = None, *, crf: int = 28, bf: int = 0, vfr: bool = False,
            force: bool = False) -> tuple[Path, dict]:
     """Render scenario ``name`` (cached) -> (video path, truth dict). The truth dict holds the
-    acceptance data of design-deterministico.md section 9 for that scenario."""
+    acceptance data of design-deterministic.md section 9 for that scenario."""
     out = Path(out_dir) if out_dir else synth_dir()
     out.mkdir(parents=True, exist_ok=True)
     tag = variant_name(name, crf, bf, vfr)

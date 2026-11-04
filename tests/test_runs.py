@@ -58,9 +58,9 @@ def test_parse_request_sections_and_literal_objective(text):
                            "C:/Users/digom/Documents/solar/[PES] pasta  dupla/Reunião ’x’.mp4"]
     assert p["objective"] == ('Explique o indicador "venda zero clientes": o que é pedido, de onde vem: cada dado citado.\n'
                               "\n## Formato\n- uma tabela; # não é seção aqui")
-    assert p["options"]["papeis"] == "inline" and p["options"]["max_lotes"] == "2"
-    assert p["options"]["trecho"] == "00:10:00-00:20:00"            # value = rest after the first ":"
-    assert p["options"]["ignorar_regiao"] == ["0.80,0.75,0.20,0.25; 0.00,0.00,0.20,0.06", "0.5,0.5,0.1,0.1"]
+    assert p["options"]["roles"] == "inline" and p["options"]["max_batches"] == "2"
+    assert p["options"]["range"] == "00:10:00-00:20:00"             # value = rest after the first ":"
+    assert p["options"]["ignore_region"] == ["0.80,0.75,0.20,0.25; 0.00,0.00,0.20,0.06", "0.5,0.5,0.1,0.1"]
 
 
 def test_parse_request_old_and_new_names_give_the_same_request():
@@ -74,24 +74,24 @@ def test_parse_request_old_and_new_names_give_the_same_request():
 def test_parse_request_tolerates_accents_case_crlf_bom(text):
     p = R.parse_request(text)
     assert p["videos"] == ["C:/a.mp4"] and p["objective"] == "  Resuma."
-    assert p["options"] == {"max_lotes": "3", "esforco_analista": "médio"}
-    assert R.normalize_options(p["options"])["esforco_analista"] == "medium"
+    assert p["options"] == {"max_batches": "3", "analyst_effort": "médio"}
+    assert R.normalize_options(p["options"])["analyst_effort"] == "medium"
 
 
 @pytest.mark.parametrize("text, code, needle", [
-    ("# objective\nx\n", "pedido_invalido", "# videos"),
-    ("# videos\n\n# objective\nx\n", "pedido_invalido", "is empty"),
-    ("# videos\nC:/a.mp4\n", "objetivo_ausente", "# objective"),
-    ("# videos\nC:/a.mp4\n# objective\n  \n\n", "objetivo_ausente", "is empty"),
-    ("lixo antes\n# videos\nC:/a.mp4\n# objective\nx\n", "pedido_invalido", "before the first"),
-    ("# videos\nC:/a.mp4\n# videos\nC:/b.mp4\n# objective\nx\n", "pedido_invalido", "twice"),
-    ("# videos\nC:/a.mp4\n# objective\nx\n# objetivo\ny\n", "pedido_invalido", "'# objective' appears twice"),
-    ("# videos\nC:/a.mp4\n# objective\nx\n# options\nroles inline\n", "pedido_invalido", "without ':' in '# options'"),
-    ("# videos\nC:/a.mp4\n# objective\nx\n# options\nturbo: sim\n", "opcao_invalida", "accepted: roles, max_batches"),
-    ("# videos\nC:/a.mp4\n# objective\nx\n# options\nroles: inline\npapeis: agents\n", "opcao_invalida",
+    ("# objective\nx\n", "invalid_request", "# videos"),
+    ("# videos\n\n# objective\nx\n", "invalid_request", "is empty"),
+    ("# videos\nC:/a.mp4\n", "missing_objective", "# objective"),
+    ("# videos\nC:/a.mp4\n# objective\n  \n\n", "missing_objective", "is empty"),
+    ("lixo antes\n# videos\nC:/a.mp4\n# objective\nx\n", "invalid_request", "before the first"),
+    ("# videos\nC:/a.mp4\n# videos\nC:/b.mp4\n# objective\nx\n", "invalid_request", "twice"),
+    ("# videos\nC:/a.mp4\n# objective\nx\n# objetivo\ny\n", "invalid_request", "'# objective' appears twice"),
+    ("# videos\nC:/a.mp4\n# objective\nx\n# options\nroles inline\n", "invalid_request", "without ':' in '# options'"),
+    ("# videos\nC:/a.mp4\n# objective\nx\n# options\nturbo: sim\n", "invalid_option", "accepted: roles, max_batches"),
+    ("# videos\nC:/a.mp4\n# objective\nx\n# options\nroles: inline\npapeis: agents\n", "invalid_option",
      "'roles' appears twice"),
-    ("# videos\nC:/a.mp4\n# objetivo\n  \n# opcoes\npapeis: inline\n", "objetivo_ausente", "is empty"),
-    ("# videos\nC:/a.mp4\n# objetivo\nx\n# opcoes\npapeis inline\n", "pedido_invalido", "without ':'"),
+    ("# videos\nC:/a.mp4\n# objetivo\n  \n# opcoes\npapeis: inline\n", "missing_objective", "is empty"),
+    ("# videos\nC:/a.mp4\n# objetivo\nx\n# opcoes\npapeis inline\n", "invalid_request", "without ':'"),
 ])
 def test_parse_request_errors(text, code, needle):
     with pytest.raises(R.RunError) as exc:
@@ -102,7 +102,7 @@ def test_parse_request_errors(text, code, needle):
 def test_read_request_missing_and_cp1252(tmp_path):
     with pytest.raises(R.RunError) as exc:
         R.read_request(tmp_path / "request.md")
-    assert exc.value.code == "pedido_invalido"
+    assert exc.value.code == "invalid_request"
     p = tmp_path / "request.md"
     p.write_bytes("# videos\nC:/v.mp4\n# objective\nAção\n".encode("cp1252"))
     assert R.read_request(p)["objective"] == "Ação"
@@ -116,24 +116,27 @@ def test_normalize_options_all_keys():
         "curadoria": "Por lote", "idioma": "en_US", "trecho": "1:00 a 1:30.5", "falantes": "SPEAKER_01 = Ana ; SPEAKER_02=Bruno Silva",
         "sensibilidade": "ALTA", "ignorar_regiao": ["0.8,0.75,0.2,0.25; 0 0 0.2 0.06"],
     })
-    assert opts == {"papeis": "agents", "max_lotes": 4, "paralelo": 6, "esforco_analista": "high",
-                    "esforco_curador": "xhigh", "curadoria": "batches", "idioma": "en-US", "trecho": [60.0, 90.5],
-                    "falantes": {"SPEAKER_01": "Ana", "SPEAKER_02": "Bruno Silva"}, "sensibilidade": "high",
-                    "ignorar_regiao": [[0.8, 0.75, 0.2, 0.25], [0.0, 0.0, 0.2, 0.06]]}
+    assert opts == {"roles": "agents", "max_batches": 4, "parallel": 6, "analyst_effort": "high",
+                    "curator_effort": "xhigh", "curation": "batches", "language": "en-US", "range": [60.0, 90.5],
+                    "speakers": {"SPEAKER_01": "Ana", "SPEAKER_02": "Bruno Silva"}, "sensitivity": "high",
+                    "ignore_region": [[0.8, 0.75, 0.2, 0.25], [0.0, 0.0, 0.2, 0.06]]}
     empty = R.normalize_options({})
     assert set(empty) == set(R.OPTION_KEYS) and all(v is None for v in empty.values())
-    assert R.normalize_options({"max_lotes": "0"})["max_lotes"] is None
-    assert R.normalize_options({"max_lotes": "todos"})["max_lotes"] is None
-    assert R.normalize_options({"trecho": "00:10:00 – 00:20:00"})["trecho"] == [600.0, 1200.0]
-    assert [R.normalize_options({"curation": v})["curadoria"] for v in ("plano", "Inicial", "lotes", "batches")] == \
+    assert R.normalize_options({"max_batches": "0"})["max_batches"] is None
+    assert R.normalize_options({"max_batches": "all"})["max_batches"] is None
+    assert R.normalize_options({"max_lotes": "todos"})["max_batches"] is None
+    assert R.normalize_options({"range": "00:10:00 – 00:20:00"})["range"] == [600.0, 1200.0]
+    assert R.normalize_options({"range": "0:10:00 to 0:20:00"})["range"] == [600.0, 1200.0]
+    assert [R.normalize_options({"curation": v})["curation"] for v in ("plano", "Inicial", "lotes", "batches")] == \
         ["plan", "plan", "batches", "batches"]
 
 
 def test_request_option_names():
-    """Every option has an English key in the request, and the old Portuguese key still works."""
-    assert set(R.OPTION_NAMES) == set(R.OPTION_KEYS) and len(set(R.OPTION_NAMES.values())) == len(R.OPTION_KEYS)
-    for key, name in R.OPTION_NAMES.items():
-        assert R.option_key(name) == key and R.option_key(key) == key
+    """Every option has an English key (the request's and the command line's), and its Portuguese key of
+    before the rename (OPTION_NAMES) still works."""
+    assert sorted(R.OPTION_NAMES.values()) == sorted(R.OPTION_KEYS) and len(R.OPTION_NAMES) == len(R.OPTION_KEYS)
+    for old, key in R.OPTION_NAMES.items():
+        assert R.option_key(old) == key and R.option_key(key) == key
     english = R.normalize_options({"roles": "agents", "max_batches": "all", "parallel": "2", "analyst_effort": "medium",
                                    "curator_effort": "low", "curation": "batches", "language": "en", "range": "1:00-1:30",
                                    "speakers": "SPEAKER_01=Ana", "sensitivity": "low", "ignore_region": ["0.8,0.75,0.2,0.25"]})
@@ -141,41 +144,42 @@ def test_request_option_names():
                                   "esforco_curador": "baixo", "curadoria": "lotes", "idioma": "en", "trecho": "1:00 a 1:30",
                                   "falantes": "SPEAKER_01=Ana", "sensibilidade": "baixa",
                                   "ignorar_regiao": ["0.8,0.75,0.2,0.25"]})
-    assert english == legacy and english["curadoria"] == "batches" and english["max_lotes"] is None
+    assert english == legacy and english["curation"] == "batches" and english["max_batches"] is None
 
 
 @pytest.mark.parametrize("key, value, needle", [
-    ("papeis", "auto", "agents or inline"),
-    ("max_lotes", "dois", "integer"),
-    ("max_lotes", "-1", "integer"),
-    ("paralelo", "7", "1 to 6"),
-    ("paralelo", "0", "1 to 6"),
-    ("esforco_analista", "ultra", "low"),
-    ("curadoria", "sempre", "plan or batches"),
-    ("idioma", "português!", "pt-BR"),
-    ("trecho", "00:20:00-00:10:00", "after the start"),
-    ("trecho", "10 minutos", "hh:mm:ss"),
-    ("falantes", "SPEAKER_01:Ana", "LABEL=Name"),
-    ("sensibilidade", "maxima", "low, normal or high"),
-    ("ignorar_regiao", "0,8,0,75,0,2,0,25", "decimal point"),
-    ("ignorar_regiao", "0.9,0.9,0.2,0.2", "x+w"),
-    ("ignorar_regiao", "0.1,0.1,0,0.2", "fractions"),
-    ("papeis", "   ", "empty"),
-    ("max_lotes", "dois", "max_batches (--max-lotes): 'dois' is invalid"),
-    ("ignorar_regiao", "1,1", "ignore_region (--ignorar-regiao)"),
+    ("roles", "auto", "agents or inline"),
+    ("max_batches", "dois", "integer"),
+    ("max_batches", "-1", "integer"),
+    ("parallel", "7", "1 to 6"),
+    ("parallel", "0", "1 to 6"),
+    ("analyst_effort", "ultra", "low"),
+    ("curation", "sempre", "plan or batches"),
+    ("language", "português!", "pt-BR"),
+    ("range", "00:20:00-00:10:00", "after the start"),
+    ("range", "10 minutos", "hh:mm:ss"),
+    ("speakers", "SPEAKER_01:Ana", "LABEL=Name"),
+    ("sensitivity", "maxima", "low, normal or high"),
+    ("ignore_region", "0,8,0,75,0,2,0,25", "decimal point"),
+    ("ignore_region", "0.9,0.9,0.2,0.2", "x+w"),
+    ("ignore_region", "0.1,0.1,0,0.2", "fractions"),
+    ("roles", "   ", "empty"),
+    ("max_batches", "dois", "max_batches: 'dois' is invalid"),
+    ("max_lotes", "dois", "max_batches: 'dois' is invalid"),      # an old key is reported by its new name
+    ("ignorar_regiao", "1,1", "ignore_region: '1,1' is invalid"),
 ])
 def test_normalize_options_errors(key, value, needle):
     with pytest.raises(R.RunError) as exc:
         R.normalize_options({key: value})
-    assert exc.value.code == "opcao_invalida" and needle in exc.value.detail
+    assert exc.value.code == "invalid_option" and needle in exc.value.detail
 
 
 def test_workflow_options_defaults():
     assert R.workflow_options(R.normalize_options({})) == {"max_batches": None, "max_parallel_videos": 3,
                                                            "analyst_effort": "high", "curator_effort": "high",
                                                            "curation": "plan"}
-    o = R.workflow_options(R.normalize_options({"max_lotes": "2", "paralelo": "1", "esforco_curador": "medium",
-                                                "curadoria": "lotes", "esforco_analista": "alto"}))
+    o = R.workflow_options(R.normalize_options({"max_batches": "2", "parallel": "1", "curator_effort": "medium",
+                                                "curation": "batches", "analyst_effort": "alto"}))
     assert o == {"max_batches": 2, "max_parallel_videos": 1, "analyst_effort": "high", "curator_effort": "medium",
                  "curation": "batches"}
 
@@ -275,7 +279,7 @@ def test_old_function_names_still_work(tmp_path):
     run.mkdir(parents=True)
     p = ped_dir / "pedido.md"
     p.write_text(LEGACY_REQUEST, encoding="utf-8")
-    assert read_pedido(p) == read_pedido(path=p) and read_pedido(p)["options"]["papeis"] == "inline"
+    assert read_pedido(p) == read_pedido(path=p) and read_pedido(p)["options"]["roles"] == "inline"
     assert consume_pedido(p, run, ok=True) == run / "request.md" and not p.exists()
     p.write_text("dois", encoding="utf-8")
     assert consume_pedido(pedido=p, run_dir=run, ok=False, copy_to_run=True) == ped_dir / "pedido.erro.md"
@@ -421,7 +425,7 @@ def test_find_run(tmp_path):
     home = tmp_path / "home"
     with pytest.raises(R.RunError) as exc:
         R.find_run(home, "ultimo")
-    assert exc.value.code == "run_nao_encontrado"
+    assert exc.value.code == "run_not_found"
     a = _make_run(home, "20261005-100000-a")
     b = _make_run(home, "20261006-100000-b")
     _make_run(home, "20261007-100000-falhou", with_wargs=False)  # failed prepare: no workflow_args
@@ -457,3 +461,10 @@ def test_build_workflow_args_is_valid(tmp_path):
     assert wa["options"]["curation"] == "plan"      # options without curation: the default
     assert list(wa) == ["schema_version", "run_id", "run_dir", "objective_path", "roles_dir", "roles_mode", "language",
                         "options", "combined_exists", "videos"]
+
+
+def test_old_function_name_parse_trecho():
+    """parse_trecho, the name of before the rename, is parse_range."""
+    from va.runs import parse_trecho
+    assert parse_trecho is R.parse_range and "parse_trecho" in R.__all__
+    assert parse_trecho("00:01:00 a 00:01:30") == R.parse_range(value="0:01:00 to 0:01:30") == [60.0, 90.0]

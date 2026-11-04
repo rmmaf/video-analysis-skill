@@ -324,7 +324,7 @@ def test_prepare_video_builds_then_hits(tmp_path, fakes):
         assert K.stage_valid(vdir / f"{s}-{job['keys'][s]}", s, job["keys"][s])
     st = read_json(vdir / f"frames-{job['keys']['frames']}" / "stage.json")
     assert st["result"]["n_frames"] == 25 and st["video_key"] == job["video_key"]
-    assert read_json(job["progress_path"])["state"] == "pronto"
+    assert read_json(job["progress_path"])["state"] == "ready"
     assert _calls(tmp_path) == ["cues", "frames", "batches"]
     r2 = K.prepare_video(job)
     assert r2["ok"] and r2["cache_hit"] == {"cues": True, "frames": True, "batches": True} and _calls(tmp_path) == []
@@ -352,7 +352,7 @@ def test_prepare_video_failures(tmp_path, fakes):
     bad = _job(tmp_path, fakes)
     Path(bad["video_path"]).write_text(json.dumps({"fail": "frames"}), encoding="utf-8")
     r = K.prepare_video(bad)
-    assert not r["ok"] and r["error"]["code"] == "video_falhou" and "frames" in r["error"]["detail"]
+    assert not r["ok"] and r["error"]["code"] == "video_failed" and "frames" in r["error"]["detail"]
     assert "Traceback" in Path(bad["log_path"]).read_text(encoding="utf-8")
     assert not (Path(bad["video_dir"]) / ".lock").exists()
     missing = _job(tmp_path / "m", fakes)
@@ -369,7 +369,7 @@ def test_prepare_video_lock_timeout(tmp_path, fakes):
     Path(job["video_dir"]).mkdir(parents=True)
     with K.VideoLock(Path(job["video_dir"]) / ".lock"):
         r = K.prepare_video(job)
-    assert not r["ok"] and r["error"]["code"] == "video_falhou" and "another prepare.py" in r["error"]["detail"]
+    assert not r["ok"] and r["error"]["code"] == "video_failed" and "another prepare.py" in r["error"]["detail"]
 
 
 def test_prepare_video_interrupt_releases_lock(tmp_path, fakes):
@@ -388,7 +388,7 @@ def test_prepare_video_stage_unavailable(tmp_path, fakes, monkeypatch):
     monkeypatch.delitem(K.STAGE_OVERRIDES, "run_batches_stage")
     monkeypatch.setattr(K, "stage_fn", lambda name: broken(name) if name == "run_batches_stage" else fakes[name])
     r = K.prepare_video(job)
-    assert not r["ok"] and r["error"]["code"] == "instalacao_incompleta"
+    assert not r["ok"] and r["error"]["code"] == "incomplete_install"
 
 
 def test_prepare_video_without_n_images_falls_back(tmp_path, fakes, monkeypatch):

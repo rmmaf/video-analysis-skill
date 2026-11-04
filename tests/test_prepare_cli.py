@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import pytest
 
 import prepare
-from va import ambiente, cache, contracts
+from va import environment, cache, contracts
 from va.common import as_posix, read_json, write_json
 
 NFD = lambda s: unicodedata.normalize("NFD", s)  # noqa: E731
@@ -206,8 +206,8 @@ def sb(tmp_path, monkeypatch):
     fakes = load_fakes()
     for name in STAGE_NAMES:
         monkeypatch.setitem(cache.STAGE_OVERRIDES, name, fakes[name])
-    monkeypatch.setattr(ambiente, "runtime_problems", lambda need=(): [])
-    monkeypatch.setattr(ambiente, "tool_status", lambda name, timeout=15.0: {"id": name, "ok": True, "version": f"{name} version test",
+    monkeypatch.setattr(environment, "runtime_problems", lambda need=(): [])
+    monkeypatch.setattr(environment, "tool_status", lambda name, timeout=15.0: {"id": name, "ok": True, "version": f"{name} version test",
                                                                              "path": name, "detail": name})
     monkeypatch.setattr(prepare, "STATUS_INTERVAL_S", 0.05)
     vids = tmp_path / "vids"
@@ -343,7 +343,7 @@ def test_request_happy_path(sb, capsys, skill_dir):
     assert rj["options"]["roles_mode_requested"] == "inline"
     # status.json, roles, no leftovers
     st = read_json(run_dir / "status.json")
-    assert st["state"] == "pronto" and [v["state"] for v in st["videos"]] == ["pronto", "pronto"]
+    assert st["state"] == "ready" and [v["state"] for v in st["videos"]] == ["ready", "ready"]
     for role in (skill_dir / "agents").glob("*.md"):
         assert (sb.home / "roles" / role.name).read_bytes() == role.read_bytes()
     assert not list((sb.home / "tmp").glob("progress-*"))
@@ -381,7 +381,7 @@ def test_warm_run_needs_no_ffprobe_and_no_tool_check(sb, capsys, monkeypatch):
     the cache. probe.json replaces ffprobe and neither ffmpeg nor ffprobe is checked; a stage to
     build brings both back. Measured on the real fixtures: 4.5 s -> 0.6 s for one warm video."""
     needs, probes = [], []
-    monkeypatch.setattr(ambiente, "runtime_problems", lambda need=(): needs.append(tuple(need)) or [])
+    monkeypatch.setattr(environment, "runtime_problems", lambda need=(): needs.append(tuple(need)) or [])
     real_probe = cache.STAGE_OVERRIDES["probe_video"]
     monkeypatch.setitem(cache.STAGE_OVERRIDES, "probe_video", lambda p: probes.append(p) or real_probe(p))
     code, env1, _ = run_cli(capsys, "--request", write_request(sb, [sb.v1, sb.v2]))
@@ -394,7 +394,7 @@ def test_warm_run_needs_no_ffprobe_and_no_tool_check(sb, capsys, monkeypatch):
     assert same(env1) == same(env2)
     assert read_json(Path(env2["run_dir"]) / "run.json")["videos"][1]["probe"]["duration_s"] == 441.2165
     needs.clear()
-    code, est, _ = run_cli(capsys, "--request", write_request(sb, [sb.v1, sb.v2]), "--estimar")
+    code, est, _ = run_cli(capsys, "--request", write_request(sb, [sb.v1, sb.v2]), "--estimate")
     assert code == 0 and needs == [("numpy", "pillow")] and probes == [] and est["estimate"]["seconds"] <= 2
     # batch-only change: cues and frames stay cached, so still no ffprobe and no ffmpeg
     needs.clear()
@@ -405,11 +405,11 @@ def test_warm_run_needs_no_ffprobe_and_no_tool_check(sb, capsys, monkeypatch):
     code, _, _ = run_cli(capsys, "--request", write_request(sb, [sb.v2]), "--force", "frames")
     assert code == 0 and needs == [("ffmpeg", "ffprobe", "numpy", "pillow")] and len(probes) == 1
     assert calls(sb) == ["frames", "batches"]
-    # --estimar on a cold video checks ffmpeg too (the prepare that follows needs it): exit 3 early
+    # --estimate on a cold video checks ffmpeg too (the prepare that follows needs it): exit 3 early
     cold = fake_video(sb.vids / "frio" / "novo.mp4")
     fake_vtt(sb.vids / "frio" / "novo.vtt")
     needs.clear()
-    code, est, _ = run_cli(capsys, "--request", write_request(sb, [cold]), "--estimar")
+    code, est, _ = run_cli(capsys, "--request", write_request(sb, [cold]), "--estimate")
     assert code == 0 and needs == [("ffmpeg", "ffprobe", "numpy", "pillow")]
 
 
@@ -455,9 +455,9 @@ def test_batch_params_change_does_not_reextract(sb, capsys):
     assert env["workflow_args"]["videos"][0]["batch_images"] == [10, 10, 10]
 
 
-def test_estimar_does_not_consume_and_reports_hits(sb, capsys):
+def test_estimate_does_not_consume_and_reports_hits(sb, capsys):
     req = write_request(sb, [sb.v1, sb.v2])
-    code, env, err = run_cli(capsys, "--request", req, "--estimar")
+    code, env, err = run_cli(capsys, "--request", req, "--estimate")
     assert code == 0 and env["mode"] == "estimate" and req.exists()
     assert list(env) == ENVELOPE_KEYS
     assert env["run_id"] is None and env["run_dir"] is None and env["workflow_args"] is None
@@ -504,9 +504,37 @@ def test_old_names_still_work(sb, capsys):
     # the old name fails into pedido.erro.md, as before
     legacy = write_request(sb, [sb.vids / "nao existe.mp4"], legacy=True)
     code, env, _ = run_cli(capsys, "--pedido", legacy)
-    assert code == 2 and env["error"]["code"] == "video_nao_encontrado"
+    assert code == 2 and env["error"]["code"] == "video_not_found"
     assert not legacy.exists() and (sb.pedidos / "pedido.erro.md").read_text(encoding="utf-8").startswith("# videos")
     assert not sb.requests.exists() or not list(sb.requests.iterdir())
+
+
+def test_old_option_names_still_work(sb, capsys):
+    """The command-line options of before the rename (--estimar, --papeis, --max-lotes, --curadoria
+    plano|lotes, --paralelo, --esforco-*, --idioma, --trecho, --falantes, --sensibilidade,
+    --ignorar-regiao, --forcar, --retomar ultimo) give the same run as the English ones."""
+    req = write_request(sb, [sb.v2], OBJ, {"roles": "inline"})
+    code, est, _ = run_cli(capsys, "--request", req, "--estimar")
+    assert code == 0 and est["mode"] == "estimate" and req.exists()
+    old_flags = ["--papeis", "inline", "--max-lotes", "1", "--curadoria", "lotes", "--paralelo", "2",
+                 "--esforco-analista", "medium", "--esforco-curador", "low", "--idioma", "en", "--trecho", "00:01:00-00:03:00",
+                 "--falantes", "SPEAKER_01=Ana", "--sensibilidade", "high", "--ignorar-regiao", "0.8,0.75,0.2,0.25", "--forcar"]
+    new_flags = ["--roles", "inline", "--max-batches", "1", "--curation", "batches", "--parallel", "2",
+                 "--analyst-effort", "medium", "--curator-effort", "low", "--language", "en", "--range", "00:01:00-00:03:00",
+                 "--speakers", "SPEAKER_01=Ana", "--sensitivity", "high", "--ignore-region", "0.8,0.75,0.2,0.25",
+                 "--ignore-agent-limit"]
+    code, old, _ = run_cli(capsys, "--request", req, *old_flags)
+    assert code == 0, old
+    code, new, _ = run_cli(capsys, "--request", write_request(sb, [sb.v2], OBJ, {"roles": "inline"}), *new_flags)
+    assert code == 0, new
+    assert old["workflow_args"]["options"] == new["workflow_args"]["options"] == {
+        "max_batches": 1, "max_parallel_videos": 2, "analyst_effort": "medium", "curator_effort": "low", "curation": "batches"}
+    assert old["workflow_args"]["language"] == new["workflow_args"]["language"] == "en"
+    old_run, new_run = read_json(Path(old["run_dir"]) / "run.json"), read_json(Path(new["run_dir"]) / "run.json")
+    assert old_run["params"] == new_run["params"] and old_run["options"]["range"] == new_run["options"]["range"] == [60.0, 180.0]
+    code, env, _ = run_cli(capsys, "--retomar", "ultimo", "--papeis", "inline", "--curadoria", "plano")
+    assert code == 0 and env["mode"] == "resume" and env["run_id"] == new["run_id"]
+    assert env["workflow_args"]["options"]["curation"] == "plan"
 
 
 # --- input errors ------------------------------------------------------------------------------------------
@@ -519,7 +547,7 @@ def test_vtt_missing_teams_pattern(sb, capsys):
     (sb.requests / "request.error.md").write_text("velho", encoding="utf-8")
     req = write_request(sb, [video])
     code, env, err = run_cli(capsys, "--request", req)
-    assert code == 2 and env["ok"] is False and env["error"]["code"] == "vtt_ausente"
+    assert code == 2 and env["ok"] is False and env["error"]["code"] == "missing_vtt"
     d = env["error"]["detail"]
     assert "Indicador PES.vtt (prefix of the video name)" in d
     assert ("Rename-Item -LiteralPath '" + os.path.normpath(str(folder / "Indicador PES.vtt")) +
@@ -545,37 +573,37 @@ def test_skip_missing_and_vtt_flag(sb, capsys):
     fake_vtt(folder / "a.vtt")
     fake_video(folder / "b sem legenda.mp4")
     code, env, _ = run_cli(capsys, "--request", write_request(sb, [folder]))
-    assert code == 2 and env["error"]["code"] == "vtt_ausente" and "--vtt" not in env["error"]["detail"]
+    assert code == 2 and env["error"]["code"] == "missing_vtt" and "--vtt" not in env["error"]["detail"]
     code, env, _ = run_cli(capsys, "--request", write_request(sb, [folder]), "--skip-missing")
     assert code == 0 and [v["slug"] for v in env["workflow_args"]["videos"]] == ["a"]
     assert any("b sem legenda.mp4" in w for w in env["warnings"])
     code, env, _ = run_cli(capsys, "--request", write_request(sb, [folder]), "--vtt", folder / "a.vtt")
-    assert code == 2 and env["error"]["code"] == "uso_invalido" and "exactly 1 video" in env["error"]["detail"]
+    assert code == 2 and env["error"]["code"] == "invalid_usage" and "exactly 1 video" in env["error"]["detail"]
     other = fake_vtt(sb.vids / "legendas" / "qualquer nome.vtt")
     code, env, _ = run_cli(capsys, "--request", write_request(sb, [folder / "b sem legenda.mp4"]), "--vtt", other)
     assert code == 0 and env["videos"][0]["vtt_path"] == as_posix(other)
     code, env, _ = run_cli(capsys, a, "--objective", "x", "--vtt", sb.vids / "nao.vtt")
-    assert code == 2 and env["error"]["code"] == "vtt_ausente"
+    assert code == 2 and env["error"]["code"] == "missing_vtt"
 
 
 @pytest.mark.parametrize("make_args, code, err_code", [
-    (lambda sb: ["--request", write_request(sb, [sb.vids / "nao existe.mp4"])], 2, "video_nao_encontrado"),
-    (lambda sb: ["--request", write_request(sb, [sb.v1], options={"parallel": "9"})], 2, "opcao_invalida"),
-    (lambda sb: ["--request", write_request(sb, [sb.v1], options={"turbo": "sim"})], 2, "opcao_invalida"),
-    (lambda sb: ["--request", write_request(sb, [sb.v1], options={"sensitivity": "x"})], 2, "opcao_invalida"),
-    (lambda sb: ["--request", write_request(sb, [sb.v1], objective="")], 2, "objetivo_ausente"),
-    (lambda sb: ["--request", write_request(sb, [sb.v1], options={"range": "02:00:00-03:00:00"})], 2, "opcao_invalida"),
-    (lambda sb: ["--request", sb.requests / "nao.md"], 2, "pedido_invalido"),
-    (lambda sb: ["--pedido", sb.pedidos / "nao.md"], 2, "pedido_invalido"),
-    (lambda sb: ["--pedido", write_request(sb, [sb.v1], options={"turbo": "sim"}, legacy=True)], 2, "opcao_invalida"),
-    (lambda sb: ["--request", write_request(sb, [sb.v1]), sb.v2], 2, "uso_invalido"),
-    (lambda sb: [sb.v1, "--run"], 2, "objetivo_ausente"),
-    (lambda sb: ["--jobs", "muitos", sb.v1], 2, "uso_invalido"),
-    (lambda sb: [], 2, "uso_invalido"),
-    (lambda sb: ["--resume", "nada-disso"], 2, "run_nao_encontrado"),
-    (lambda sb: ["--gc", "5", "--resume", "ultimo"], 2, "uso_invalido"),
-    (lambda sb: ["--resume", "ultimo", "--request", sb.requests / "request.md"], 2, "uso_invalido"),
-    (lambda sb: ["--resume", "ultimo", "--pedido", sb.pedidos / "pedido.md"], 2, "uso_invalido"),
+    (lambda sb: ["--request", write_request(sb, [sb.vids / "nao existe.mp4"])], 2, "video_not_found"),
+    (lambda sb: ["--request", write_request(sb, [sb.v1], options={"parallel": "9"})], 2, "invalid_option"),
+    (lambda sb: ["--request", write_request(sb, [sb.v1], options={"turbo": "sim"})], 2, "invalid_option"),
+    (lambda sb: ["--request", write_request(sb, [sb.v1], options={"sensitivity": "x"})], 2, "invalid_option"),
+    (lambda sb: ["--request", write_request(sb, [sb.v1], objective="")], 2, "missing_objective"),
+    (lambda sb: ["--request", write_request(sb, [sb.v1], options={"range": "02:00:00-03:00:00"})], 2, "invalid_option"),
+    (lambda sb: ["--request", sb.requests / "nao.md"], 2, "invalid_request"),
+    (lambda sb: ["--pedido", sb.pedidos / "nao.md"], 2, "invalid_request"),
+    (lambda sb: ["--pedido", write_request(sb, [sb.v1], options={"turbo": "sim"}, legacy=True)], 2, "invalid_option"),
+    (lambda sb: ["--request", write_request(sb, [sb.v1]), sb.v2], 2, "invalid_usage"),
+    (lambda sb: [sb.v1, "--run"], 2, "missing_objective"),
+    (lambda sb: ["--jobs", "muitos", sb.v1], 2, "invalid_usage"),
+    (lambda sb: [], 2, "invalid_usage"),
+    (lambda sb: ["--resume", "nada-disso"], 2, "run_not_found"),
+    (lambda sb: ["--gc", "5", "--resume", "latest"], 2, "invalid_usage"),
+    (lambda sb: ["--resume", "latest", "--request", sb.requests / "request.md"], 2, "invalid_usage"),
+    (lambda sb: ["--resume", "latest", "--pedido", sb.pedidos / "pedido.md"], 2, "invalid_usage"),
 ])
 def test_input_errors(sb, capsys, make_args, code, err_code):
     c, env, _ = run_cli(capsys, *make_args(sb))
@@ -586,23 +614,23 @@ def test_input_errors(sb, capsys, make_args, code, err_code):
 
 
 def test_environment_missing_exit_3(sb, capsys, monkeypatch):
-    monkeypatch.setattr(ambiente, "runtime_problems", lambda need=(): [
-        {"id": "ffmpeg", "ok": False, "code": "ffmpeg_ausente", "detail": "ffmpeg não está no PATH"}])
+    monkeypatch.setattr(environment, "runtime_problems", lambda need=(): [
+        {"id": "ffmpeg", "ok": False, "code": "missing_ffmpeg", "detail": "ffmpeg não está no PATH"}])
     req = write_request(sb, [sb.v1])
     code, env, _ = run_cli(capsys, "--request", req)
-    assert code == 3 and env["error"]["code"] == "ffmpeg_ausente" and "setup" in env["error"]["detail"]
+    assert code == 3 and env["error"]["code"] == "missing_ffmpeg" and "setup" in env["error"]["detail"]
     assert (sb.requests / "request.error.md").exists()
-    monkeypatch.setattr(ambiente, "runtime_problems", lambda need=(): [
-        {"id": "numpy", "ok": False, "code": "dependencia_ausente", "detail": "numpy não está instalado"}])
+    monkeypatch.setattr(environment, "runtime_problems", lambda need=(): [
+        {"id": "numpy", "ok": False, "code": "missing_dependency", "detail": "numpy não está instalado"}])
     code, env, _ = run_cli(capsys, "--request", write_request(sb, [sb.v1]))
-    assert code == 3 and env["error"]["code"] == "dependencia_ausente"
+    assert code == 3 and env["error"]["code"] == "missing_dependency"
 
 
 def test_workspace_not_writable_exit_3(sb, capsys, tmp_path):
     blocker = tmp_path / "arquivo"
     blocker.write_text("não é pasta", encoding="utf-8")
     code, env, _ = run_cli(capsys, sb.v1, "--objective", "x", "--home", blocker)
-    assert code == 3 and env["error"]["code"] == "workspace_inacessivel"
+    assert code == 3 and env["error"]["code"] == "workspace_not_writable"
 
 
 # --- video failures, interruption, size guard ------------------------------------------------------------------
@@ -612,7 +640,7 @@ def test_one_video_fails_exit_4_keeps_the_others(sb, capsys):
     fake_vtt(sb.vids / "ruim" / "quebrado.vtt")
     req = write_request(sb, [sb.v2, bad])
     code, env, _ = run_cli(capsys, "--request", req)
-    assert code == 4 and env["ok"] is False and env["error"]["code"] == "video_falhou"
+    assert code == 4 and env["ok"] is False and env["error"]["code"] == "video_failed"
     assert "quebrado" in env["error"]["detail"] and "decodificação falhou" in env["error"]["detail"]
     assert [e["slug"] for e in env["errors"]] == ["quebrado"]
     assert [v["slug"] for v in env["videos"]] == ["venda-zero-clientes"]
@@ -621,7 +649,7 @@ def test_one_video_fails_exit_4_keeps_the_others(sb, capsys):
     run_dir = Path(env["run_dir"])
     assert read_json(run_dir / "run.json")["workflow_args"] == wa       # resumable
     assert (run_dir / "request.md").exists() and (sb.requests / "request.error.md").exists() and not req.exists()
-    assert read_json(run_dir / "status.json")["state"] == "parcial"
+    assert read_json(run_dir / "status.json")["state"] == "partial"
     log = (sb.home / "logs" / f"prepare-{env['run_id']}.log").read_text(encoding="utf-8")
     assert "Traceback" in log and "decodificação falhou" in log
 
@@ -630,7 +658,7 @@ def test_probe_failure_and_all_failed(sb, capsys):
     bad = fake_video(sb.vids / "ruim" / "corrompido.mp4", fail="probe")
     fake_vtt(sb.vids / "ruim" / "corrompido.vtt")
     code, env, _ = run_cli(capsys, "--request", write_request(sb, [bad]))
-    assert code == 4 and env["error"]["code"] == "video_falhou" and env["workflow_args"] is None
+    assert code == 4 and env["error"]["code"] == "video_failed" and env["workflow_args"] is None
     assert "arquivo corrompido" in env["error"]["detail"] and env["errors"][0]["slug"] == "corrompido"
 
 
@@ -639,24 +667,24 @@ def test_interrupted_exit_130(sb, capsys):
     fake_vtt(sb.vids / "int" / "longo.vtt")
     req = write_request(sb, [stop])
     code, env, err = run_cli(capsys, "--request", req)
-    assert code == 130 and env["error"]["code"] == "interrompido"
+    assert code == 130 and env["error"]["code"] == "interrupted"
     assert (sb.requests / "request.error.md").exists() and not req.exists()
     assert not list((sb.home / "cache").glob("*/.lock"))
-    assert read_json(Path(env["run_dir"]) / "status.json")["state"] == "erro"
+    assert read_json(Path(env["run_dir"]) / "status.json")["state"] == "error"
 
 
-def test_size_guard_and_forcar(sb, capsys):
+def test_size_guard_and_ignore_agent_limit(sb, capsys):
     big = fake_video(sb.vids / "big" / "reuniao longa.mp4", n_frames=401, duration_s=24060.0)
     fake_vtt(sb.vids / "big" / "reuniao longa.vtt")
     req = write_request(sb, [big], options={"curation": "batches"})
     code, env, _ = run_cli(capsys, "--request", req, "--batch-frames", "1")
-    assert code == 2 and env["error"]["code"] == "run_grande_demais" and "803" in env["error"]["detail"]
+    assert code == 2 and env["error"]["code"] == "run_too_large" and "803" in env["error"]["detail"]
     assert env["estimate"]["agents"] == 803 and env["workflow_args"] is None
     assert (sb.requests / "request.error.md").exists()
     code, env, _ = run_cli(capsys, "--request", write_request(sb, [big], options={"curation": "batches"}), "--batch-frames", "1",
-                           "--forcar")
-    assert code == 0 and any("--forcar" in w for w in env["warnings"])
-    # the Workflow refuses > 800 agents (reference/sem-workflow.md: do not run it either): split the run
+                           "--ignore-agent-limit")
+    assert code == 0 and any("--ignore-agent-limit" in w for w in env["warnings"])
+    # the Workflow refuses > 800 agents (reference/without-workflow.md: do not run it either): split the run
     assert any("refuses more than 800" in w and "split the run" in w for w in env["warnings"])
     code, env, _ = run_cli(capsys, "--request", write_request(sb, [big], options={"roles": "inline", "max_batches": "10",
                                                                                "curation": "batches"}),
@@ -671,8 +699,8 @@ def test_size_guard_and_forcar(sb, capsys):
 def test_roles_agents_downgrade_and_current(sb, capsys, skill_dir):
     code, env, _ = run_cli(capsys, "--request", write_request(sb, [sb.v2], options={"roles": "agents"}))
     assert code == 0 and env["workflow_args"]["roles_mode"] == "inline" and env["env"]["agents_current"] is False
-    assert any("roles (--papeis): agents requested" in w for w in env["warnings"])
-    ambiente.install_agents(skill_dir, sb.chome)
+    assert any("roles: agents requested" in w for w in env["warnings"])
+    environment.install_agents(skill_dir, sb.chome)
     code, env, _ = run_cli(capsys, "--request", write_request(sb, [sb.v2], options={"roles": "agents"}))
     assert env["workflow_args"]["roles_mode"] == "agents" and env["env"]["agents_current"] is True
     assert not any("papeis" in w for w in env["warnings"])
@@ -683,7 +711,7 @@ def test_roles_agents_downgrade_and_current(sb, capsys, skill_dir):
 
 def test_permissions_ok_from_settings(sb, capsys):
     sb.chome.mkdir(parents=True, exist_ok=True)
-    (sb.chome / "settings.json").write_text(json.dumps({"permissions": {"allow": ambiente.workspace_rules(sb.home)}}),
+    (sb.chome / "settings.json").write_text(json.dumps({"permissions": {"allow": environment.workspace_rules(sb.home)}}),
                                             encoding="utf-8")
     code, env, _ = run_cli(capsys, "--request", write_request(sb, [sb.v2]))
     assert env["env"]["permissions_ok"] is True
@@ -692,13 +720,13 @@ def test_permissions_ok_from_settings(sb, capsys):
 def test_workflow_current_tracks_the_saved_copy(sb, capsys, skill_dir, monkeypatch):
     """env.workflow_current: <claude home>/workflows/video-analysis.js is byte-identical to the skill's
     script (SKILL.md step 6 calls the Workflow by name only then). The Claude home is the one
-    verificar_ambiente.py checks by default: VA_CLAUDE_HOME (here, the sandbox) or %USERPROFILE%\\.claude."""
+    check_environment.py checks by default: VA_CLAUDE_HOME (here, the sandbox) or %USERPROFILE%\\.claude."""
     code, env, _ = run_cli(capsys, "--request", write_request(sb, [sb.v2]))
     assert code == 0 and env["env"]["workflow_current"] is False                       # never installed
-    ambiente.install_workflow(skill_dir, sb.chome)
+    environment.install_workflow(skill_dir, sb.chome)
     code, env, _ = run_cli(capsys, "--request", write_request(sb, [sb.v2]))
     assert code == 0 and env["env"]["workflow_current"] is True
-    code, est, _ = run_cli(capsys, "--request", write_request(sb, [sb.v2]), "--estimar")
+    code, est, _ = run_cli(capsys, "--request", write_request(sb, [sb.v2]), "--estimate")
     assert code == 0 and est["env"]["workflow_current"] is True
     code, res, _ = run_cli(capsys, "--resume", env["run_id"])
     assert code == 0 and res["env"]["workflow_current"] is True
@@ -707,7 +735,7 @@ def test_workflow_current_tracks_the_saved_copy(sb, capsys, skill_dir, monkeypat
     assert code == 0 and env["env"]["workflow_current"] is False                       # stale copy
     other = sb.tmp / "outra-claude"
     monkeypatch.setenv("VA_CLAUDE_HOME", str(other))
-    ambiente.install_workflow(skill_dir, other)
+    environment.install_workflow(skill_dir, other)
     code, env, _ = run_cli(capsys, "--request", write_request(sb, [sb.v2]))
     assert code == 0 and env["env"]["workflow_current"] is True                        # the override is honoured
 
@@ -723,7 +751,7 @@ def test_resume_cases(sb, capsys):
     (out / "reports" / "batch_001.md").write_text("r1", encoding="utf-8")
     (out / "prompts" / "batch_002.md").write_text("p2", encoding="utf-8")
     reset_calls(sb)
-    code, env, err = run_cli(capsys, "--resume", "ultimo")
+    code, env, err = run_cli(capsys, "--resume", "latest")
     assert code == 0 and env["mode"] == "resume" and env["run_id"] == run_dir.name and calls(sb) == []
     assert err.splitlines()[0] == f"run_dir: {as_posix(run_dir)}"
     v = env["workflow_args"]["videos"][0]
@@ -731,25 +759,25 @@ def test_resume_cases(sb, capsys):
     assert env["estimate"] == {"batches": 1, "agents": 2, "seconds": env["estimate"]["seconds"]}
     assert env["workflow_args"]["options"]["curation"] == "plan" and Path(out).name == "v1"
     assert contracts.check_workflow_args(env["workflow_args"]) == []
-    code, env, _ = run_cli(capsys, "--resume", run_dir.name, "--max-lotes", "3", "--papeis", "agents")
+    code, env, _ = run_cli(capsys, "--resume", run_dir.name, "--max-batches", "3", "--roles", "agents")
     assert env["workflow_args"]["options"]["max_batches"] == 3 and env["estimate"]["agents"] == 3
-    code, env, _ = run_cli(capsys, "--resume", run_dir.name, "--curadoria", "lotes")
+    code, env, _ = run_cli(capsys, "--resume", run_dir.name, "--curation", "batches")
     assert env["workflow_args"]["options"]["curation"] == "batches" and env["estimate"]["agents"] == 5
-    assert env["workflow_args"]["roles_mode"] == "inline" and any("roles (--papeis): agents requested" in w for w in env["warnings"])
+    assert env["workflow_args"]["roles_mode"] == "inline" and any("roles: agents requested" in w for w in env["warnings"])
     for n in (2, 3):
         (out / "reports" / f"batch_{n:03d}.md").write_text("r", encoding="utf-8")
     (out / "relatorio.md").write_text("final", encoding="utf-8")
-    code, env, _ = run_cli(capsys, "--resume", as_posix(run_dir), "--max-lotes", "0")
+    code, env, _ = run_cli(capsys, "--resume", as_posix(run_dir), "--max-batches", "0")
     v = env["workflow_args"]["videos"][0]
     assert (v["start_batch"], v["final_exists"]) == (4, True) and env["estimate"]["agents"] == 0
     assert any("already complete" in w for w in env["warnings"]) and (out / "relatorio.md").exists()
     (out / "reports" / "batch_003.md").unlink()
-    code, env, _ = run_cli(capsys, "--resume", "ultimo")
+    code, env, _ = run_cli(capsys, "--resume", "latest")
     v = env["workflow_args"]["videos"][0]
     assert (v["start_batch"], v["final_exists"]) == (3, False)
     assert (out / "relatorio.anterior.md").read_text(encoding="utf-8") == "final" and not (out / "relatorio.md").exists()
     (out / "ledger.md").unlink()
-    code, env, _ = run_cli(capsys, "--resume", "ultimo")
+    code, env, _ = run_cli(capsys, "--resume", "latest")
     v = env["workflow_args"]["videos"][0]
     assert (v["start_batch"], v["ledger_exists"]) == (1, False)
     assert list((out / "_descartado").glob("*/reports/batch_001.md"))
@@ -772,7 +800,7 @@ def test_resume_old_run_slug_folder(sb, capsys):
     (run_dir / "run.json").write_text(json.dumps(rj, ensure_ascii=False), encoding="utf-8")
     (old / "ledger.md").write_text("Integrado até o lote: 001 de 003", encoding="utf-8")
     (old / "reports" / "batch_001.md").write_text("r1", encoding="utf-8")
-    code, env, _ = run_cli(capsys, "--resume", "ultimo")
+    code, env, _ = run_cli(capsys, "--resume", "latest")
     assert code == 0
     v = env["workflow_args"]["videos"][0]
     assert v["out_dir"] == as_posix(old) and (v["start_batch"], v["ledger_exists"]) == (2, True)
@@ -790,11 +818,11 @@ def test_resume_combined_report_two_videos(sb, capsys):
         for n in range(1, len(v["batch_images"]) + 1):
             (out / "reports" / f"batch_{n:03d}.md").write_text("r", encoding="utf-8")
         (out / "relatorio.md").write_text("final", encoding="utf-8")
-    code, env, _ = run_cli(capsys, "--resume", "ultimo")
+    code, env, _ = run_cli(capsys, "--resume", "latest")
     assert env["workflow_args"]["combined_exists"] is True and env["estimate"]["agents"] == 1  # only the CROSS slot
     first = Path(env["workflow_args"]["videos"][0]["out_dir"])
     (first / "reports" / "batch_002.md").unlink()
-    code, env, _ = run_cli(capsys, "--resume", "ultimo")
+    code, env, _ = run_cli(capsys, "--resume", "latest")
     assert env["workflow_args"]["combined_exists"] is False and (run_dir / "relatorio.anterior.md").exists()
 
 
@@ -810,7 +838,7 @@ def test_resume_legacy_report_md_counts_as_final(sb, capsys):
         for n in range(1, len(v["batch_images"]) + 1):
             (out / "reports" / f"batch_{n:03d}.md").write_text("r", encoding="utf-8")
         (out / "report.md").write_text("final", encoding="utf-8")
-    code, env, _ = run_cli(capsys, "--resume", "ultimo")
+    code, env, _ = run_cli(capsys, "--resume", "latest")
     wa = env["workflow_args"]
     assert code == 0 and wa["combined_exists"] is True and all(v["final_exists"] for v in wa["videos"])
     assert env["estimate"]["agents"] == 1 and any("already complete" in w for w in env["warnings"])
@@ -827,15 +855,15 @@ def test_resume_rebuilds_missing_cache_and_refuses_changed_source(sb, capsys):
     batches_dir = env["workflow_args"]["videos"][0]["batches_dir"]
     shutil.rmtree(sb.home / "cache")
     reset_calls(sb)
-    code, env2, _ = run_cli(capsys, "--resume", "ultimo")
+    code, env2, _ = run_cli(capsys, "--resume", "latest")
     assert code == 0 and calls(sb) == ["cues", "frames", "batches"]
     assert env2["workflow_args"]["videos"][0]["batches_dir"] == batches_dir
     assert env2["videos"][0]["cache_hit"] == {"cues": False, "frames": False, "batches": False}
     shutil.rmtree(sb.home / "cache")
     time.sleep(0.01)
     sb.v2.write_text(json.dumps({"duration_s": 441.2165, "n_frames": 31}), encoding="utf-8")
-    code, env3, _ = run_cli(capsys, "--resume", "ultimo")
-    assert code == 4 and env3["error"]["code"] == "video_falhou" and "changed" in env3["error"]["detail"]
+    code, env3, _ = run_cli(capsys, "--resume", "latest")
+    assert code == 4 and env3["error"]["code"] == "video_failed" and "changed" in env3["error"]["detail"]
 
 
 # --- other modes ---------------------------------------------------------------------------------------------
@@ -843,8 +871,8 @@ def test_resume_rebuilds_missing_cache_and_refuses_changed_source(sb, capsys):
 def test_direct_mode_with_objective_file_and_run_name(sb, capsys, tmp_path):
     obj = tmp_path / "objetivo.md"
     obj.write_text("﻿Objetivo do arquivo: \"literal\"\n", encoding="utf-8")
-    code, env, _ = run_cli(capsys, sb.v2, "--objective-file", obj, "--run=Minha Análise", "--papeis", "inline",
-                           "--max-lotes", "1", "--trecho", "00:01:00-00:02:00")
+    code, env, _ = run_cli(capsys, sb.v2, "--objective-file", obj, "--run=Minha Análise", "--roles", "inline",
+                           "--max-batches", "1", "--range", "00:01:00-00:02:00")
     assert code == 0 and env["run_id"].endswith("-minha-analise")
     md = (Path(env["run_dir"]) / "objective.md").read_text(encoding="utf-8")
     assert md.startswith('# Objetivo (literal)\n\nObjetivo do arquivo: "literal"\n\n# Opções')
@@ -901,7 +929,7 @@ def test_status_refreshes_from_progress_files(sb, monkeypatch):
     ctx.run_dir.mkdir(parents=True)
     st = prepare.Status(ctx, [{"vid": "v1", "slug": "x", "title": "X"}])
     st.start()
-    write_json(st.progress_path("v1"), {"stage": "frames", "state": "processando", "info": {"done_s": 5}})
+    write_json(st.progress_path("v1"), {"stage": "frames", "state": "processing", "info": {"done_s": 5}})
 
     def status():
         for _ in range(50):  # the refresher may be replacing the file right now (Windows sharing)
@@ -915,14 +943,14 @@ def test_status_refreshes_from_progress_files(sb, monkeypatch):
     while time.time() < deadline and status()["videos"][0]["stage"] != "frames":
         time.sleep(0.05)
     assert status()["videos"][0]["info"] == {"done_s": 5}
-    st.finish("pronto")
-    assert read_json(ctx.run_dir / "status.json")["state"] == "pronto" and not Path(st.progress_path("v1")).parent.exists()
+    st.finish("ready")
+    assert read_json(ctx.run_dir / "status.json")["state"] == "ready" and not Path(st.progress_path("v1")).parent.exists()
 
 
 def test_exit_code_table_matches_contract():
-    assert prepare.EXIT["video_falhou"] == 4 and prepare.EXIT["interrompido"] == 130
-    assert {prepare.EXIT[c] for c in ("vtt_ausente", "video_nao_encontrado", "pedido_invalido", "run_grande_demais")} == {2}
-    assert {prepare.EXIT[c] for c in ("ffmpeg_ausente", "dependencia_ausente", "workspace_inacessivel")} == {3}
+    assert prepare.EXIT["video_failed"] == 4 and prepare.EXIT["interrupted"] == 130
+    assert {prepare.EXIT[c] for c in ("missing_vtt", "video_not_found", "invalid_request", "run_too_large")} == {2}
+    assert {prepare.EXIT[c] for c in ("missing_ffmpeg", "missing_dependency", "workspace_not_writable")} == {3}
 
 
 # --- real processes: spawn ProcessPool (--jobs 2) --------------------------------------------------------------

@@ -1,7 +1,7 @@
 # `/video-analysis setup`: prepare the machine
 
 This is the procedure for the `setup` command. **No video is analysed in this call.** The goal is for
-`verificar_ambiente.py` to exit with code 0 ("Ready."). The setup can run as many times as needed:
+`check_environment.py` to exit with code 0 ("Ready."). The setup can run as many times as needed:
 whatever is already in place comes out `[OK]` and is skipped.
 
 **What code 0 means:** Python 3.10 or newer, `ffmpeg` and `ffprobe` on PATH, numpy and Pillow installed,
@@ -9,7 +9,7 @@ the central folder `C:\Users\digom\video-analysis\` accepts writes, and the perm
 folder. With that, the Workflow's agents read frames and write reports without asking for permission for
 each file.
 
-**The installed agents and workflow never come out `[FALTA]`, only `[AVISO]`.** Without the copies in
+**The installed agents and workflow never come out `[MISSING]`, only `[WARN]`.** Without the copies in
 `~/.claude/agents/`, or with copies different from the skill's, the analysis runs in `inline` mode,
 which works the same and spends a little more per agent. Without the workflow saved in
 `~/.claude/workflows/`, or with a copy different from the skill's, the skill passes the whole script to
@@ -18,7 +18,7 @@ the Workflow on every run, which costs ~13k more tokens.
 What is only confirmed in use:
 
 - the first analysis proves the permission rules: no permission prompt during the run. Start with a
-  short one, with `--max-lotes 1` or `2`;
+  short one, with `--max-batches 1` or `2`;
 - the first analysis in a session opened after the setup proves `agents` mode and the workflow called
   by name (`name: "video-analysis"`).
 
@@ -48,18 +48,18 @@ You also do not accept terms or run an installation that asks for elevation on t
    through the Bash tool:
 
    ```bash
-   python "<skill folder>/verificar_ambiente.py"
+   python "<skill folder>/check_environment.py"
    ```
 
    - `<skill folder>` is the `${CLAUDE_SKILL_DIR}` of `SKILL.md` (the *base directory* given when the
      skill loads). The verifier sits at the root of the skill, not in `scripts\`.
    - With `--json`, the items come out in machine format.
-   - The output marks each item with `[OK]`, `[FALTA]` or `[AVISO]`, and each `[FALTA]`/`[AVISO]` points
+   - The output marks each item with `[OK]`, `[MISSING]` or `[WARN]`, and each `[MISSING]`/`[WARN]` points
      to the step of this procedure that resolves it. Exit code 0 = "Ready." (a warning does not
      count); 1 = something is missing.
    - `--home` and `--claude-home` (or the `VA_CLAUDE_HOME` variable) point to another central folder or
      another Claude Code folder; they are for testing, not for the normal setup.
-3. **Resolve the `[FALTA]` items in step order, one at a time.** The order follows the
+3. **Resolve the `[MISSING]` items in step order, one at a time.** The order follows the
    dependencies: each step only needs what the previous ones left ready. Steps 4 and 5 apply even
    when the rest is `[OK]`.
 4. **Each action carries one of two marks:**
@@ -89,7 +89,7 @@ winget install --id Gyan.FFmpeg -e
   <https://www.gyan.dev/ffmpeg/builds/> (adding the `bin` folder to PATH).
 
 **After installing**, the person closes and reopens Claude Code and calls `/video-analysis setup` again.
-PATH is only reread by a new process: `[FALTA]` right after the installation is usually that, not an
+PATH is only reread by a new process: `[MISSING]` right after the installation is usually that, not an
 installation failure.
 
 ## Step 2 — libraries: numpy and Pillow
@@ -109,7 +109,7 @@ The folder `C:\Users\digom\video-analysis\` and its subfolders (`cache`, `runs`,
 `logs`) are created on first use. The permission rules and `request.md` point to it: do not move it. The
 `pedidos` subfolder of the earlier version is no longer used; if it is empty, the person may delete it.
 
-If the item comes out `[FALTA]`, the folder exists but does not accept writes. **The person does it:**
+If the item comes out `[MISSING]`, the folder exists but does not accept writes. **The person does it:**
 they check whether there is a file, and not a folder, with that name; whether the disk has space; and
 whether an antivirus blocks writing. Then run the verifier again.
 
@@ -118,7 +118,7 @@ whether an antivirus blocks writing. Then run the verifier again.
 **You run it**, after the "yes":
 
 ```bash
-python "<skill folder>/verificar_ambiente.py" --instalar-agentes
+python "<skill folder>/check_environment.py" --install-agents
 ```
 
 - Creates `C:\Users\digom\.claude\agents\`, if it does not exist, and copies `video-analysis-curator.md`
@@ -126,7 +126,7 @@ python "<skill folder>/verificar_ambiente.py" --instalar-agentes
 - Creates `C:\Users\digom\.claude\workflows\`, if it does not exist, and copies `video-analysis.js`
   there, from the skill's `workflow\` folder. It is the saved workflow that step 6 of `SKILL.md` calls by
   name, without passing the script inline.
-- If the workflow changed, the verifier warns (`[AVISO]`): this session may keep the previous version in
+- If the workflow changed, the verifier warns (`[WARN]`): this session may keep the previous version in
   memory, so in this conversation step 6 of `SKILL.md` does not call it by name; in a new conversation,
   it does.
 
@@ -154,7 +154,7 @@ of prompts per run.
 2. **You run it**, only after the "yes":
 
    ```bash
-   python "<skill folder>/verificar_ambiente.py" --aplicar-permissoes
+   python "<skill folder>/check_environment.py" --apply-permissions
    ```
 
    The verifier makes a backup at `settings.json.bak-<date>` and merges the rules into `settings.json`,

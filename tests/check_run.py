@@ -7,7 +7,7 @@ The workflow_args (to find the batches_dir and out_dir of each video) come from 
 <run_dir>/run.json (key "workflow_args"); <run_dir>/prepare.json is the fallback. Examines batches 1..last
 of each video, with last = min(number of batches, options.max_batches), or batches.planned of the return
 when --return is given. The curation is options.curation: plan (the prepare.py default) or batches
-(--curadoria lotes, with the NEXT before each batch after the 1st); without the key, batches, because the
+(--curation batches, with the NEXT before each batch after the 1st); without the key, batches, because the
 run predates the option and had the NEXT.
 
 Checks (one line each: PASS, AVISO or FAIL; only FAIL fails the run):

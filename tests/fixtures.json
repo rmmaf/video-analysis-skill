@@ -1,6 +1,6 @@
 {
  "schema": "va.fixtures/1",
- "note": "Real videos and VTTs on this machine only. 'video' and 'vtt' are globs whose wildcards (* ?) may appear only in the last component (needed for the curly apostrophe U+2019 and the NFD file names). Tests marked 'real' skip when a file is missing. 'expect' holds probed facts (ffprobe 8.1, 2026-10-06) and the acceptance limits of design-deterministico.md section 9 and plano.md (Verification 3).",
+ "note": "Real videos and VTTs on this machine only. 'video' and 'vtt' are globs whose wildcards (* ?) may appear only in the last component (needed for the curly apostrophe U+2019 and the NFD file names). Tests marked 'real' skip when a file is missing. 'expect' holds probed facts (ffprobe 8.1, 2026-10-06) and the acceptance limits of design-deterministic.md section 9 and plan.md (Verification 3).",
  "fixtures": {
   "repasse_da_1608": {
    "video": "C:/Users/digom/Documents/solar/databricks  schema/docs-solar/01.Arquitetura/3.DA/Repasse - Fluxo de Carga dos DA*-20260818_160841-Grava*o de Reuni*o.mp4",
@@ -39,7 +39,7 @@
    "vtt": "C:/Users/digom/Downloads/venda_zero_clientes.vtt",
    "optional": false,
    "kind": "meeting recording (Teams-like H.264 Constrained Baseline); plain VTT without speakers",
-   "notes": "used by the end-to-end run of plano.md (Verification 6)",
+   "notes": "used by the end-to-end run of plan.md (Verification 6)",
    "expect": {
     "duration_s": 441.2165,
     "width": 1920,

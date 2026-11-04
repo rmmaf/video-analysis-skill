@@ -3,8 +3,8 @@
 `prepare.py` writes its progress to `C:\Users\digom\video-analysis\logs\` and its state to
 `runs\<run_id>\status.json`. Its errors come out as `{"ok": false, "error": {"code", "detail"}}`, with exit
 code `2` (input), `3` (environment), `4` (a video failed), `130` (interrupted) or `1` (internal error);
-the table of the `error.code` values is in [`contratos.md`](contratos.md), section 2. An error in the
-prepare renames the request to `request.error.md` (`--estimar` does not touch it). The commands cited here
+the table of the `error.code` values is in [`contracts.md`](contracts.md), section 2. An error in the
+prepare renames the request to `request.error.md` (`--estimate` does not touch it). The commands cited here
 are those of `SKILL.md`, with the same pre-approved prefix.
 
 ## Preparation (`prepare.py`)
@@ -24,7 +24,7 @@ are those of `SKILL.md`, with the same pre-approved prefix.
 - **What to do:** show the candidates and the suggested command (also in `missing_vtt`). Run it, in
   PowerShell, only after the user's "yes", or let the user run it. Then repeat: if the error came from
   the prepare, write the request again (the previous one became `request.error.md`); if it came from
-  `--estimar`, `request.md` is still there.
+  `--estimate`, `request.md` is still there.
   - Rename the `.vtt`, not the video: a renamed video gets another cache key and is extracted again.
   - Use `-LiteralPath`: with `-Path`, brackets in the name (`[PES] …`) become wildcards.
   - In PowerShell, `’` and `‘` also close a single-quoted string: inside it, double them (`’’`).
@@ -42,17 +42,17 @@ are those of `SKILL.md`, with the same pre-approved prefix.
 
 ### Invalid request or option (exit code 2)
 
-- **Cause:** `pedido_invalido` (a missing or repeated section, text before `# videos`, an option line
-  without `:`), `objetivo_ausente`, `opcao_invalida` (an unknown key or a value outside the accepted ones)
-  or `uso_invalido` (command options that do not go together). The `detail` says which.
-- **What to do:** fix it and write the request again, in the format of [`contratos.md`](contratos.md),
+- **Cause:** `invalid_request` (a missing or repeated section, text before `# videos`, an option line
+  without `:`), `missing_objective`, `invalid_option` (an unknown key or a value outside the accepted ones)
+  or `invalid_usage` (command options that do not go together). The `detail` says which.
+- **What to do:** fix it and write the request again, in the format of [`contracts.md`](contracts.md),
   section 1.
 
 ### ffmpeg, ffprobe, Python, numpy or Pillow missing (exit code 3)
 
 - **What to do:** `/video-analysis setup`. Right after installing something, the new PATH only applies in
-  a reopened Claude Code. `workspace_inacessivel` is the central folder without write access (step 3 of
-  the setup); `instalacao_incompleta` is the skill folder without the whole of `scripts\va`: reinstall the
+  a reopened Claude Code. `workspace_not_writable` is the central folder without write access (step 3 of
+  the setup); `incomplete_install` is the skill folder without the whole of `scripts\va`: reinstall the
   skill.
 
 ### A video failed (exit code 4)
@@ -65,7 +65,7 @@ are those of `SKILL.md`, with the same pre-approved prefix.
 
 ### Internal error (exit code 1)
 
-- **Cause:** a bug in `prepare.py` (`erro_interno`). The traceback is in the log in `logs\`.
+- **Cause:** a bug in `prepare.py` (`internal_error`). The traceback is in the log in `logs\`.
 - **What to do:** give the `detail` and the path of the log in one sentence; do not try to work around it
   with another command or with a script of your own.
 
@@ -83,7 +83,7 @@ are those of `SKILL.md`, with the same pre-approved prefix.
 
 ### "File has not been read yet" when writing `request.md`
 
-- **Cause:** a `request.md` was left over, for example after an `--estimar` not followed by the prepare.
+- **Cause:** a `request.md` was left over, for example after an `--estimate` not followed by the prepare.
 - **What to do:** read the file and write it again.
 
 ### The prepare seems stuck right at the start
@@ -100,16 +100,16 @@ are those of `SKILL.md`, with the same pre-approved prefix.
 
 ### More than 80 agents, or "run too large" (more than 800)
 
-- **Cause:** a long video, several videos in the same run, or `--curadoria lotes`, which almost doubles
-  the count. Per video, there is 1 agent per batch plus 2 (with `lotes`, 2 per batch plus 1); with two or
-  more videos, the run has 1 more. A 55 min meeting gives ≈ 50 batches, ≈ 52 agents (≈ 100 with `lotes`)
+- **Cause:** a long video, several videos in the same run, or `--curation batches`, which almost doubles
+  the count. Per video, there is 1 agent per batch plus 2 (with `batches`, 2 per batch plus 1); with two or
+  more videos, the run has 1 more. A 55 min meeting gives ≈ 50 batches, ≈ 52 agents (≈ 100 with `batches`)
   and hours in series.
 - **What to do:** above 80, confirm with the user before launching. Above 800, the prepare exits with
-  `run_grande_demais` and the Workflow refuses (its cap is 1000); `--forcar` only makes the prepare
-  accept it. Split into smaller runs, use `--trecho` on what matters, or `--max-lotes` to test the
-  objective first; with `--curadoria lotes`, running without it cuts the count almost in half. On resume,
-  only `--max-lotes` and `--curadoria plano` change the count: without `--curadoria`, the run's applies (a
-  run older than the option comes back with `lotes`).
+  `run_too_large` and the Workflow refuses (its cap is 1000); `--ignore-agent-limit` only makes the prepare
+  accept it. Split into smaller runs, use `--range` on what matters, or `--max-batches` to test the
+  objective first; with `--curation batches`, running without it cuts the count almost in half. On resume,
+  only `--max-batches` and `--curation plan` change the count: without `--curation`, the run's applies (a
+  run older than the option comes back with `batches`).
 
 ## Frames and subtitles
 
@@ -118,15 +118,15 @@ are those of `SKILL.md`, with the same pre-approved prefix.
 - **Cause:** more than 12 frames/min in the video, or more than 30 in any one minute. Usually a region
   that changes by itself escaped the automatic mask: webcam, clock, animation, notification.
 - **What to do:** if the warning brings a suggested region to ignore, offer to repeat with
-  `--ignorar-regiao x,y,w,h` (in the request, `ignore_region`). Without a suggestion,
-  `--sensibilidade low`. The subtitles come from the cache; the frames are extracted again. Details in
-  [`parametros.md`](parametros.md).
+  `--ignore-region x,y,w,h` (in the request, `ignore_region`). Without a suggestion,
+  `--sensitivity low`. The subtitles come from the cache; the frames are extracted again. Details in
+  [`parameters.md`](parameters.md).
 
 ### A small change did not become a frame
 
 - **Cause:** it is on purpose: a digit or up to ~4 characters look like a cursor and count as a duplicate.
   They accumulate against the last kept frame, so a sequence of them ends up showing.
-- **What to do:** `--sensibilidade high` (more frames, more cost).
+- **What to do:** `--sensitivity high` (more frames, more cost).
 
 ### A color-only change does not show
 
@@ -171,12 +171,12 @@ are those of `SKILL.md`, with the same pre-approved prefix.
 
 - **Cause:** the agents were installed after this session opened; a new agent only loads with Claude Code
   reopened.
-- **What to do:** `--papeis inline` now, or reopen Claude Code. An out-of-date installed copy is already
+- **What to do:** `--roles inline` now, or reopen Claude Code. An out-of-date installed copy is already
   downgraded to `inline` by `prepare.py` on its own, with a warning.
 
 ### The Workflow tool does not exist in this session
 
-- **What to do:** follow [`sem-workflow.md`](sem-workflow.md).
+- **What to do:** follow [`without-workflow.md`](without-workflow.md).
 
 ### The Workflow refuses the `scriptPath`, or does not know the name `video-analysis`
 
@@ -212,15 +212,15 @@ are those of `SKILL.md`, with the same pre-approved prefix.
   `relatorio.md`, and both roles forbid those three names and require writing exactly to the path in the
   call. With the skill up to date, it only shows up in a run launched with an old copy of the workflow or
   of the roles.
-- **What to do:** `/video-analysis setup` (`--instalar-agentes` renews the roles in `~/.claude/agents/`
-  and the saved workflow) and `/video-analysis retomar`: the finished batches are not redone, only what is
+- **What to do:** `/video-analysis setup` (`--install-agents` renews the roles in `~/.claude/agents/`
+  and the saved workflow) and `/video-analysis resume`: the finished batches are not redone, only what is
   missing runs, and a `report.md` from an old run counts as a finished report. In the setup conversation,
-  launch `retomar` without the name (next section).
+  launch `resume` without the name (next section).
 
 ### The Workflow runs the old version (it tries to write `report.md`, or the return carries `output_tokens`)
 
 - **Cause:** the workflow saved in `~/.claude/workflows/` changed while this session was open, usually
-  through the setup's `--instalar-agentes` (the verifier warns about it). The Workflow tool keeps in
+  through the setup's `--install-agents` (the verifier warns about it). The Workflow tool keeps in
   memory, per session, the saved workflow it has already read: until Claude Code is reopened,
   `name: "video-analysis"` keeps running the previous version, even with the new file and
   `env.workflow_current: true`.
@@ -229,42 +229,42 @@ are those of `SKILL.md`, with the same pre-approved prefix.
   spending tokens) and call with `scriptPath` = that path and the same `args`; without one, pass `script` =
   the content of the `script_path`, read with Read, without editing (~13k tokens). Or close and reopen
   Claude Code: in a new session, the name reads the new file. The run that the old version left
-  incomplete continues with `/video-analysis retomar`, launched the same way.
+  incomplete continues with `/video-analysis resume`, launched the same way.
 
 ### Batch `partial` or `failed`
 
 - **Cause:** the analyst did not open all the images, not even on the second attempt, or did not write the
   report. The final report lists the gaps.
-- **What to do:** if the segment matters, start a run with `--trecho` covering it; the cache is reused.
+- **What to do:** if the segment matters, start a run with `--range` covering it; the cache is reused.
 
 ### Video `failed`: "failed in 2 batches in a row"
 
 - **Cause:** almost always systemic: permission, unreadable role in `roles\`, quota.
-- **What to do:** fix the cause (setup, quota) and `/video-analysis retomar`: nothing finished is redone.
+- **What to do:** fix the cause (setup, quota) and `/video-analysis resume`: nothing finished is redone.
 
 ### Run interrupted: Claude Code closed, quota, error
 
-- **What to do:** `/video-analysis retomar`, for the most recent one, or `retomar <run_id>`. Resuming
+- **What to do:** `/video-analysis resume`, for the most recent one, or `resume <run_id>`. Resuming
   works from the files: it restarts at the 1st batch without a report (`reports\batch_NNN.md`). If the
   cache has been deleted (`--gc`), `--resume` rebuilds the stages with the same parameters and may take
   as long as a new extraction.
 
 ### Rate limit or quota
 
-- **What to do:** `--paralelo 1`, `--esforco-analista medium` (or `low`) and `--max-lotes` to test;
-  without `--curadoria lotes` (on resume, `--curadoria plano`).
+- **What to do:** `--parallel 1`, `--analyst-effort medium` (or `low`) and `--max-batches` to test;
+  without `--curation batches` (on resume, `--curation plan`).
 
 ### "token budget running out" warning
 
 - **Cause:** the conversation's token target (a `+500k`, for example) ran out, and the video stopped
   before a batch.
-- **What to do:** `retomar` with a larger target, or without one.
+- **What to do:** `resume` with a larger target, or without one.
 
 ### `inline` mode more expensive than expected
 
 - **Cause:** each inline agent loads the default subagent prompt, the session's tool list and the
   folder's CLAUDE.md.
-- **What to do:** setup with `--instalar-agentes` and Claude Code reopened, to use the `agents` mode.
+- **What to do:** setup with `--install-agents` and Claude Code reopened, to use the `agents` mode.
 
 ### Weak answer, or `answered: no`
 
@@ -272,12 +272,12 @@ are those of `SKILL.md`, with the same pre-approved prefix.
 - **What to do:** rephrase the objective and run again: the extraction comes from the cache, only the
   agents run.
 
-### `retomar` does nothing
+### `resume` does nothing
 
 - **Cause:** the run is already complete, with `relatorio.md` in every video.
 - **What to do:** for another question about the same video, a new run; the cache is reused.
 
-### `retomar` fails with `run_nao_encontrado` or `run_inconsistente` (exit code 2)
+### `resume` fails with `run_not_found` or `inconsistent_run` (exit code 2)
 
 - **Cause:** the id does not exist in `runs\` (or is a prefix of more than one run), that run's prepare
   failed before writing `run.json`, or `run.json`/`objective.md` are missing from the run folder.

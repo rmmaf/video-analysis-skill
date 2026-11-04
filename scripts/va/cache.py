@@ -12,9 +12,9 @@ Keys
 - ``video_key`` = slug + "-" + fp8, fp8 = sha1(NFC.casefold(abs path) | size | mtime_ns)[:8].
 - ``cues-<h8>``    = sha1(vtt bytes, VTT_VERSION, effective cue params).
 - ``frames-<h8>``  = sha1(video_key, effective frame params (range included), ALGO_VERSION).
-- ``batches-<h8>`` = sha1(frames key, cues key, effective batch params (the ``trecho`` range
+- ``batches-<h8>`` = sha1(frames key, cues key, effective batch params (the ``range``
   included), RENDER_VERSION, title and source paths rendered into the outputs).
-  Changing the batch size never re-extracts frames; a ``trecho`` gets its own batches folder.
+  Changing the batch size never re-extracts frames; a ``range`` gets its own batches folder.
 
 Ownership: stage functions write their content files only; this module writes ``stage.json``
 last, atomically. A folder without a valid ``stage.json`` is deleted and rebuilt; a completed
@@ -602,7 +602,7 @@ class _Log:
             now = time.monotonic()
             if now - self._last_progress >= 1.0:
                 self._last_progress = now
-                self.state(stage, "processando", info)
+                self.state(stage, "processing", info)
             if now - self._last_echo >= 15.0:
                 self._last_echo = now
                 self(f"{stage} {_progress_text(info)}".rstrip())
@@ -751,7 +751,7 @@ def prepare_video(job: dict) -> dict:
                     duration = info_get(need_info(), "duration_s", "duration")
                     if not os.path.isfile(vtt_path):
                         raise FileNotFoundError(f"subtitles missing: {vtt_path}")
-                    log.state("cues", "processando")
+                    log.state("cues", "processing")
                     t0 = time.perf_counter()
                     cues_doc = stage_fn("run_cues_stage")(Path(vtt_path), params["cues"], sdir, duration)
                     if not (sdir / "cues.json").is_file():
@@ -768,7 +768,7 @@ def prepare_video(job: dict) -> dict:
                     stage_now = "frames"
                     sdir = fresh_dir(dirs["frames"])
                     vinfo = need_info()
-                    log.state("frames", "processando")
+                    log.state("frames", "processing")
                     log("extracting frames")
                     t0 = time.perf_counter()
                     frames_doc = stage_fn("run_frames_stage")(Path(video_path), vinfo, params["frames"], sdir,
@@ -801,7 +801,7 @@ def prepare_video(job: dict) -> dict:
                             "cues_json": as_posix(dirs["cues"] / "cues.json")}
                     if language:
                         meta["language"] = language  # labels follow the language detected in the subtitle
-                    log.state("batches", "processando")
+                    log.state("batches", "processing")
                     t0 = time.perf_counter()
                     res = stage_fn("run_batches_stage")(frames_doc, cues_doc, params["batches"], sdir, meta)
                     if not isinstance(res, Mapping):
@@ -835,19 +835,19 @@ def prepare_video(job: dict) -> dict:
                         write_json(vdir / "probe.json", out["info"])
                 _write_source(vdir, video_path, job["video_key"], job.get("title") or Path(video_path).stem)
                 out["ok"] = True
-                log.state("batches", "pronto")
+                log.state("batches", "ready")
         except KeyboardInterrupt:
             raise
         except LockTimeout as exc:
-            out["error"] = {"code": "video_falhou",
+            out["error"] = {"code": "video_failed",
                             "detail": f"{exc}: another prepare.py is using this video; wait for it to finish or check whether it is stuck"}
         except StageUnavailable as exc:
-            out["error"] = {"code": "instalacao_incompleta", "detail": str(exc)}
+            out["error"] = {"code": "incomplete_install", "detail": str(exc)}
         except Exception as exc:  # one video failing must not stop the others
             import traceback  # lazy: only on failures (keeps the warm path light)
-            out["error"] = {"code": "video_falhou", "detail": f"{stage_now}: {type(exc).__name__}: {exc}"}
+            out["error"] = {"code": "video_failed", "detail": f"{stage_now}: {type(exc).__name__}: {exc}"}
             log("ERROR " + "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip(), echo=False)
         if out["error"]:
             log(f"failed: {out['error']['detail']}")
-            log.state(stage_now, "falhou", out["error"])
+            log.state(stage_now, "failed", out["error"])
     return out

@@ -75,8 +75,8 @@ def _clean_entry(entry: str) -> str:
 def expand_inputs(entries: list[str], recursive: bool = False) -> tuple[list[Path], list[dict]]:
     """Expand the INPUT list. Returns ``(videos, problems)``.
 
-    ``problems`` items: ``{"input", "reason"}`` with reason ``"nao_encontrado"`` (nothing
-    matches), ``"pasta_sem_videos"`` (a folder without video files) or ``"glob_sem_videos"``.
+    ``problems`` items: ``{"input", "reason"}`` with reason ``"not_found"`` (nothing
+    matches), ``"folder_without_videos"`` (a folder without video files) or ``"glob_without_videos"``.
     A path listed twice (or matched by two entries) is kept once, at its first position.
     An explicit file is accepted whatever its extension (ffprobe decides later).
     """
@@ -100,7 +100,7 @@ def expand_inputs(entries: list[str], recursive: bool = False) -> tuple[list[Pat
         except (OSError, ValueError, AmbiguousPathError):
             matches = []
         if not matches:
-            problems.append({"input": entry, "reason": "nao_encontrado"})
+            problems.append({"input": entry, "reason": "not_found"})
             continue
         matched = 0
         for m in matches:
@@ -109,7 +109,7 @@ def expand_inputs(entries: list[str], recursive: bool = False) -> tuple[list[Pat
                     continue  # a glob selects files; folders matched by it are ignored
                 vids = _videos_in(m, recursive)
                 if not vids:
-                    problems.append({"input": entry, "reason": "pasta_sem_videos"})
+                    problems.append({"input": entry, "reason": "folder_without_videos"})
                 matched += len(vids)
                 for v in vids:
                     add(v)
@@ -119,7 +119,7 @@ def expand_inputs(entries: list[str], recursive: bool = False) -> tuple[list[Pat
                 matched += 1
                 add(m)
         if has_glob and not matched and not any(p["input"] == entry for p in problems):
-            problems.append({"input": entry, "reason": "glob_sem_videos"})
+            problems.append({"input": entry, "reason": "glob_without_videos"})
     return videos, problems
 
 
@@ -153,7 +153,7 @@ def find_vtt(video: Path) -> Path | None:
 def vtt_candidates(video: Path, limit: int = MAX_CANDIDATES) -> list[dict]:
     """Subtitles in the video's folder that probably belong to it, best first.
 
-    Each item: ``{"path": Path, "name": str, "reason": "prefixo"|"comeca_com_video"|"parecido",
+    Each item: ``{"path": Path, "name": str, "reason": "prefix"|"starts_with_video"|"similar",
     "score": float}``. ``prefixo``: the subtitle stem is a prefix of the video stem (Teams
     downloads the transcript as "<meeting>.vtt" next to "<meeting>-YYYYMMDD_HHMMSS-Gravação de
     Reunião.mp4"); ``comeca_com_video``: the subtitle stem starts with the video stem
@@ -168,11 +168,11 @@ def vtt_candidates(video: Path, limit: int = MAX_CANDIDATES) -> list[dict]:
             continue
         ratio = difflib.SequenceMatcher(None, vkey, skey).ratio()
         if vkey.startswith(skey):
-            out.append({"path": p, "name": p.name, "reason": "prefixo", "score": 2.0 + len(skey) / max(len(vkey), 1)})
+            out.append({"path": p, "name": p.name, "reason": "prefix", "score": 2.0 + len(skey) / max(len(vkey), 1)})
         elif skey.startswith(vkey):
-            out.append({"path": p, "name": p.name, "reason": "comeca_com_video", "score": 1.5 + len(vkey) / max(len(skey), 1)})
+            out.append({"path": p, "name": p.name, "reason": "starts_with_video", "score": 1.5 + len(vkey) / max(len(skey), 1)})
         elif ratio >= SIMILARITY_MIN:
-            out.append({"path": p, "name": p.name, "reason": "parecido", "score": ratio})
+            out.append({"path": p, "name": p.name, "reason": "similar", "score": ratio})
     out.sort(key=lambda c: (-c["score"], nfc_casefold(c["name"])))
     for c in out:
         c["score"] = round(c["score"], 3)
@@ -196,8 +196,8 @@ def rename_suggestion(vtt: Path, video: Path) -> str:
     return f"Rename-Item -LiteralPath {ps_quote(src)} -NewName {ps_quote(new)}"
 
 
-_REASON_TEXT = {"prefixo": "prefix of the video name", "comeca_com_video": "starts with the video name",
-                "parecido": "similar name"}
+_REASON_TEXT = {"prefix": "prefix of the video name", "starts_with_video": "starts with the video name",
+                "similar": "similar name"}
 
 
 def match_vtts(videos: list[Path], explicit_vtt: Path | None = None,
@@ -226,7 +226,7 @@ def match_vtts(videos: list[Path], explicit_vtt: Path | None = None,
 
 
 def missing_vtt_detail(missing: list[dict], allow_vtt_flag: bool) -> str:
-    """The English ``error.detail`` for ``vtt_ausente``: per video, the candidates in its folder and
+    """The English ``error.detail`` for ``missing_vtt``: per video, the candidates in its folder and
     the suggested ``Rename-Item`` (the user decides; nothing is renamed automatically)."""
     n = len(missing)
     lines = [f"No .vtt subtitles with the same name for {n} video{'s' if n > 1 else ''} "

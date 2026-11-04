@@ -1,4 +1,4 @@
-"""Frame engine on synthetic videos with ground truth (design-deterministico.md section 9).
+"""Frame engine on synthetic videos with ground truth (design-deterministic.md section 9).
 
 Every acceptance row of the section 9 table, the CRF 32 / -bf 2 / VFR variants, the
 frames.json contract, files and revisits, range, the re-encode safety net, static ignore

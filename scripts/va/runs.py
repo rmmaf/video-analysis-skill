@@ -1,13 +1,13 @@
 """Run folders, the request file (request.md), resume scan and workflow_args (plan, unified
-contract items 1-4; design-agentico DL-2, DL-5, DL-6, DL-11, DL-12).
+contract items 1-4; design-agentic DL-2, DL-5, DL-6, DL-11, DL-12).
 
 - ``parse_request``: sections ``# videos`` (one path per line), ``# objective`` (literal text) and
   ``# options`` (``key: value``; the value is the rest of the line after the first ":").
   Headings are matched without accents or case; the Portuguese names of before the rename
   (``# objetivo``, ``# opcoes``, also "# Opções") still work.
-- ``normalize_options``: validates the option values (request or CLI) into typed values. The
-  request's keys are the English names of ``OPTION_NAMES``; the internal keys, in Portuguese (the
-  names of the command-line options), still work in the request.
+- ``normalize_options``: validates the option values (request or CLI) into typed values, under the
+  keys of ``OPTION_KEYS`` (the request's keys and the command-line options: --max-batches ->
+  max_batches). The Portuguese keys of before the rename (``OPTION_NAMES``) still work.
 - ``new_run``: ``runs/<YYYYMMDD-HHMMSS>-<slug24>`` (``-2``... on a collision in the same second).
 - ``resume_video``: DL-11. No ledger -> prompts/ and reports/ go to ``_descartado/<stamp>/`` and the
   video starts at batch 1; ``relatorio.md`` becomes ``relatorio.anterior.md`` when work remains. The
@@ -36,7 +36,8 @@ from .common import as_posix, fmt_hms, ms_to_s, parse_time_ms, read_json, resolv
 __all__ = [
     "FINAL_MD", "LEGACY_FINAL_MD", "OPTION_KEYS", "OPTION_NAMES", "REQUEST_MD", "RunError", "build_workflow_args",
     "consume_request", "copy_roles", "estimate_agents", "find_run", "new_run", "normalize_options",
-    "objective_markdown", "parse_request", "read_request", "resume_combined", "resume_video", "run_slug",
+    "objective_markdown", "parse_range", "parse_request", "read_request", "resume_combined", "resume_video",
+    "run_slug",
     "scaffold_video",
     "unique_slugs", "workflow_options", "parse_regions", "parse_trecho", "parse_speakers", "fold",
     "consume_pedido", "parse_pedido", "read_pedido",
@@ -61,7 +62,7 @@ class RunError(ValueError):
 
 
 def fold(text: str) -> str:
-    """Accent- and case-insensitive key: "Opções" -> "opcoes", "--max-lotes" -> "max_lotes"."""
+    """Accent- and case-insensitive key: "Opções" -> "opcoes", "--Max-Batches" -> "max_batches"."""
     s = unicodedata.normalize("NFKD", str(text))
     s = "".join(ch for ch in s if not unicodedata.combining(ch)).casefold().strip()
     s = s.lstrip("-").strip()
@@ -89,9 +90,9 @@ def parse_request(text: str) -> dict:
     """``{"videos": [str], "objective": str, "options": {key: value or [values]}}``, with the options
     under their internal keys (``OPTION_KEYS``).
 
-    Raises RunError ``pedido_invalido`` (missing/duplicated section, text before the first
-    section, option line without ":"), ``objetivo_ausente`` (empty objective) or
-    ``opcao_invalida`` (unknown or repeated option).
+    Raises RunError ``invalid_request`` (missing/duplicated section, text before the first
+    section, option line without ":"), ``missing_objective`` (empty objective) or
+    ``invalid_option`` (unknown or repeated option).
     """
     text = text.lstrip("﻿").replace("\r\n", "\n").replace("\r", "\n")
     blocks: dict[str, list[str]] = {}
@@ -101,16 +102,16 @@ def parse_request(text: str) -> dict:
         name = _SECTIONS.get(fold(m.group(1))) if m else None
         if name:
             if name in blocks:
-                raise RunError("pedido_invalido", f"the section '# {name}' appears twice in the request")
+                raise RunError("invalid_request", f"the section '# {name}' appears twice in the request")
             blocks[name] = []
             current = name
         elif current is None:
             if line.strip():
-                raise RunError("pedido_invalido", f"text before the first section ('# videos'): {line.strip()[:80]!r}")
+                raise RunError("invalid_request", f"text before the first section ('# videos'): {line.strip()[:80]!r}")
         else:
             blocks[current].append(line)
     if "videos" not in blocks:
-        raise RunError("pedido_invalido", "missing section '# videos' (one video or folder path per line)")
+        raise RunError("invalid_request", "missing section '# videos' (one video or folder path per line)")
     videos = []
     for line in blocks["videos"]:
         s = _BULLET_RE.sub("", line.strip())
@@ -118,29 +119,29 @@ def parse_request(text: str) -> dict:
         if s:
             videos.append(s)
     if not videos:
-        raise RunError("pedido_invalido", "the section '# videos' is empty")
+        raise RunError("invalid_request", "the section '# videos' is empty")
     lines = blocks.get("objective")
     if lines is None:
-        raise RunError("objetivo_ausente", "missing section '# objective' in the request")
+        raise RunError("missing_objective", "missing section '# objective' in the request")
     while lines and not lines[0].strip():
         lines = lines[1:]
     objective = "\n".join(lines).rstrip()
     if not objective.strip():
-        raise RunError("objetivo_ausente", "the section '# objective' is empty")
+        raise RunError("missing_objective", "the section '# objective' is empty")
     options: dict[str, Any] = {}
     for raw in blocks.get("options", []):
         line = _BULLET_RE.sub("", raw.strip())
         if not line:
             continue
         if ":" not in line:
-            raise RunError("pedido_invalido", f"option line without ':' in '# options': {line[:80]!r} (use key: value)")
+            raise RunError("invalid_request", f"option line without ':' in '# options': {line[:80]!r} (use key: value)")
         key, value = line.split(":", 1)
         canon = option_key(key)
         value = _strip_quotes(value)
-        if canon == "ignorar_regiao":
+        if canon == "ignore_region":
             options.setdefault(canon, []).append(value)
         elif canon in options:
-            raise RunError("opcao_invalida", f"the option {OPTION_NAMES[canon]!r} appears twice in the request")
+            raise RunError("invalid_option", f"the option {canon!r} appears twice in the request")
         else:
             options[canon] = value
     return {"videos": videos, "objective": objective, "options": options}
@@ -151,9 +152,9 @@ def read_request(path: str | os.PathLike) -> dict:
     try:
         raw = p.read_bytes()
     except FileNotFoundError:
-        raise RunError("pedido_invalido", f"request file not found: {as_posix(p)} (write it with Write first)") from None
+        raise RunError("invalid_request", f"request file not found: {as_posix(p)} (write it with Write first)") from None
     except OSError as exc:
-        raise RunError("pedido_invalido", f"could not read the request file {as_posix(p)}: {exc}") from None
+        raise RunError("invalid_request", f"could not read the request file {as_posix(p)}: {exc}") from None
     try:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -163,25 +164,22 @@ def read_request(path: str | os.PathLike) -> dict:
 
 # --- options --------------------------------------------------------------------------------------
 
-# internal keys: the names of the command-line options (--max-lotes -> max_lotes), still accepted in the request
-OPTION_KEYS = ("papeis", "max_lotes", "paralelo", "esforco_analista", "esforco_curador", "curadoria", "idioma",
-               "trecho", "falantes", "sensibilidade", "ignorar_regiao")
-# the keys of the request's '# options', in English, by internal key
+# the keys of the request's '# options', also the command-line options (--max-batches -> max_batches)
+OPTION_KEYS = ("roles", "max_batches", "parallel", "analyst_effort", "curator_effort", "curation", "language",
+               "range", "speakers", "sensitivity", "ignore_region")
+# the Portuguese keys of before the rename (also the old command-line options: --max-lotes) -> the keys
 OPTION_NAMES = {"papeis": "roles", "max_lotes": "max_batches", "paralelo": "parallel",
                 "esforco_analista": "analyst_effort", "esforco_curador": "curator_effort", "curadoria": "curation",
                 "idioma": "language", "trecho": "range", "falantes": "speakers", "sensibilidade": "sensitivity",
                 "ignorar_regiao": "ignore_region"}
 _OPTION_ALIASES = {
-    "papel": "papeis", "roles": "papeis", "roles_mode": "papeis", "modo": "papeis",
-    "max_batches": "max_lotes", "lotes": "max_lotes", "maximo_de_lotes": "max_lotes",
-    "parallel": "paralelo", "max_parallel_videos": "paralelo",
-    "analyst_effort": "esforco_analista", "esforco_do_analista": "esforco_analista",
-    "curator_effort": "esforco_curador", "esforco_do_curador": "esforco_curador",
-    "curation": "curadoria",
-    "language": "idioma", "lingua": "idioma",
-    "range": "trecho", "speakers": "falantes", "speaker_names": "falantes",
-    "sensitivity": "sensibilidade",
-    "ignore_region": "ignorar_regiao", "ignore_regions": "ignorar_regiao", "ignorar_regioes": "ignorar_regiao",
+    **OPTION_NAMES,
+    "papel": "roles", "roles_mode": "roles", "modo": "roles",
+    "lotes": "max_batches", "maximo_de_lotes": "max_batches",
+    "max_parallel_videos": "parallel",
+    "esforco_do_analista": "analyst_effort", "esforco_do_curador": "curator_effort",
+    "lingua": "language", "speaker_names": "speakers",
+    "ignore_regions": "ignore_region", "ignorar_regioes": "ignore_region",
 }
 
 
@@ -189,8 +187,8 @@ def option_key(key: str) -> str:
     k = fold(key)
     k = _OPTION_ALIASES.get(k, k)
     if k not in OPTION_KEYS:
-        raise RunError("opcao_invalida", f"unknown option {key.strip()!r}; accepted: {', '.join(OPTION_NAMES.values())} "
-                                         f"(or the Portuguese {', '.join(OPTION_KEYS)})")
+        raise RunError("invalid_option", f"unknown option {key.strip()!r}; accepted: {', '.join(OPTION_KEYS)} "
+                                         f"(or the Portuguese {', '.join(OPTION_NAMES)})")
     return k
 
 
@@ -203,9 +201,7 @@ _IDIOMA_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
 
 
 def _bad(key: str, value: Any, why: str) -> RunError:
-    """The option by its request key and its command-line option: "max_batches (--max-lotes): …"."""
-    name = f"{OPTION_NAMES[key]} (--{key.replace('_', '-')})" if key in OPTION_NAMES else key
-    return RunError("opcao_invalida", f"{name}: {str(value).strip()!r} is invalid ({why})")
+    return RunError("invalid_option", f"{key}: {str(value).strip()!r} is invalid ({why})")
 
 
 def _int(key: str, value: Any, lo: int, hi: int | None) -> int:
@@ -218,20 +214,23 @@ def _int(key: str, value: Any, lo: int, hi: int | None) -> int:
     return n
 
 
-def parse_trecho(value: Any) -> list[float]:
-    """"hh:mm:ss-hh:mm:ss" (also with "–", " a " or " até ") -> [start, end] in seconds."""
+def parse_range(value: Any) -> list[float]:
+    """"hh:mm:ss-hh:mm:ss" (also with "–", " to ", " a " or " até ") -> [start, end] in seconds."""
     s = str(value).strip().replace("–", "-").replace("—", "-")
-    s = re.sub(r"\s+(?:a|ate|até)\s+", "-", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s+(?:to|a|ate|até)\s+", "-", s, flags=re.IGNORECASE)
     parts = [p.strip() for p in s.split("-")]
     if len(parts) != 2 or not all(parts):
-        raise _bad("trecho", value, "use hh:mm:ss-hh:mm:ss")
+        raise _bad("range", value, "use hh:mm:ss-hh:mm:ss")
     try:
         t0, t1 = parse_time_ms(parts[0]), parse_time_ms(parts[1])
     except ValueError:
-        raise _bad("trecho", value, "use hh:mm:ss-hh:mm:ss") from None
+        raise _bad("range", value, "use hh:mm:ss-hh:mm:ss") from None
     if t0 < 0 or t1 <= t0:
-        raise _bad("trecho", value, "the end must be after the start")
+        raise _bad("range", value, "the end must be after the start")
     return [ms_to_s(t0), ms_to_s(t1)]
+
+
+parse_trecho = parse_range  # the name of before the rename, kept for scripts that import it
 
 
 def parse_speakers(value: Any) -> dict:
@@ -242,13 +241,13 @@ def parse_speakers(value: Any) -> dict:
         if not part:
             continue
         if "=" not in part:
-            raise _bad("falantes", value, "use LABEL=Name separated by ';'")
+            raise _bad("speakers", value, "use LABEL=Name separated by ';'")
         label, name = (x.strip() for x in part.split("=", 1))
         if not label or not name:
-            raise _bad("falantes", value, "use LABEL=Name separated by ';'")
+            raise _bad("speakers", value, "use LABEL=Name separated by ';'")
         out[label] = name
     if not out:
-        raise _bad("falantes", value, "use LABEL=Name separated by ';'")
+        raise _bad("speakers", value, "use LABEL=Name separated by ';'")
     return out
 
 
@@ -263,23 +262,23 @@ def parse_regions(value: Any) -> list[list[float]]:
                 continue
             nums = [n for n in re.split(r"\s*,\s*|\s+", part) if n]
             if len(nums) != 4:
-                raise _bad("ignorar_regiao", part, "use x,y,w,h with a decimal point; several regions separated by ';'")
+                raise _bad("ignore_region", part, "use x,y,w,h with a decimal point; several regions separated by ';'")
             try:
                 x, y, w, h = (float(n) for n in nums)
             except ValueError:
-                raise _bad("ignorar_regiao", part, "use numbers with a decimal point") from None
+                raise _bad("ignore_region", part, "use numbers with a decimal point") from None
             eps = 1e-6
             if min(x, y) < 0 or w <= 0 or h <= 0 or x + w > 1 + eps or y + h > 1 + eps:
-                raise _bad("ignorar_regiao", part, "fractions from 0 to 1, with x+w ≤ 1 and y+h ≤ 1")
+                raise _bad("ignore_region", part, "fractions from 0 to 1, with x+w ≤ 1 and y+h ≤ 1")
             regions.append([round(x, 4), round(y, 4), round(w, 4), round(h, 4)])
     if not regions:
-        raise _bad("ignorar_regiao", value, "no region")
+        raise _bad("ignore_region", value, "no region")
     return regions
 
 
 def normalize_options(raw: dict) -> dict:
     """Raw strings (request or CLI) -> typed options; every key of OPTION_KEYS is present
-    (None when not given). Raises RunError ``opcao_invalida``."""
+    (None when not given). Raises RunError ``invalid_option``."""
     opts: dict[str, Any] = dict.fromkeys(OPTION_KEYS)
     for key, value in raw.items():
         key = option_key(key)
@@ -287,43 +286,43 @@ def normalize_options(raw: dict) -> dict:
             continue
         if not isinstance(value, list) and not str(value).strip():
             raise _bad(key, value, "empty value")
-        if key == "papeis":
+        if key == "roles":
             f = fold(value)
             mode = {"agents": "agents", "agentes": "agents", "agent": "agents", "inline": "inline"}.get(f)
             if not mode:
                 raise _bad(key, value, "use agents or inline")
             opts[key] = mode
-        elif key == "max_lotes":
+        elif key == "max_batches":
             f = fold(value)
             opts[key] = None if f in ("todos", "all", "0") else _int(key, value, 0, None) or None
-        elif key == "paralelo":
+        elif key == "parallel":
             opts[key] = _int(key, value, 1, WORKFLOW_DEFAULTS["max_parallel_videos_cap"])
-        elif key in ("esforco_analista", "esforco_curador"):
+        elif key in ("analyst_effort", "curator_effort"):
             f = fold(value)
             level = _EFFORT_PT.get(f, f)
             if level not in EFFORT_LEVELS:
                 raise _bad(key, value, "use " + ", ".join(EFFORT_LEVELS))
             opts[key] = level
-        elif key == "curadoria":
+        elif key == "curation":
             mode = _CURATION.get(fold(value))
             if not mode:
                 raise _bad(key, value, "use plan or batches (or plano, lotes)")
             opts[key] = mode
-        elif key == "idioma":
+        elif key == "language":
             s = str(value).strip().replace("_", "-")
             if not _IDIOMA_RE.match(s):
                 raise _bad(key, value, "use a code such as pt-BR, en or es")
             opts[key] = s
-        elif key == "trecho":
-            opts[key] = parse_trecho(value)
-        elif key == "falantes":
+        elif key == "range":
+            opts[key] = parse_range(value)
+        elif key == "speakers":
             opts[key] = parse_speakers(value)
-        elif key == "sensibilidade":
+        elif key == "sensitivity":
             level = _SENS.get(fold(value))
             if not level:
                 raise _bad(key, value, "use low, normal or high")
             opts[key] = level
-        elif key == "ignorar_regiao":
+        elif key == "ignore_region":
             opts[key] = parse_regions(value)
     return opts
 
@@ -331,11 +330,11 @@ def normalize_options(raw: dict) -> dict:
 def workflow_options(opts: dict) -> dict:
     """workflow_args.options from the typed options (defaults: all batches, 3 videos, analyst and
     curator high, curation plan)."""
-    return {"max_batches": opts.get("max_lotes") or None,
-            "max_parallel_videos": opts.get("paralelo") or WORKFLOW_DEFAULTS["max_parallel_videos"],
-            "analyst_effort": opts.get("esforco_analista") or WORKFLOW_DEFAULTS["analyst_effort"],
-            "curator_effort": opts.get("esforco_curador") or WORKFLOW_DEFAULTS["curator_effort"],
-            "curation": opts.get("curadoria") or WORKFLOW_DEFAULTS["curation"]}
+    return {"max_batches": opts.get("max_batches") or None,
+            "max_parallel_videos": opts.get("parallel") or WORKFLOW_DEFAULTS["max_parallel_videos"],
+            "analyst_effort": opts.get("analyst_effort") or WORKFLOW_DEFAULTS["analyst_effort"],
+            "curator_effort": opts.get("curator_effort") or WORKFLOW_DEFAULTS["curator_effort"],
+            "curation": opts.get("curation") or WORKFLOW_DEFAULTS["curation"]}
 
 
 # --- run folders ------------------------------------------------------------------------------------
@@ -367,7 +366,7 @@ def new_run(runs_dir: str | os.PathLike, name: str, now: float | None = None) ->
             return run_id, runs / run_id
         except FileExistsError:
             continue
-    raise RunError("uso_invalido", f"could not create the run folder in {as_posix(runs)}")
+    raise RunError("invalid_usage", f"could not create the run folder in {as_posix(runs)}")
 
 
 def unique_slugs(stems: list[str]) -> list[str]:
@@ -484,8 +483,8 @@ def _run_ok(d: Path) -> bool:
 
 
 def find_run(home: str | os.PathLike, ref: str) -> Path:
-    """``ultimo`` (most recent run with a run.json), a run_id (or a unique prefix of one) or a run
-    folder path. Raises RunError ``run_nao_encontrado``."""
+    """``latest`` (most recent run with a run.json; also ``ultimo``), a run_id (or a unique prefix of one) or a run
+    folder path. Raises RunError ``run_not_found``."""
     runs = Path(home) / "runs"
     r = str(ref or "").strip().strip('"').strip("'")
     if not r or fold(r) in _LATEST:
@@ -493,23 +492,23 @@ def find_run(home: str | os.PathLike, ref: str) -> Path:
         for d in cands:
             if _run_ok(d):
                 return d
-        raise RunError("run_nao_encontrado", f"no run with run.json in {as_posix(runs)}")
+        raise RunError("run_not_found", f"no run with run.json in {as_posix(runs)}")
     if any(c in r for c in "/\\:"):
         hits = [p for p in resolve_unicode_paths(r) if p.is_dir()]
         if len(hits) == 1 and _run_ok(hits[0]):
             return hits[0]
-        raise RunError("run_nao_encontrado", f"invalid run folder or no run.json: {r}")
+        raise RunError("run_not_found", f"invalid run folder or no run.json: {r}")
     exact = runs / r
     if exact.is_dir():
         if _run_ok(exact):
             return exact
-        raise RunError("run_nao_encontrado", f"run {r} has no run.json with workflow_args (did its prepare fail?)")
+        raise RunError("run_not_found", f"run {r} has no run.json with workflow_args (did its prepare fail?)")
     pref = [d for d in (runs.iterdir() if runs.is_dir() else []) if d.is_dir() and d.name.startswith(r) and _run_ok(d)]
     if len(pref) == 1:
         return pref[0]
     if len(pref) > 1:
-        raise RunError("run_nao_encontrado", f"{r!r} is a prefix of {len(pref)} runs: " + ", ".join(sorted(d.name for d in pref)[:5]))
-    raise RunError("run_nao_encontrado", f"run {r!r} not found in {as_posix(runs)}")
+        raise RunError("run_not_found", f"{r!r} is a prefix of {len(pref)} runs: " + ", ".join(sorted(d.name for d in pref)[:5]))
+    raise RunError("run_not_found", f"run {r!r} not found in {as_posix(runs)}")
 
 
 def _discard(out_dir: Path, stamp: str) -> list[str]:

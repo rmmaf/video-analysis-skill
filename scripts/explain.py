@@ -1,4 +1,4 @@
-"""Why was this frame kept, or this sample ignored? (design-deterministico.md section 2 and 9)
+"""Why was this frame kept, or this sample ignored? (design-deterministic.md section 2 and 9)
 
     python explain.py --frames-json PATH (--frame F0042 ... | --sample 812 ... | --top-ignored 12 |
                       --smallest 10 | --kind motion) [--out DIR] [--home PATH] [--no-cache]

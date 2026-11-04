@@ -1,4 +1,4 @@
-"""ffprobe -> VideoInfo (design-deterministico.md section 3.1, "Probe").
+"""ffprobe -> VideoInfo (design-deterministic.md section 3.1, "Probe").
 
 The displayed size accounts for the sample aspect ratio and the rotation (ffmpeg autorotates
 when decoding, so the frames arrive in displayed orientation). ``stream_index`` is N in

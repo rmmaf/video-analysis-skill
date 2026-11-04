@@ -1,4 +1,4 @@
-"""Frame dedup: pure numpy, no I/O (design-deterministico.md section 3.2-3.6).
+"""Frame dedup: pure numpy, no I/O (design-deterministic.md section 3.2-3.6).
 
 ``Analyzer(params, analysis_size).push(gray) -> list[Decision]`` receives the gray analysis
 frames of the sampling grid in order (sample k = range start + k / sample_fps) and decides,

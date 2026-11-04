@@ -7,10 +7,11 @@ video in which each finding points to the frame and the time that support it.
 
 **Version 1.0.0** · Windows · Python 3.10+ · ffmpeg · Claude Code with the Workflow tool
 
-The request file (`request.md`) is in English and still accepts the Portuguese names of the earlier version
-(`pedido.md`, `# objetivo`, `# opcoes`, `max_lotes`…). The command-line options, the `retomar` keyword and
-the names of the run files stay in Portuguese, because they are the skill's interface. Reports are written
-in the language of the objective (`--idioma` overrides it; pt-BR when in doubt).
+The command-line options, the request file (`request.md`), the `resume` keyword and the file names of the
+skill are in English. The Portuguese names of the earlier version still work (`--max-lotes`, `--papeis`,
+`retomar`, `pedido.md`, `# objetivo`, `verificar_ambiente.py`…). The run files (`relatorio.md`, the ledger)
+and the templates of the reports stay in Portuguese. Reports are written in the language of the objective
+(`--language` overrides it; pt-BR when in doubt).
 
 ## Overview
 
@@ -63,7 +64,7 @@ The design saves tokens in three places:
 - The transcript is read once, by the curator, and summarized in the ledger.
 
 Each video uses one analyst per batch, plus the plan and the report; with two or more videos, one more
-agent writes the combined report. With `--curadoria lotes`, the curator also writes the prompt of each
+agent writes the combined report. With `--curation batches`, the curator also writes the prompt of each
 following batch, which costs about twice as much. Above 80 agents, the skill asks before going on;
 above 800, it refuses the run.
 
@@ -72,7 +73,7 @@ above 800, it refuses the run.
 | item | version | what for |
 |---|---|---|
 | Windows | developed on Windows 11 | the skill's paths, permissions and messages are for Windows |
-| Claude Code | with skills and the Workflow tool | without Workflow, the skill runs the same loop with the Agent tool ([`reference/sem-workflow.md`](reference/sem-workflow.md)) |
+| Claude Code | with skills and the Workflow tool | without Workflow, the skill runs the same loop with the Agent tool ([`reference/without-workflow.md`](reference/without-workflow.md)) |
 | Python | 3.10 or newer (tested on 3.14) | deterministic layer |
 | ffmpeg and ffprobe | on the PATH (tested on 8.1) | probing and frame extraction |
 | numpy and Pillow | any recent version | frame comparison and images; the skill does not use OpenCV |
@@ -93,7 +94,7 @@ above 800, it refuses the run.
    /video-analysis setup
    ```
 
-   The setup runs `verificar_ambiente.py` and handles one item at a time: Python, ffmpeg, numpy and
+   The setup runs `check_environment.py` and handles one item at a time: Python, ffmpeg, numpy and
    Pillow, the central folder, the agents and the workflow, and the permission rules. Nothing is installed
    or written without your confirmation. Outside the central folder, it writes to three places:
 
@@ -104,7 +105,7 @@ above 800, it refuses the run.
    | the permission rules for the central folder | `%USERPROFILE%\.claude\settings.json` | restore the `settings.json.bak-<date>` |
 
 3. Close and reopen Claude Code, so that it loads the agents and the workflow. Start with a short
-   analysis, with `--max-lotes 1`: it confirms that the run does not ask for permission at every frame.
+   analysis, with `--max-batches 1`: it confirms that the run does not ask for permission at every frame.
 
 **To update**, pull the changes and run the setup again, which copies the agents and the workflow again
 when they have changed:
@@ -119,9 +120,9 @@ In the Claude Code conversation:
 
 ```text
 /video-analysis "C:\Videos\reuniao.mp4" Liste as decisões tomadas e quem ficou responsável por cada uma
-/video-analysis "C:\Videos\aulas" Resuma cada aula em passos numerados --max-lotes 2
-/video-analysis "C:\Videos\demo.mp4" Que erro aparece na tela quando falam do deploy? --trecho 00:10:00-00:20:00
-/video-analysis retomar
+/video-analysis "C:\Videos\aulas" Resuma cada aula em passos numerados --max-batches 2
+/video-analysis "C:\Videos\demo.mp4" Que erro aparece na tela quando falam do deploy? --range 00:10:00-00:20:00
+/video-analysis resume
 ```
 
 - Each video needs a `.vtt` subtitle file with the same name, in the same folder: `reuniao.mp4` uses
@@ -138,25 +139,26 @@ What happens after the call:
 3. The Workflow runs in the background, at about 4 minutes per batch, and lets you know when it finishes.
 4. The skill shows the summary of each video and the path of the reports.
 
-`retomar` resumes an interrupted run (Claude Code closed, quota, error) from where it stopped.
+`/video-analysis resume` (also `retomar`) continues an interrupted run (Claude Code closed, quota, error)
+from where it stopped.
 
 ### Options
 
 | option | default | effect |
 |---|---|---|
-| `--max-lotes N` | all | only batches 1 to N of each video, to test the objective |
-| `--trecho hh:mm:ss-hh:mm:ss` | whole video | only that segment, with its own batches |
-| `--paralelo N` | `3` | videos in parallel; use `1` against rate limits |
-| `--curadoria plano\|lotes` | `plano` | `lotes`: curator before each batch, carrying the context forward (≈ 2× the cost) |
-| `--esforco-analista low\|medium\|high` | `high` | analyst effort; `medium` costs ~13% less and answers less completely |
-| `--esforco-curador low\|medium\|high` | `high` | curator effort in the batches, only with `--curadoria lotes` |
-| `--papeis agents\|inline` | automatic | `agents` uses the installed agents; `inline` passes the roles in the prompt and costs a little more |
-| `--idioma xx` | the objective's | language of the reports |
-| `--falantes "SPEAKER_01=Name;…"` | — | real names of the speakers in the subtitles |
-| `--sensibilidade low\|normal\|high` | `normal` | `high` catches smaller changes and produces more frames |
-| `--ignorar-regiao x,y,w,h` | — | region of the frame, in fractions, left out of the comparison: webcam, clock |
+| `--max-batches N` | all | only batches 1 to N of each video, to test the objective |
+| `--range hh:mm:ss-hh:mm:ss` | whole video | only that segment, with its own batches |
+| `--parallel N` | `3` | videos in parallel; use `1` against rate limits |
+| `--curation plan\|batches` | `plan` | `batches`: curator before each batch, carrying the context forward (≈ 2× the cost) |
+| `--analyst-effort low\|medium\|high` | `high` | analyst effort; `medium` costs ~13% less and answers less completely |
+| `--curator-effort low\|medium\|high` | `high` | curator effort in the batches, only with `--curation batches` |
+| `--roles agents\|inline` | automatic | `agents` uses the installed agents; `inline` passes the roles in the prompt and costs a little more |
+| `--language xx` | the objective's | language of the reports |
+| `--speakers "SPEAKER_01=Name;…"` | — | real names of the speakers in the subtitles |
+| `--sensitivity low\|normal\|high` | `normal` | `high` catches smaller changes and produces more frames |
+| `--ignore-region x,y,w,h` | — | region of the frame, in fractions, left out of the comparison: webcam, clock |
 
-When to change each one and what it costs: [`reference/parametros.md`](reference/parametros.md).
+When to change each one and what it costs: [`reference/parameters.md`](reference/parameters.md).
 
 ### Outputs
 
@@ -183,7 +185,7 @@ python scripts/prepare.py "C:\Videos\reuniao.mp4"                      # only wa
 python scripts/prepare.py --gc 30                                       # deletes from the cache the videos unused for 30 days
 python scripts/explain.py --frames-json <frames.json> --frame F0042     # why this frame was kept
 python scripts/calibrate.py "C:\Videos\reuniao.mp4" --grid "sensitivity=normal,high"   # compares parameters
-python verificar_ambiente.py                                            # checks the environment, without changing anything
+python check_environment.py                                            # checks the environment, without changing anything
 ```
 
 `python scripts/prepare.py --help` lists all the options. The `frames.json` of a video is in
@@ -209,12 +211,12 @@ python tests/check_run.py <run_dir>     # checks a finished run
   frames, failures, resume, several videos and the two role modes. It has no dependencies.
 - `check_run.py` checks the ledger, whether the prompts cite the batches without copying cues, whether
   the reports cover all the frames and whether the final report answers the objective. The ledger and
-  prompt checks follow the run's curation (`options.curation`). With the default `plano`,
+  prompt checks follow the run's curation (`options.curation`). With the default `plan`,
   `Integrado até o lote` can go from `000`, as the INIT writes it, up to the last batch analysed, and only
   the prompt of batch 1 is required; those of the other batches are checked when they exist. With
-  `--curadoria lotes`, the ledger must be integrated up to the second-to-last or the last batch analysed,
+  `--curation batches`, the ledger must be integrated up to the second-to-last or the last batch analysed,
   and each batch needs its own prompt. A run without `options.curation` predates the option, had the NEXT
-  and is checked as `lotes`.
+  and is checked as `batches`.
 - `tests/test_vtt.py` and `tests/test_data_files.py` read real subtitle excerpts that are kept out of git
   (see [Data and privacy](#data-and-privacy)). In a fresh clone, these tests fail because the files are
   missing.
@@ -233,7 +235,7 @@ python tests/check_run.py <run_dir>     # checks a finished run
 | `1` | internal error; the traceback goes to `logs\` |
 
 Symptoms, causes and fixes, including permissions, agents and Workflow:
-[`reference/problemas.md`](reference/problemas.md).
+[`reference/troubleshooting.md`](reference/troubleshooting.md).
 
 ## Data and privacy
 
@@ -255,15 +257,15 @@ Symptoms, causes and fixes, including permissions, agents and Workflow:
 - **A change of color alone does not become a frame.** The comparison is in grayscale: a new color with
   the same brightness goes unnoticed.
 - **Tiny changes can be mistaken for the cursor.** A digit or a few letters may not become a frame;
-  `--sensibilidade high` reduces this.
+  `--sensitivity high` reduces this.
 - **Long videos are expensive and slow.** A 55-minute meeting yields about 50 batches, and the batches of
-  a video run in series. Use `--trecho` or `--max-lotes`.
+  a video run in series. Use `--range` or `--max-batches`.
 - **No subtitles, no analysis.** Without the `.vtt` of the same name, `prepare.py` stops, shows the
   candidate files and suggests the command to rename.
 
 ## Next steps
 
-Out of scope for version 1, according to the [plan](docs/plano.md):
+Out of scope for version 1, according to the [plan](docs/plan.md):
 
 - coverage by relevance: the curator skips batches unrelated to the objective, the biggest gain in long meetings;
 - curation every 2 batches in homogeneous segments;
@@ -291,13 +293,13 @@ following ones.
 |---|---|
 | [`SKILL.md`](SKILL.md) | instructions that Claude follows when calling the skill |
 | [`setup.md`](setup.md) | procedure for `/video-analysis setup` |
-| [`reference/contratos.md`](reference/contratos.md) | formats of the request, of the `prepare.py` stdout, of the `workflow_args` and of the central folder |
-| [`reference/parametros.md`](reference/parametros.md) | what each parameter does and when to change it |
-| [`reference/problemas.md`](reference/problemas.md) | symptom, cause and what to do |
-| [`reference/sem-workflow.md`](reference/sem-workflow.md) | the same loop with the Agent tool, without Workflow |
-| [`docs/plano.md`](docs/plano.md) | plan, architecture and implementation errata |
-| [`docs/design-deterministico.md`](docs/design-deterministico.md) | specification of the deterministic layer |
-| [`docs/design-agentico.md`](docs/design-agentico.md) | specification of the agentic layer |
+| [`reference/contracts.md`](reference/contracts.md) | formats of the request, of the `prepare.py` stdout, of the `workflow_args` and of the central folder |
+| [`reference/parameters.md`](reference/parameters.md) | what each parameter does and when to change it |
+| [`reference/troubleshooting.md`](reference/troubleshooting.md) | symptom, cause and what to do |
+| [`reference/without-workflow.md`](reference/without-workflow.md) | the same loop with the Agent tool, without Workflow |
+| [`docs/plan.md`](docs/plan.md) | plan, architecture and implementation errata |
+| [`docs/design-deterministic.md`](docs/design-deterministic.md) | specification of the deterministic layer |
+| [`docs/design-agentic.md`](docs/design-agentic.md) | specification of the agentic layer |
 | [`tests/data/calibration.md`](tests/data/calibration.md) | measurements that calibrated the parameters |
 
 ## Repository structure
@@ -306,7 +308,7 @@ following ones.
 video-analysis/
 ├── SKILL.md                 the skill's instructions for Claude Code
 ├── setup.md                 setup procedure
-├── verificar_ambiente.py    checks Python, ffmpeg, agents, workflow and permissions
+├── check_environment.py    checks Python, ffmpeg, agents, workflow and permissions
 ├── agents/                  roles of the curator (Opus) and the analyst (Sonnet)
 ├── workflow/                video-analysis.js, the Workflow script
 ├── scripts/

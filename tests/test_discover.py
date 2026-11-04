@@ -77,7 +77,7 @@ def test_expand_glob_selects_videos_only(tree):
     vids, problems = D.expand_inputs([str(tree["base"] / "Repasse*160841*.mp4")])
     assert vids == [tree["v1"]]
     vids, problems = D.expand_inputs([str(tree["pes"] / "*.webm")])
-    assert vids == [] and problems == [{"input": str(tree["pes"] / "*.webm"), "reason": "nao_encontrado"}]
+    assert vids == [] and problems == [{"input": str(tree["pes"] / "*.webm"), "reason": "not_found"}]
 
 
 def test_expand_problems_and_dedup(tree, tmp_path):
@@ -86,7 +86,7 @@ def test_expand_problems_and_dedup(tree, tmp_path):
     entries = [str(tree["v2"]), str(tree["pes"]), str(tmp_path / "nao existe.mp4"), str(empty), "  "]
     vids, problems = D.expand_inputs(entries)
     assert vids == [tree["v2"], tree["v3"]]  # v2 listed twice (file and folder): kept once, at its first position
-    assert [p["reason"] for p in problems] == ["nao_encontrado", "pasta_sem_videos"]
+    assert [p["reason"] for p in problems] == ["not_found", "folder_without_videos"]
 
 
 def test_is_video_name():
@@ -121,7 +121,7 @@ def test_find_vtt_prefers_byte_identical_stem(tmp_path):
 
 def test_candidates_teams_prefix(tree):
     cands = D.vtt_candidates(tree["v2"])
-    assert cands and cands[0]["path"] == tree["c2"] and cands[0]["reason"] == "prefixo"
+    assert cands and cands[0]["path"] == tree["c2"] and cands[0]["reason"] == "prefix"
 
 
 def test_candidates_language_suffix_similar_and_unrelated(tmp_path):
@@ -131,7 +131,7 @@ def test_candidates_language_suffix_similar_and_unrelated(tmp_path):
     touch(tmp_path / "outra coisa.vtt")
     cands = D.vtt_candidates(v)
     assert [c["path"] for c in cands] == [lang, sim]
-    assert [c["reason"] for c in cands] == ["comeca_com_video", "parecido"]
+    assert [c["reason"] for c in cands] == ["starts_with_video", "similar"]
     assert D.vtt_candidates(touch(tmp_path / "zzz.mp4")) == []
 
 

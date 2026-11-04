@@ -199,7 +199,7 @@ BATCH_DEFAULTS = {
     "sheet_font_px": 14,
     "sheet_jpeg_quality": 80,
     "overview_max_batches": 40,    # overview.jpg samples batches above this count
-    # trecho: None = the whole frames range; [t0, t1] seconds = batch only the frames that
+    # range: None = the whole frames range; [t0, t1] seconds = batch only the frames that
     # overlap it (own batches stage over the whole-video cache, numbering restarts at 001)
     "range": None,
 }

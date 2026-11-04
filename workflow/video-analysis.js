@@ -10,9 +10,9 @@ export const meta = {
   ],
 }
 
-// Workflow of the video-analysis skill. Input: workflow_args v1 printed by scripts/prepare.py (reference/contratos.md).
+// Workflow of the video-analysis skill. Input: workflow_args v1 printed by scripts/prepare.py (reference/contracts.md).
 // Every exchange between agents goes through files; the agents return minimal objects validated by schema.
-// The prompt texts are mirrored in reference/sem-workflow.md: change both together (tests/harness.mjs --dump-templates).
+// The prompt texts are mirrored in reference/without-workflow.md: change both together (tests/harness.mjs --dump-templates).
 
 const LV = ['low', 'medium', 'high', 'xhigh', 'max']
 const CUR = ['plan', 'batches']
@@ -170,7 +170,7 @@ function analystPrompt(v, P, n, last, curated) {
     `Images in the batch: ${v.batch_images[n - 1]} · Language of the report: ${A.language}`)
   return L.join('\n')
 }
-// `where`: path the 1st attempt returned when it is not the requested one ({where} in note 5b of reference/sem-workflow.md); empty = note 5.
+// `where`: path the 1st attempt returned when it is not the requested one ({where} in note 5b of reference/without-workflow.md); empty = note 5.
 function analystAgain(r, expected, path, where) {
   const did = r ? `opened ${r.frames_seen} of ${expected} images${(r.frames_missing || []).length ? ` (missing: ${r.frames_missing.join(', ')})` : ''}` : 'did not finish'
   return where
@@ -281,7 +281,7 @@ async function steps(v, P, B, last, tag, res) {
   const why = {}
   const fin = await twice(k => call('curator', finalPrompt(v, P, B, res.planned, res, pending) + (k ? AGAIN : ''),
     { label: `report · ${tag}${k ? ' · 2nd' : ''}`, phase: 'Report', schema: S_FINAL, effort: EFF.final }), r => r.status !== 'failed', why)
-  if (!fin) { res.status = 'failed'; res.warnings.push(`final report failed twice${because(why)}: run /video-analysis retomar`); return }
+  if (!fin) { res.status = 'failed'; res.warnings.push(`final report failed twice${because(why)}: run /video-analysis resume`); return }
   Object.assign(res, { report_path: fin.report_path || P.final, summary: fin.summary, answered: fin.answered })
   if (res.partial.length || res.failed.length || fin.status === 'partial' || res.planned < B) res.status = 'partial'
 }

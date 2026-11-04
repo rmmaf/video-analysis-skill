@@ -1,4 +1,4 @@
-"""va.ambiente: permission-rule coverage, settings merge with backup, agents and saved-workflow copies,
+"""va.environment: permission-rule coverage, settings merge with backup, agents and saved-workflow copies,
 runtime checks.
 Everything runs against temporary homes: the real ~/.claude is never read or written here."""
 import json
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from va import ambiente as A
+from va import environment as A
 from va.common import as_posix
 
 PLAN_RULES = [
@@ -180,7 +180,7 @@ def test_merge_permissions_refuses_bad_files(homes, content):
     user, chome, ws = homes
     path = chome / "settings.json"
     path.write_text(content, encoding="utf-8")
-    with pytest.raises(A.AmbienteError):
+    with pytest.raises(A.SetupError):
         A.merge_permissions(path, PLAN_RULES)
     assert path.read_text(encoding="utf-8") == content and not list(chome.glob("settings.json.bak-*"))
 
@@ -190,7 +190,7 @@ def test_merge_permissions_refuses_bad_files(homes, content):
 def test_agents_status_and_install(homes, skill_dir):
     user, chome, ws = homes
     st = A.agents_status(skill_dir, chome)
-    assert not st["current"] and {f["state"] for f in st["files"]} == {"ausente"} and len(st["files"]) == 2
+    assert not st["current"] and {f["state"] for f in st["files"]} == {"missing"} and len(st["files"]) == 2
     r = A.install_agents(skill_dir, chome)
     assert sorted(r["copied"]) == ["video-analysis-analyst.md", "video-analysis-curator.md"] and r["unchanged"] == []
     assert A.agents_status(skill_dir, chome)["current"]
@@ -199,7 +199,7 @@ def test_agents_status_and_install(homes, skill_dir):
     assert A.install_agents(skill_dir, chome)["copied"] == []
     (chome / "agents" / "video-analysis-analyst.md").write_text("antigo", encoding="utf-8")
     st = A.agents_status(skill_dir, chome)
-    assert not st["current"] and "diferente" in st["detail"]
+    assert not st["current"] and "different" in st["detail"]
     assert A.install_agents(skill_dir, chome)["copied"] == ["video-analysis-analyst.md"]
 
 
@@ -210,8 +210,8 @@ def test_workflow_status_and_install(homes, skill_dir):
     src = skill_dir / "workflow" / "video-analysis.js"
     target = chome / "workflows" / "video-analysis.js"
     st = A.workflow_status(skill_dir, chome)
-    assert st == {"id": "workflow", "current": False, "path": as_posix(target), "state": "ausente",
-                  "detail": f"video-analysis.js ausente in {as_posix(target.parent)}"}
+    assert st == {"id": "workflow", "current": False, "path": as_posix(target), "state": "missing",
+                  "detail": f"video-analysis.js missing in {as_posix(target.parent)}"}
     assert not (chome / "workflows").exists()                         # the status only reads
     assert A.install_workflow(skill_dir, chome) == {"path": as_posix(target), "copied": True}
     assert target.read_bytes() == src.read_bytes()
@@ -220,7 +220,7 @@ def test_workflow_status_and_install(homes, skill_dir):
     assert A.install_workflow(skill_dir, chome)["copied"] is False
     target.write_text("export const meta = {name: 'video-analysis'}  // antigo", encoding="utf-8")
     st = A.workflow_status(skill_dir, chome)
-    assert not st["current"] and st["state"] == "diferente" and "diferente" in st["detail"]
+    assert not st["current"] and st["state"] == "different" and "different" in st["detail"]
     assert A.install_workflow(skill_dir, chome)["copied"] is True and target.read_bytes() == src.read_bytes()
     assert sorted(p.name for p in target.parent.iterdir()) == ["video-analysis.js"]   # no temp file left
 
@@ -228,7 +228,7 @@ def test_workflow_status_and_install(homes, skill_dir):
 def test_workflow_status_without_the_skill_script(homes, tmp_path):
     user, chome, ws = homes
     st = A.workflow_status(tmp_path / "skill-vazia", chome)
-    assert not st["current"] and st["state"] == "sem-fonte" and "workflow/video-analysis.js" in st["detail"]
+    assert not st["current"] and st["state"] == "no-source" and "workflow/video-analysis.js" in st["detail"]
     with pytest.raises(OSError):
         A.install_workflow(tmp_path / "skill-vazia", chome)
     assert not (chome / "workflows").exists()                         # nothing created when there is no source
@@ -271,14 +271,14 @@ def test_module_status_and_runtime_problems(monkeypatch):
     assert not st["ok"] and "Pillow" in st["detail"]
     monkeypatch.setattr(A, "tool_status", lambda name, timeout=15.0: {"id": name, "ok": name != "ffprobe", "detail": f"{name}?"})
     probs = A.runtime_problems()
-    assert [(p["id"], p["code"]) for p in probs] == [("ffprobe", "ffmpeg_ausente"), ("pillow", "dependencia_ausente")]
+    assert [(p["id"], p["code"]) for p in probs] == [("ffprobe", "missing_ffmpeg"), ("pillow", "missing_dependency")]
     assert A.runtime_problems(("ffmpeg", "numpy")) == []
 
 
 
 def test_runtime_problems_skips_the_package_metadata_scan(monkeypatch):
     """prepare.py only needs ok / not ok: importlib.metadata (hundreds of ms per run) is left to
-    verificar_ambiente.py, which shows the versions."""
+    check_environment.py, which shows the versions."""
     from importlib import metadata
 
     def boom(*a, **k):

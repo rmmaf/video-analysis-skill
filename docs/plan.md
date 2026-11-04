@@ -9,10 +9,11 @@ What real use changed in this plan; where they diverge, this holds and not the t
 - **Custom agents:** in this environment, the agents installed in `~/.claude/agents/` were recognized in the middle of the session; the caveat that they only load in a new session may not hold.
 - **Lockstep extraction:** a single ffmpeg decodes the video and the `split` filter feeds the two outputs (A in grayscale, B in JPEG), instead of two synchronized ffmpeg processes.
 - **Folder of each video in the run:** `runs\<YYYYMMDD-HHMMSS>-<slug>\v<N>\` (`videos[].out_dir`), and not `<video-slug>\`: with the slug, the analyst joined the run's slug and the video's and wrote outside the folder. `v<N>` is the video's `vid` in the `prepare.py` JSON, numbered in the order of the inputs; a video that fails in the prepare (exit code 4) does not renumber the others, and the run may end up with `v1` and `v3`. On resume, an old run keeps the `<video-slug>\` folder.
-- **Curation:** the request's `curadoria` option (`--curadoria plano|lotes`; in `workflow_args.options.curation`, `plan` or `batches`) is `plano` by default: the curator only plans, with the INIT writing the ledger and the prompt of batch 1, and the analysts of the following batches receive sections 4 and 5 of the ledger. The NEXT, before each batch after the 1st, only runs with `--curadoria lotes`, which on a 13-batch video cost ≈ 2× (US$ 9.9 against 5.4) with no gain in recall. Per video, there is 1 agent per batch plus 2 (with `lotes`, 2 per batch plus 1): the 55-min meeting in "Risks and mitigation" (≈50 batches) gives ≈52 agents, and not ≈100. With two or more videos, the run has 1 more, the CROSS (full count in `estimate.agents`, in `reference/contratos.md`).
+- **Curation:** the request's `curadoria` option (`--curadoria plano|lotes`; in `workflow_args.options.curation`, `plan` or `batches`) is `plano` by default: the curator only plans, with the INIT writing the ledger and the prompt of batch 1, and the analysts of the following batches receive sections 4 and 5 of the ledger. The NEXT, before each batch after the 1st, only runs with `--curadoria lotes`, which on a 13-batch video cost ≈ 2× (US$ 9.9 against 5.4) with no gain in recall. Per video, there is 1 agent per batch plus 2 (with `lotes`, 2 per batch plus 1): the 55-min meeting in "Risks and mitigation" (≈50 batches) gives ≈52 agents, and not ≈100. With two or more videos, the run has 1 more, the CROSS (full count in `estimate.agents`, in `reference/contracts.md`).
 - **Curator effort:** the `esforco_curador` option (`--esforco-curador`; in `workflow_args.options.curator_effort`) only applies to the NEXT; in the Workflow, INIT, FINAL and CROSS always run at `high`. In the default curation (`plano`), without NEXT, it changes nothing.
 - **Translation to English:** on 2026-11-04, the skill was translated to English without changing its behavior: `README.md`, `SKILL.md`, `setup.md`, `reference/`, the agent roles and the workflow prompts, the comments, docstrings, messages and help texts of the code, the tests and `docs/`. The interface stays in Portuguese: the command-line flags and their values, the grammar of `pedido.md` (until the next item), the `retomar` and `ultimo` keywords, the names of files and folders, the JSON keys and values, the labels of the files generated for the agents and the templates of the reports.
 - **Request in English:** right after the translation, the request became `request.md`, in `~/video-analysis/requests/` (it was `pedido.md`, in `pedidos/`), read by `prepare.py --request` (it was `--pedido`), with the sections `# videos`, `# objective` and `# options` and the option keys in English: `roles`, `max_batches`, `parallel`, `analyst_effort`, `curator_effort`, `curation`, `language`, `range`, `speakers`, `sensitivity` and `ignore_region`, with the values `all`, `plan` and `batches`. The old names still work: `--pedido`, `# objetivo`, `# opcoes`, the Portuguese keys (the names of the command-line options) and values; a request named `pedido.md` that fails still becomes `pedido.erro.md`, and the new one becomes `request.error.md`. The run keeps the copy as `request.md` and `run.json` points to it under `request` (an older run has `pedido.md` and the key `pedido`; nothing reads them). `SKILL.md` pre-approves Write in `requests/*` and still in `pedidos/*`. The command-line options, the error codes (`pedido_invalido`…) and the labels of `objective.md` stay in Portuguese.
+- **English interface:** after the request, the rest of the interface became English, and the Portuguese names still work as aliases. The options of `prepare.py`, which are also the keys of `request.md`: `--roles`, `--max-batches`, `--parallel`, `--analyst-effort`, `--curator-effort`, `--curation plan|batches`, `--language`, `--range`, `--speakers`, `--sensitivity` and `--ignore-region`, plus `--estimate` and `--ignore-agent-limit` (the old `--papeis`, `--max-lotes`…, `--estimar` and `--forcar` still work). The keywords `resume` and `latest` (`retomar` and `ultimo`). The verifier, now `check_environment.py` with `--install-agents` and `--apply-permissions` (`verificar_ambiente.py` runs it), with `[MISSING]`/`[WARN]` and its JSON in English (`ready`, `actions`, `items`, `state`, `step`…). The module `scripts/va/environment.py` (`va.ambiente` re-exports it), the reference files (`contracts.md`, `troubleshooting.md`, `parameters.md`, `without-workflow.md`) and the files of `docs/` (`plan.md`, `design-agentic.md`, `design-deterministic.md`). The error codes (`missing_vtt`, `invalid_request`…), the states of `status.json` (`ready`, `partial`, `error`…) and the `range` key of `run.json` (it was `trecho`) changed without aliases: they are output, and nothing outside the skill reads them. What stays in Portuguese is the vocabulary of the agents: the run files (`relatorio.md`, `_descartado/`), the ledger and report templates, and the labels of `objective.md` and of the batches.
 
 ## Context
 
@@ -76,14 +77,14 @@ Where tokens are saved:
 
 ```
 C:\Users\digom\.claude\skills\video-analysis\
-  SKILL.md · setup.md · verificar_ambiente.py            (verificar_ambiente at the root, as in your other skills)
+  SKILL.md · setup.md · check_environment.py            (the verifier at the root, as verificar_ambiente.py in your other skills)
   scripts\prepare.py · calibrate.py · explain.py
   scripts\va\     __init__ (versions + default parameters), common, contracts, probe, ffmpeg_io, dedup, extract,
                   vtt, align, batching, render, sheets, cache, discover, runs, ambiente
   workflow\video-analysis.js
   agents\video-analysis-curator.md · video-analysis-analyst.md     (canonical; the setup copies them to ~/.claude/agents)
-  reference\sem-workflow.md · problemas.md · contratos.md · parametros.md
-  docs\design-deterministico.md · design-agentico.md               (full specs from the design agents)
+  reference\without-workflow.md · troubleshooting.md · contracts.md · parameters.md
+  docs\design-deterministic.md · design-agentic.md               (full specs from the design agents)
   tests\          pytest (unit, synthetic, real fixtures) + synth.py + data\ + harness.mjs + check_run.py
 C:\Users\digom\.claude\agents\video-analysis-{curator,analyst}.md  (installed by the setup)
 C:\Users\digom\video-analysis\
@@ -238,7 +239,7 @@ C:\Users\digom\video-analysis\
   - `name`;
   - `description` with ~950 characters and triggers such as "frame a frame", "contra a legenda", meetings, `retomar` and `setup`;
   - `argument-hint`;
-  - `allowed-tools`: Bash for `prepare.py` and `verificar_ambiente.py`, and Write in `~/video-analysis/pedidos/*`.
+  - `allowed-tools`: Bash for `prepare.py` and `check_environment.py`, and Write in `~/video-analysis/pedidos/*`.
 - **Commands**: analysis, `retomar [run_id]` and `setup`.
 - **Options**: `--max-lotes`, `--trecho hh:mm:ss-hh:mm:ss`, `--paralelo`, `--esforco-analista`, `--papeis` and `--idioma`.
 - **Flow of the main agent**:
@@ -249,7 +250,7 @@ C:\Users\digom\video-analysis\
   5. Runs `prepare.py`.
   6. Calls the Workflow with `script_path` and `workflow_args` without editing, replies in at most 3 lines and ends the turn.
   7. On the notification, presents the results.
-- **Fallback**: without the Workflow tool, `reference/sem-workflow.md` has the same 7 prompt templates for the Agent tool, with the return in 1 JSON line.
+- **Fallback**: without the Workflow tool, `reference/without-workflow.md` has the same 7 prompt templates for the Agent tool, with the return in 1 JSON line.
 
 ## Unified contract (prevails over the specs in `docs/` when there is a conflict)
 
@@ -314,7 +315,7 @@ Every file is written by subagents with `model: "opus"`. I launch the waves, che
 | 0 | Specs + foundation | Extracts the final reports of the two design agents to `docs/design-*.md`. Creates `scripts/va/{__init__,common,contracts}.py`, `tests/conftest.py` and `pytest.ini`. **Copies the September baseline** and short excerpts of your real VTTs to `tests/data/` (they stay only on your machine) | importable modules; data copied |
 | 1 ∥ | Frames | `va/{probe,ffmpeg_io,dedup,extract}.py`, `calibrate.py`, `explain.py`, `tests/synth.py` + tests | synthetic ground truth; determinism |
 | 1 ∥ | Subtitles and batches | `va/{vtt,align,batching,render,sheets}.py` (includes `overview.jpg`) + tests | excerpts of the 4 styles + edge-case file; golden test of `batch_NNN.md` and `transcript.md` |
-| 1 ∥ | CLI and infra | `va/{cache,discover,runs,ambiente}.py`, `prepare.py`, `verificar_ambiente.py` + tests with simulated stages | hard names (NFD, ’, double spaces, `[PES]`); request, resume and estimate |
+| 1 ∥ | CLI and infra | `va/{cache,discover,runs,ambiente}.py`, `prepare.py`, `check_environment.py` + tests with simulated stages | hard names (NFD, ’, double spaces, `[PES]`); request, resume and estimate |
 | 1 ∥ | Workflow | `workflow/video-analysis.js`, `tests/harness.mjs` (mocks of `agent`/`parallel`), `tests/check_run.py` | all the harness scenarios; restrictions lint clean |
 | 1 ∥ | Roles | `agents/video-analysis-curator.md`, `agents/video-analysis-analyst.md` | return fields equal to the schemas; ≤3k and ≤2k tokens |
 | 1 ∥ | Docs | `SKILL.md`, `setup.md`, `reference/*.md` | ≤180 lines; description ≤1,024 characters; fallback templates equal to the JS ones |

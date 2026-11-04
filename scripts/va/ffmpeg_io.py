@@ -1,6 +1,6 @@
 """ffmpeg/ffprobe plumbing: tool lookup, command builders, process handling, stream readers.
 
-Rules (design-deterministico.md section 3.1 and 8): argument lists only (never a shell or a
+Rules (design-deterministic.md section 3.1 and 8): argument lists only (never a shell or a
 command string), ``-nostdin`` + stdin=DEVNULL, stderr to a log file (never an undrained pipe),
 CREATE_NO_WINDOW, ``-skip_frame:v noref`` as an input option, ``-map 0:v:N -an -sn -dn``,
 children killed in ``finally``. Source paths never go inside filter strings.

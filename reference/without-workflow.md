@@ -13,7 +13,7 @@ same prompts, word for word (the script keeps them mirrored here). The values co
   batch, state (`ok`, `partial`, `failed`), images seen/expected and warnings.
 - Do not show prompts or JSON to the user. At the end, present as in step 7 of `SKILL.md`.
 - The manual loop spends your context, about 1k tokens per batch. Long video: prefer a session with the
-  Workflow tool, or split with `--trecho`. Above 800 estimated agents, do not run it: split.
+  Workflow tool, or split with `--range`. Above 800 estimated agents, do not run it: split.
 
 ## How to call the Agent tool
 
@@ -86,7 +86,7 @@ For each video in `videos`:
         `analyst failed in 2 batches in a row: video interrupted`, end of the video. A batch that did not
         fail resets the counter.
 4. **Report:** FINAL, which succeeds with `status` ≠ `failed` (2 attempts). Failed both times → video
-   `failed`, warning `final report failed twice{reason}: run /video-analysis retomar`. Succeeded →
+   `failed`, warning `final report failed twice{reason}: run /video-analysis resume`. Succeeded →
    keep `report_path` (empty: `{out_dir}/relatorio.md`), `summary` and `answered`. Status of the video:
    `partial` if there was a `partial` or `failed` batch, if the FINAL came back `partial` or if `last` <
    `B`; otherwise `ok`.
@@ -98,7 +98,7 @@ both times, `combined` = `{error: "synthesis failed twice{reason}"}`.
 
 Warnings: up to 6 per video; with more, the first 4, `+N warnings omitted` and the last one (in an
 interrupted video, the reason). An interrupted video leaves the
-files for `/video-analysis retomar`.
+files for `/video-analysis resume`.
 
 ## Prompts
 

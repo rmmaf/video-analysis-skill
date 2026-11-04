@@ -1,4 +1,4 @@
-"""Performance of the frames stage (design-deterministico.md section 9, "Performance").
+"""Performance of the frames stage (design-deterministic.md section 9, "Performance").
 Run with --run-slow (or VA_RUN_SLOW=1); skips when a fixture video is missing.
 
 - D = reference decode: ffmpeg -skip_frame:v noref -i X -an -vf fps=2,scale=640:360,format=gray -f null -

@@ -10,18 +10,18 @@ again.
 
 | option | when to use | what it costs |
 |---|---|---|
-| `--sensibilidade high` | a small change that matters did not become a frame: a number, a short word | more frames, more batches, more tokens |
-| `--sensibilidade low` | too many frames from compression noise or a large cursor | may miss a small change |
-| `--ignorar-regiao x,y,w,h` | the density warning suggested a region: webcam, clock, animation | what changes there stops counting |
-| `--trecho hh:mm:ss-hh:mm:ss` | only one part matters, or to go deeper into a segment of an earlier run | the first segment of a new video still extracts the whole video (it stays in the cache) |
-| `--max-lotes N` | to test the objective before the whole run | partial coverage, stated in the report |
-| `--falantes "SPEAKER_01=Name;…"` | the subtitles have generic labels (WhisperX) and you know the names | redoes only the subtitles and the batches, without re-extracting frames |
-| `--paralelo N` | `1` against rate limits; up to 6 with many short videos | — |
-| `--esforco-analista medium` (or `low`) | to save on a simple video, without a dense screen | measured on 14/10 (13 batches, an Excel screen): `medium` cost ~US$ 0.7 less (−13%), but had ~5 p.p. fewer complete facts and ~3 p.p. less precision |
-| `--curadoria lotes` | a long video in which one batch changes the reading of the next (a demonstration in several steps) | Opus curator before each batch: ≈ 2× the cost (measured: US$ 9.9 vs 5.4 on a 13-batch video, with no recall gain) |
-| `--esforco-curador medium` | with `--curadoria lotes`, to also save on the curator before each batch | without `--curadoria lotes`, it changes nothing: the plan and the curator's reports always stay at `high` |
+| `--sensitivity high` | a small change that matters did not become a frame: a number, a short word | more frames, more batches, more tokens |
+| `--sensitivity low` | too many frames from compression noise or a large cursor | may miss a small change |
+| `--ignore-region x,y,w,h` | the density warning suggested a region: webcam, clock, animation | what changes there stops counting |
+| `--range hh:mm:ss-hh:mm:ss` | only one part matters, or to go deeper into a segment of an earlier run | the first segment of a new video still extracts the whole video (it stays in the cache) |
+| `--max-batches N` | to test the objective before the whole run | partial coverage, stated in the report |
+| `--speakers "SPEAKER_01=Name;…"` | the subtitles have generic labels (WhisperX) and you know the names | redoes only the subtitles and the batches, without re-extracting frames |
+| `--parallel N` | `1` against rate limits; up to 6 with many short videos | — |
+| `--analyst-effort medium` (or `low`) | to save on a simple video, without a dense screen | measured on 14/10 (13 batches, an Excel screen): `medium` cost ~US$ 0.7 less (−13%), but had ~5 p.p. fewer complete facts and ~3 p.p. less precision |
+| `--curation batches` | a long video in which one batch changes the reading of the next (a demonstration in several steps) | Opus curator before each batch: ≈ 2× the cost (measured: US$ 9.9 vs 5.4 on a 13-batch video, with no recall gain) |
+| `--curator-effort medium` | with `--curation batches`, to also save on the curator before each batch | without `--curation batches`, it changes nothing: the plan and the curator's reports always stay at `high` |
 
-`--sensibilidade` and `--ignorar-regiao` change the extraction: the frames are extracted again, and the
+`--sensitivity` and `--ignore-region` change the extraction: the frames are extracted again, and the
 subtitles come from the cache. For several regions, separate them with `;` in the request
 (`ignore_region: 0.80,0.75,0.20,0.25; 0.00,0.00,0.20,0.06`). The other parameters on this page exist only
 on the `prepare.py` command line, for manual use and calibration; the skill does not pass them.
@@ -129,7 +129,7 @@ shape is detected.
   against the number of frames.
 - **Labels** of `batch_NNN.md` come out in the language detected in the subtitles (pt-BR or English); the
   suffix of a revisit's image line is always ` (revisita de Fxxxx)`. The reports come out in the
-  request's `language`. Full format in [`contratos.md`](contratos.md), section 4.
+  request's `language`. Full format in [`contracts.md`](contracts.md), section 4.
 
 ## Density warnings and the suggested region
 

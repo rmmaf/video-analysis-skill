@@ -1,5 +1,5 @@
 """Frame-stage parameters: defaults + sensitivity preset + overrides -> the canonical dict
-hashed into the frames cache key (design-deterministico.md section 3.6 and 7).
+hashed into the frames cache key (design-deterministic.md section 3.6 and 7).
 
 Pure Python on purpose (no numpy): prepare.py computes the cache keys of a fully cached run
 without importing the frame engine. ``va.dedup`` and ``va.extract`` re-export these names.

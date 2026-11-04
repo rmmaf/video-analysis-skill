@@ -1,6 +1,6 @@
 """Frames stage: decode, dedup, write the kept JPEGs + frames.json + samples.csv.
 
-``run_frames_stage(src, info, params, out_dir, progress)`` (design-deterministico.md 3.1, 6).
+``run_frames_stage(src, info, params, out_dir, progress)`` (design-deterministic.md 3.1, 6).
 
 Decoding. The sampling grid is ``fps=fps=S:start_time=0:round=near`` (VFR-safe, t_k = range
 start + k/S), with ``-skip_frame:v noref`` as an input option.

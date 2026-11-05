@@ -11,7 +11,9 @@ A YuNet fica com os rostos de nota 0,85 ou mais; a DeepFace usa 0,9, e a variave
 yunet_score_threshold troca o valor. Numa chamada do Teams de 28 min, conferida a olho em 60
 quadros, com 0,9 ficaram de fora 16 de 303 rostos, 15 deles com nota entre 0,86 e 0,89, e a
 linha do tempo cobria 92% das webcams. Com 0,85 cobriu 98%, nenhuma regiao caiu sobre a tela
-compartilhada, e nada que nao era rosto passou de 0,73.
+compartilhada, e nada que nao era rosto passou de 0,73. Por isso a variavel aceita de 0,75 ate
+menos de 1, escrita com ponto (0.9): abaixo disso vem o que nao e rosto, e com 1 a YuNet nao acha
+rosto nenhum. Com outro valor, o script sai com erro antes de carregar a DeepFace.
 
 Com --timeline, escreve tambem a linha do tempo: cada janela de camera so durante os
 trechos em que o rosto esta nela, para o --ignore-timeline da skill (prepare.py). Assim a
@@ -59,11 +61,9 @@ import numpy as np  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-from deepface import DeepFace  # noqa: E402
-
 STEP_S = 2.0       # uma amostra a cada 2 s
 SCORE = 0.85       # nota minima da YuNet (a DeepFace usa 0,9; ver o topo)
-os.environ.setdefault("yunet_score_threshold", str(SCORE))   # a DeepFace le daqui a cada chamada
+SCORE_MIN = 0.75   # menor nota aceita em yunet_score_threshold (ver o topo e min_score)
 PRESENCE = 0.5     # rosto no mesmo lugar em pelo menos metade das amostras,
 PRESENCE_WINDOW = 0.3  # ou em pelo menos 30% delas, se a janela da camera for achada,
 LIVE = 2.0         # e que se mexe (diferenca media acima de 2 tons de cinza): foto nao mexe
@@ -82,6 +82,28 @@ MARGIN = 0.006     # folga em volta da janela, fracao da largura: pega a moldura
 MAX_GAP = 3        # linha do tempo: ate 3 amostras seguidas sem o rosto ainda e o mesmo trecho
 MIN_HITS = 3       # trecho com menos amostras com o rosto que isso e passageiro: fica de fora
 KEEP_G = 16        # quadros guardados por rosto (a partir da MIN_HITS-esima amostra com ele)
+
+
+def min_score(raw):
+    """A nota minima da YuNet: a da variavel yunet_score_threshold (raw) ou, sem ela, SCORE. Sai com
+    erro se raw nao for um numero de SCORE_MIN ate menos de 1: com nota baixa a YuNet ve rosto no que
+    nao e, e cada falso rosto que se mexe vira regiao ignorada, que pode esconder a tela compartilhada;
+    com 1, nao acha rosto nenhum (a nota dela vai ate 1)."""
+    if raw is None:
+        return SCORE
+    try:
+        v = float(raw)
+    except ValueError:
+        v = math.nan
+    if not SCORE_MIN <= v < 1:   # NaN e infinitos tambem caem aqui
+        sys.exit(f"yunet_score_threshold={raw!r}: use um numero com ponto, de {SCORE_MIN} ate menos de 1"
+                 f" (sem a variavel, {SCORE})")
+    return v
+
+
+# a DeepFace le a nota desta variavel a cada chamada; com nota errada, o script sai antes de carrega-la
+os.environ["yunet_score_threshold"] = str(min_score(os.environ.get("yunet_score_threshold")))
+from deepface import DeepFace  # noqa: E402
 
 
 def starts(length, size, step):

@@ -53,13 +53,16 @@ of the run it is for; without it, the file is accepted only in a run of one vide
 `ignore_timeline: <file>` per file. `scripts/webcam_mask.py VIDEO --timeline FILE.json` writes it: it finds
 the faces with DeepFace every 2 s and the camera window around each face. DeepFace runs in a separate Python
 environment, outside the skill's setup (instructions at the top of the script). It keeps the faces with a
-YuNet score of 0.85 or more, below DeepFace's 0.9 (the environment variable `yunet_score_threshold` sets
-another value). On 60 frames of that call checked by eye, 0.9 missed 16 of 303 faces, 15 of them between
-0.86 and 0.89, and nothing that was not a face scored above 0.73; the timeline covered 92% of the live
-webcams with 0.9 and 98% with 0.85, and no region fell on the shared screen with either. Cost measured on
-a 4-core laptop CPU, for a 1080p 60 fps call: 24 min per hour of video (34 with the machine busy), three
-quarters of it in the face detection, the same with either score; the extraction of the skill takes 3 to 6
-min per hour on the same video.
+YuNet score of 0.85 or more, below DeepFace's 0.9. On 60 frames of that call checked by eye, 0.9 missed 16
+of 303 faces, 15 of them between 0.86 and 0.89, and nothing that was not a face scored above 0.73; the
+timeline covered 92% of the live webcams with 0.9 and 98% with 0.85, and no region fell on the shared
+screen with either. The environment variable `yunet_score_threshold` sets another score, from 0.75 up to
+but not including 1, written with a point: lower scores let in what is not a face (up to 0.73 in that
+measurement), and every false face that moves becomes an ignored region; at 1, YuNet finds no face. Any
+other value stops the script before it loads DeepFace. Cost measured on a 4-core laptop CPU, for a 1080p
+60 fps call: 24 min per hour of video (34 with the machine busy), three quarters of it in the face
+detection, the same with either score; the extraction of the skill takes 3 to 6 min per hour on the same
+video.
 
 ## How a frame becomes "unique"
 

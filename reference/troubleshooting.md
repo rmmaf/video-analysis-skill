@@ -121,6 +121,9 @@ are those of `SKILL.md`, with the same pre-approved prefix.
   `--ignore-region x,y,w,h` (in the request, `ignore_region`). Without a suggestion,
   `--sensitivity low`. The subtitles come from the cache; the frames are extracted again. Details in
   [`parameters.md`](parameters.md).
+- **Webcam in only part of the call** (camera alone at the start, a screen share later): a fixed region
+  also hides the shared content in that area. Use `ignore_timeline` with the file of
+  `scripts/webcam_mask.py --timeline` (region over time, in [`parameters.md`](parameters.md)).
 
 ### A small change did not become a frame
 

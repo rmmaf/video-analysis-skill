@@ -8,6 +8,8 @@ contract items 1-4; design-agentic DL-2, DL-5, DL-6, DL-11, DL-12).
 - ``normalize_options``: validates the option values (request or CLI) into typed values, under the
   keys of ``OPTION_KEYS`` (the request's keys and the command-line options: --max-batches ->
   max_batches). The Portuguese keys of before the rename (``OPTION_NAMES``) still work.
+  ``ignore_timeline`` reads JSON files (``parse_timelines``); ``timeline_spans`` gives each video
+  the spans of the files made for it.
 - ``new_run``: ``runs/<YYYYMMDD-HHMMSS>-<slug24>`` (``-2``... on a collision in the same second).
 - ``resume_video``: DL-11. No ledger -> prompts/ and reports/ go to ``_descartado/<stamp>/`` and the
   video starts at batch 1; ``relatorio.md`` becomes ``relatorio.anterior.md`` when work remains. The
@@ -39,7 +41,8 @@ __all__ = [
     "objective_markdown", "parse_range", "parse_request", "read_request", "resume_combined", "resume_video",
     "run_slug",
     "scaffold_video",
-    "unique_slugs", "workflow_options", "parse_regions", "parse_trecho", "parse_speakers", "fold",
+    "unique_slugs", "workflow_options", "parse_regions", "parse_timelines", "parse_trecho", "parse_speakers",
+    "timeline_spans", "fold",
     "consume_pedido", "parse_pedido", "read_pedido",
 ]
 
@@ -138,7 +141,7 @@ def parse_request(text: str) -> dict:
         key, value = line.split(":", 1)
         canon = option_key(key)
         value = _strip_quotes(value)
-        if canon == "ignore_region":
+        if canon in ("ignore_region", "ignore_timeline"):
             options.setdefault(canon, []).append(value)
         elif canon in options:
             raise RunError("invalid_option", f"the option {canon!r} appears twice in the request")
@@ -166,12 +169,12 @@ def read_request(path: str | os.PathLike) -> dict:
 
 # the keys of the request's '# options', also the command-line options (--max-batches -> max_batches)
 OPTION_KEYS = ("roles", "max_batches", "parallel", "analyst_effort", "curator_effort", "curation", "language",
-               "range", "speakers", "sensitivity", "ignore_region")
-# the Portuguese keys of before the rename (also the old command-line options: --max-lotes) -> the keys
+               "range", "speakers", "sensitivity", "ignore_region", "ignore_timeline")
+# the Portuguese keys (of before the rename; also the old command-line options: --max-lotes) -> the keys
 OPTION_NAMES = {"papeis": "roles", "max_lotes": "max_batches", "paralelo": "parallel",
                 "esforco_analista": "analyst_effort", "esforco_curador": "curator_effort", "curadoria": "curation",
                 "idioma": "language", "trecho": "range", "falantes": "speakers", "sensibilidade": "sensitivity",
-                "ignorar_regiao": "ignore_region"}
+                "ignorar_regiao": "ignore_region", "ignorar_linha_do_tempo": "ignore_timeline"}
 _OPTION_ALIASES = {
     **OPTION_NAMES,
     "papel": "roles", "roles_mode": "roles", "modo": "roles",
@@ -276,6 +279,67 @@ def parse_regions(value: Any) -> list[list[float]]:
     return regions
 
 
+def parse_timelines(value: Any) -> list[dict]:
+    """ignore_timeline: JSON files (one per request line or per --ignore-timeline) of regions ignored
+    only during spans of the video, as written by scripts/webcam_mask.py --timeline: an object with
+    the list under "ignore_timeline" and the video it was made for under "video" (or just the list)
+    -> [{"file", "video" (None when absent), "spans": canonical [start, end, x, y, w, h]}]."""
+    from .frame_params import _norm_timeline
+    out = []
+    for item in value if isinstance(value, list) else [value]:
+        name = _strip_quotes(str(item))
+        hits = [p for p in resolve_unicode_paths(name) if p.is_file()] if name else []
+        if len(hits) != 1:
+            raise _bad("ignore_timeline", item, "file not found" if not hits else "more than one file matches")
+        try:
+            doc = read_json(hits[0])
+        except (OSError, ValueError) as exc:
+            raise _bad("ignore_timeline", item, f"not a readable JSON file: {exc}") from None
+        video = None
+        if isinstance(doc, dict):
+            video = doc.get("video")
+            doc = doc.get("ignore_timeline")
+            if video is not None and (not isinstance(video, str) or not video.strip()):
+                raise _bad("ignore_timeline", item, '"video" must be the path or the file name of the video')
+        if not isinstance(doc, list):
+            raise _bad("ignore_timeline", item, 'expected a list of [start, end, x, y, w, h] (seconds, fractions), '
+                                                'alone or under "ignore_timeline"')
+        try:
+            spans = _norm_timeline(doc)
+        except ValueError as exc:
+            raise _bad("ignore_timeline", item, str(exc)) from None
+        out.append({"file": as_posix(hits[0]), "video": video, "spans": spans})
+    return out
+
+
+def timeline_spans(timelines: list[dict] | None, videos: list) -> list[list[list[float]]]:
+    """The ignore_timeline spans of each video, in the order of ``videos``: a file goes to the video
+    its "video" names (same path, else same file name); a file without "video" needs a run of one video."""
+    def full(p: Any) -> str:
+        return unicodedata.normalize("NFC", os.path.normcase(os.path.abspath(os.fspath(p))))
+
+    def name(p: Any) -> str:
+        return unicodedata.normalize("NFC", str(p).replace("\\", "/").rsplit("/", 1)[-1]).casefold()
+
+    paths, names = [full(v) for v in videos], [name(v) for v in videos]
+    per: list[list[list[float]]] = [[] for _ in videos]
+    for t in timelines or []:
+        if t["video"] is None:
+            if len(videos) != 1:
+                raise RunError("invalid_option", f"ignore_timeline: {t['file']} does not say which video it is for "
+                                                 '(add "video": its path); with several videos, each timeline needs it')
+            hit = [0]
+        else:
+            hit = ([i for i, p in enumerate(paths) if p == full(t["video"])]
+                   or [i for i, n in enumerate(names) if n == name(t["video"])])
+            if len(hit) != 1:
+                why = ("which is not among the videos of this run" if not hit else
+                       'and more than one video of this run has that name (use the full path in "video")')
+                raise RunError("invalid_option", f"ignore_timeline: {t['file']} is for {t['video']!r}, {why}")
+        per[hit[0]].extend(t["spans"])
+    return per
+
+
 def normalize_options(raw: dict) -> dict:
     """Raw strings (request or CLI) -> typed options; every key of OPTION_KEYS is present
     (None when not given). Raises RunError ``invalid_option``."""
@@ -324,6 +388,8 @@ def normalize_options(raw: dict) -> dict:
             opts[key] = level
         elif key == "ignore_region":
             opts[key] = parse_regions(value)
+        elif key == "ignore_timeline":
+            opts[key] = parse_timelines(value)
     return opts
 
 

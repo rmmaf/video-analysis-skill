@@ -115,6 +115,9 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--speakers", "--speaker-names", "--falantes", dest="speakers", metavar='"SPEAKER_01=Name;…"')
     a.add_argument("--sensitivity", "--sensibilidade", dest="sensitivity", metavar="low|normal|high")
     a.add_argument("--ignore-region", "--ignorar-regiao", dest="ignore_region", action="append", metavar="x,y,w,h")
+    a.add_argument("--ignore-timeline", "--ignorar-linha-do-tempo", dest="ignore_timeline", action="append",
+                   metavar="FILE.json", help="regions ignored only during spans of the video (scripts/webcam_mask.py "
+                                             "--timeline writes it); one file per video, each naming its video")
     d = p.add_argument_group("extraction and batches (manual use; design §2)")
     d.add_argument("--start", metavar="T", help="start of the extracted range ([HH:]MM:SS[.mmm] or seconds)")
     d.add_argument("--end", metavar="T", help="end of the extracted range")
@@ -313,7 +316,7 @@ def gather(ctx: Ctx, args) -> tuple[list[str], str | None, dict]:
     for key in runs.OPTION_KEYS:
         value = getattr(args, key, None)
         if value is not None:
-            raw[key] = value if key != "ignore_region" else list(value)
+            raw[key] = list(value) if isinstance(value, list) else value
     return entries, objective, raw
 
 
@@ -399,6 +402,14 @@ def effective_params(overrides: dict, segment: list | None) -> dict:
     except (ValueError, TypeError, KeyError) as exc:
         raise Fail("invalid_option", f"invalid parameter: {exc}") from None
     return {"frames": cache.plain(fr), "cues": cache.plain(cu), "batches": cache.plain(ba)}
+
+
+def video_params(params: dict, overrides: dict, segment: list | None, spans: list) -> dict:
+    """The params of one video: the run's, plus its ignore_timeline spans (only then: the frames
+    key of a video without a timeline stays the run's)."""
+    if not spans:
+        return params
+    return effective_params({**overrides, "frames": {**overrides["frames"], "ignore_timeline": spans}}, segment)
 
 
 def discover_pairs(ctx: Ctx, args, entries: list[str]) -> list[tuple[Path, Path]]:
@@ -605,6 +616,9 @@ def option_lines(opts: dict, wopts: dict, roles_mode: str, language: str) -> lis
         lines.append(f"sensibilidade: {opts['sensitivity']}")
     if opts.get("ignore_region"):
         lines.append("ignorar_regiao: " + "; ".join(",".join(f"{x:g}" for x in r) for r in opts["ignore_region"]))
+    for t in opts.get("ignore_timeline") or []:
+        target = f", vídeo {Path(t['video']).name}" if t["video"] else ""
+        lines.append(f"ignorar_linha_do_tempo: {t['file']} ({len(t['spans'])} trecho(s){target})")
     return lines
 
 
@@ -651,6 +665,10 @@ def run_prepare(ctx: Ctx, args) -> int:
     pairs = discover_pairs(ctx, args, entries)
     overrides = stage_overrides(args, opts)
     params = effective_params(overrides, opts.get("range"))
+    try:
+        spans = runs.timeline_spans(opts.get("ignore_timeline"), [v for v, _ in pairs])
+    except runs.RunError as exc:
+        raise Fail(exc.code, exc.detail) from None
     force = cache.expand_force(args.force)
     wopts = runs.workflow_options(opts)
     language = opts.get("language") or DEFAULT_LANGUAGE
@@ -665,9 +683,10 @@ def run_prepare(ctx: Ctx, args) -> int:
     for i, ((video, vtt), slug) in enumerate(zip(pairs, slugs)):
         vid, title = f"v{i + 1}", video_title(video)
         meta = {"title": title, "video_path": as_posix(video), "vtt_path": as_posix(vtt)}
+        vparams = video_params(params, overrides, segment, spans[i])
         try:
             vkey = cache.video_key(video)
-            keys = cache.stage_keys(vkey, vtt, params, meta)
+            keys = cache.stage_keys(vkey, vtt, vparams, meta)
         except OSError as exc:
             errors.append({"vid": vid, "slug": slug, "video": as_posix(video), "code": "video_failed",
                            "detail": f"read: {type(exc).__name__}: {exc}"})
@@ -677,7 +696,8 @@ def run_prepare(ctx: Ctx, args) -> int:
         hits = cache.stage_hits(vdir, keys, force)
         info = cache.cached_probe(vdir, video) if hits["cues"] and hits["frames"] else None
         known.append({"vid": vid, "slug": slug, "title": title, "video": video, "vtt": vtt, "video_key": vkey,
-                      "keys": keys, "meta": meta, "hits": hits, "info": info, "info_from_cache": info is not None})
+                      "keys": keys, "params": vparams, "meta": meta, "hits": hits, "info": info,
+                      "info_from_cache": info is not None})
     need = ["numpy", "pillow"]  # find_spec only: cheap
     if any(k["info"] is None for k in known):
         need.insert(0, "ffprobe")
@@ -710,7 +730,7 @@ def run_prepare(ctx: Ctx, args) -> int:
                    errors=errors)
 
     if estimate:
-        return finish_estimate(ctx, args, items, errors, wopts, params)
+        return finish_estimate(ctx, args, items, errors, wopts)
 
     if make_run:
         ctx.run_id, ctx.run_dir = runs.new_run(ctx.home / WORKSPACE_DIRS["runs"], args.run or (pairs[0][0].stem))
@@ -724,11 +744,11 @@ def run_prepare(ctx: Ctx, args) -> int:
     jobs = []
     for it in items:
         warm = all(it["hits"].values())
-        cost = 0.0 if warm or len(items) < 2 else round(estimate_seconds(it["info"], it["hits"], params["frames"]), 1)
+        cost = 0.0 if warm or len(items) < 2 else round(estimate_seconds(it["info"], it["hits"], it["params"]["frames"]), 1)
         jobs.append({"vid": it["vid"], "slug": it["slug"], "title": it["title"], "video_path": str(it["video"]),
                      "vtt_path": str(it["vtt"]), "video_key": it["video_key"],
                      "video_dir": str(ctx.home / WORKSPACE_DIRS["cache"] / it["video_key"]),
-                     "keys": it["keys"], "params": params, "info": it["info"], "info_from_cache": it["info_from_cache"],
+                     "keys": it["keys"], "params": it["params"], "info": it["info"], "info_from_cache": it["info_from_cache"],
                      "force": sorted(force), "meta": it["meta"], "warm": warm, "cost": cost,
                      "ffmpeg": ffmpeg_version, "log_path": str(ctx.log_path), "quiet": ctx.quiet,
                      "progress_path": ctx.status.progress_path(it["vid"]) if ctx.status else None})
@@ -803,7 +823,7 @@ def run_prepare(ctx: Ctx, args) -> int:
         "videos": [{"vid": v["_it"]["vid"], "slug": v["slug"], "title": v["title"],
                     "video_path": as_posix(v["_it"]["video"]), "vtt_path": as_posix(v["_it"]["vtt"]),
                     "video_key": v["_it"]["video_key"], "out_dir": as_posix(v["out_dir"]),
-                    "keys": v["_it"]["keys"], "params": params, "meta": v["_it"]["meta"],
+                    "keys": v["_it"]["keys"], "params": v["_it"]["params"], "meta": v["_it"]["meta"],
                     "stages": v["_res"]["dirs"], "duration_s": v["_it"]["duration"], "probe": v["_res"].get("info"),
                     "n_frames": v["n_frames"], "n_batches": len(v["batch_images"]), "batch_images": v["batch_images"]}
                    for v in wvideos],
@@ -839,14 +859,14 @@ def _partial_error(errors: list[dict], total: int) -> dict:
     return {"code": "video_failed", "detail": f"{len(errors)} of {total} video(s) failed ({names}); the others are in the JSON"}
 
 
-def finish_estimate(ctx: Ctx, args, items: list[dict], errors: list[dict], wopts: dict, params: dict) -> int:
+def finish_estimate(ctx: Ctx, args, items: list[dict], errors: list[dict], wopts: dict) -> int:
     ctx.stderr_on = True
     videos_out, states, secs = [], [], []
     known = True
     for it in items:
         vdir = ctx.home / WORKSPACE_DIRS["cache"] / it["video_key"]
         hits = dict(it["hits"])  # cache.stage_hits: valid and not forced
-        s = estimate_seconds(it["info"], hits, params["frames"])
+        s = estimate_seconds(it["info"], hits, it["params"]["frames"])
         secs.append(s)
         n_batches = n_frames = None
         if hits["batches"]:

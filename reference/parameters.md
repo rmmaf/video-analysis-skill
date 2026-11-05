@@ -13,6 +13,7 @@ again.
 | `--sensitivity high` | a small change that matters did not become a frame: a number, a short word | more frames, more batches, more tokens |
 | `--sensitivity low` | too many frames from compression noise or a large cursor | may miss a small change |
 | `--ignore-region x,y,w,h` | the density warning suggested a region: webcam, clock, animation | what changes there stops counting |
+| `--ignore-timeline FILE.json` | a webcam that exists only in some layouts of the call: camera alone, then a screen share, then the gallery | the region stops counting only during its spans; the file needs DeepFace (`scripts/webcam_mask.py`, outside the setup) |
 | `--range hh:mm:ss-hh:mm:ss` | only one part matters, or to go deeper into a segment of an earlier run | the first segment of a new video still extracts the whole video (it stays in the cache) |
 | `--max-batches N` | to test the objective before the whole run | partial coverage, stated in the report |
 | `--speakers "SPEAKER_01=Name;…"` | the subtitles have generic labels (WhisperX) and you know the names | redoes only the subtitles and the batches, without re-extracting frames |
@@ -21,7 +22,7 @@ again.
 | `--curation batches` | a long video in which one batch changes the reading of the next (a demonstration in several steps) | Opus curator before each batch: ≈ 2× the cost (measured: US$ 9.9 vs 5.4 on a 13-batch video, with no recall gain) |
 | `--curator-effort medium` | with `--curation batches`, to also save on the curator before each batch | without `--curation batches`, it changes nothing: the plan and the curator's reports always stay at `high` |
 
-`--sensitivity` and `--ignore-region` change the extraction: the frames are extracted again, and the
+`--sensitivity`, `--ignore-region` and `--ignore-timeline` change the extraction: the frames are extracted again, and the
 subtitles come from the cache. For several regions, separate them with `;` in the request
 (`ignore_region: 0.80,0.75,0.20,0.25; 0.00,0.00,0.20,0.06`). The other parameters on this page exist only
 on the `prepare.py` command line, for manual use and calibration; the skill does not pass them.
@@ -30,6 +31,29 @@ on the `prepare.py` command line, for manual use and calibration; the skill does
 relative to the displayed frame. Examples: a webcam in the bottom-right corner, `0.80,0.75,0.20,0.25`; a
 clock strip at the top, `0.00,0.00,1.00,0.05`. Prefer the region the warning suggests, which comes already
 measured.
+
+**Region over time.** A fixed region holds for the whole video: when the call starts with the camera alone
+and a screen share comes in later, it also hides the shared content that falls where the webcam was.
+`ignore_timeline` masks each region only during its span, on top of the automatic mask, which stays as it
+is (it also covers what blinks around a webcam: name labels, speaking rings). What it removes is the webcam
+frames the automatic mask lets through: on a 28-min Teams call (screen share, then gallery), 204 frames
+became 188, half of the frames whose change was inside a webcam went away, and no screen content was lost.
+The file, one per video:
+
+```json
+{"video": "C:/videos/call.mp4",
+ "ignore_timeline": [{"start": 0, "end": 1834.5, "region": "0.80,0.00,0.20,0.20"},
+                     {"start": 1830, "end": 3600, "region": "0.00,0.00,0.50,0.50"}]}
+```
+
+Times are seconds of the video (also with `range`), the region is in fractions as above, and
+`[start, end, x, y, w, h]` also works as an entry. `"video"` (path, or just the file name) says which video
+of the run it is for; without it, the file is accepted only in a run of one video. In the request, one line
+`ignore_timeline: <file>` per file. `scripts/webcam_mask.py VIDEO --timeline FILE.json` writes it: it finds
+the faces with DeepFace every 2 s and the camera window around each face. DeepFace runs in a separate Python
+environment, outside the skill's setup (instructions at the top of the script). Cost measured on a 4-core
+laptop CPU, for a 1080p 60 fps call: 24 min per hour of video (34 with the machine busy), three quarters of
+it in the face detection; the extraction of the skill takes 3 to 6 min per hour on the same video.
 
 ## How a frame becomes "unique"
 
@@ -160,7 +184,7 @@ subtitles they come from are redone):
 | new objective, `max_batches`, `parallel`, efforts, `language`, `roles` | only the agents | the whole cache |
 | `range` | the batches of the segment | frames and subtitles of the whole video |
 | `speakers`, edited subtitles | subtitles and batches | frames |
-| `sensitivity`, `ignore_region` | frames and batches | subtitles |
+| `sensitivity`, `ignore_region`, `ignore_timeline` | frames and batches | subtitles |
 | video moved, renamed or edited | everything (another cache key) | — |
 
 ## Diagnostics (manual use, by a person)

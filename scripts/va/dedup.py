@@ -46,6 +46,13 @@ Refinements over the spec text, all found on the synthetic scenarios or the real
   static screen. A blinking caret returns to the same state and is not a ticker.
 - the revisit test uses the same mask as the commit and needs >= revisit_min_active of the
   frame unmasked (a camera-like frame is almost fully masked).
+- ``ignore_timeline`` ([start, end, x, y, w, h], seconds of the video) adds a region to the
+  comparison masks only for the samples in [start, end): a webcam window that exists only in one
+  layout (camera only -> screen share -> gallery) is masked while it is there, and the same
+  area is compared again after the layout changes (a fixed ignore region hid it for good). It
+  only adds to the hot mask: the pair activity that feeds the hot tracker still sees the webcam
+  (measured on a real call, masking it there too uncovered the name labels and speaking rings
+  around the tiles, which the webcam's hot mask was covering: 19 more small frames).
 
 Everything is deterministic: integer pixel counts, fixed iteration orders, no randomness.
 """
@@ -552,6 +559,15 @@ class Analyzer:
         self.static = static
         self.static_active = None if static is None else ~static
         self.n_static_active = self.cmp.npx if static is None else int(np.count_nonzero(~static))
+        # ignore_timeline: regions added to the static mask only for the samples [k0, k1)
+        r0 = float((p["range"] or [0.0])[0] or 0.0)
+        self.spans: list[tuple[int, int, np.ndarray]] = []
+        for start, end, *region in p.get("ignore_timeline") or []:
+            k0 = max(0, math.ceil((start - r0) * self.S - 1e-9))
+            k1 = math.ceil((end - r0) * self.S - 1e-9)
+            if k1 > k0:
+                self.spans.append((k0, k1, static_mask_from_regions([region], self.aw, self.ah)))
+        self._span_masks: dict[tuple[int, ...], tuple] = {}
         self.windowed = p["hot_mode"] == "windowed"
         self.hot = HotTracker(p, self.cmp, self.S) if self.windowed else None
         self.lookahead = (self.hot.H + self.hot.m) if self.windowed else 0
@@ -586,7 +602,7 @@ class Analyzer:
         self.prev_screen = 0
         self.screens: list[_Screen] = []
         self._recent: dict[int, Classified] = {}
-        self._hot_key: int | None = None
+        self._hot_key: tuple[int, tuple[int, ...]] | None = None   # (hot version, timeline spans)
         # busy cells (active in >= busy_min of the previous busy_pairs pairs: a webcam) are left
         # out of the "small" components, so a ring touching a webcam tile is judged on its own
         self._hist = np.zeros((max(1, int(p["busy_pairs"])), self.cmp.gh, self.cmp.gw), bool)
@@ -634,6 +650,8 @@ class Analyzer:
         self.n += 1
         if self.windowed and r >= 1:
             cur, prev = self.ring[r % self.L], self.ring[(r - 1) % self.L]
+            # the ignore_timeline spans stay out of this mask: the hot tracker keeps seeing the
+            # webcam, so the hot mask still covers its neighborhood (name labels, speaking rings)
             cells, e, local, counts, cursor_cells = self.cmp.pair_cells(cur, prev, self.static_active,
                                                                         self.n_static_active)
             busy = self._hist.sum(axis=0, dtype=np.int16) >= self.busy_min
@@ -675,22 +693,41 @@ class Analyzer:
         return out
 
     # -- internals
+    def _static(self, k: int) -> tuple[tuple[int, ...], np.ndarray | None, np.ndarray | None, int]:
+        """(key, ignored px, active px, active px count) at sample k: the ignore regions plus the
+        ignore_timeline spans that contain k; key = the indices of those spans."""
+        key = tuple(i for i, (k0, k1, _m) in enumerate(self.spans) if k0 <= k < k1)
+        if not key:
+            return key, self.static, self.static_active, self.n_static_active
+        hit = self._span_masks.get(key)
+        if hit is None:
+            m = np.zeros((self.ah, self.aw), bool) if self.static is None else self.static.copy()
+            for i in key:
+                m |= self.spans[i][2]
+            hit = (key, m, ~m, int(np.count_nonzero(~m)))
+            if len(self._span_masks) >= 32:
+                self._span_masks.clear()
+            self._span_masks[key] = hit
+        return hit
+
     def _masks(self, k: int) -> tuple[np.ndarray | None, int, float]:
+        skey, static, s_active, s_n = self._static(k)
         if not self.windowed:
-            return self.static_active, self.n_static_active, 0.0
+            self._active, self._n_active = s_active, s_n
+            return s_active, s_n, 0.0
         cells = self.hot.mask_for(k)
-        if self.hot.version != self._hot_key:
-            self._hot_key = self.hot.version
+        if (self.hot.version, skey) != self._hot_key:
+            self._hot_key = (self.hot.version, skey)
             if cells.any():
                 g = self.cmp.cell
                 hp = np.repeat(np.repeat(cells, g, axis=0), g, axis=1)
-                if self.static is not None:
-                    hp = hp | self.static
+                if static is not None:
+                    hp = hp | static
                 self._active = ~hp
                 self._n_active = int(np.count_nonzero(self._active))
             else:
-                self._active = self.static_active
-                self._n_active = self.n_static_active
+                self._active = s_active
+                self._n_active = s_n
             self._hot_frac = float(np.count_nonzero(cells)) / self.cmp.ncells
         self._track_seg(k, cells)
         return self._active, self._n_active, self._hot_frac
@@ -785,7 +822,8 @@ class Analyzer:
                     self.level = min(self.level + 1, 16)
         if not out and self.ref is not None and hot_frac >= self.cam_hot \
                 and self.ms(k) - self.ms(self.last_c) >= self.hb_ms:
-            hb = cmp.classify(g, self.ref, self.static_active, self.n_static_active)
+            _key, _ignored, s_active, s_n = self._static(k)
+            hb = cmp.classify(g, self.ref, s_active, s_n)
             if hb.cls == CHANGE and hb.frac >= self.hb_min:
                 start = self.pending if self.pending is not None else k
                 out.append(self._commit(k, start, "heartbeat", g, k, change=hb, full=True))
@@ -816,7 +854,7 @@ class Analyzer:
                 change: Classified | None = None, full: bool = False) -> Decision:
         n = len(self.decisions) + 1
         if full:
-            active, n_active = self.static_active, self.n_static_active
+            _key, _ignored, active, n_active = self._static(c)
         else:
             active, n_active = self._active, self._n_active
         if n == 1:

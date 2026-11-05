@@ -157,6 +157,7 @@ from where it stopped.
 | `--speakers "SPEAKER_01=Name;…"` | — | real names of the speakers in the subtitles |
 | `--sensitivity low\|normal\|high` | `normal` | `high` catches smaller changes and produces more frames |
 | `--ignore-region x,y,w,h` | — | region of the frame, in fractions, left out of the comparison: webcam, clock |
+| `--ignore-timeline FILE.json` | — | regions left out only during spans of the video: a webcam that comes and goes with the layout (`scripts/webcam_mask.py --timeline`) |
 
 When to change each one and what it costs: [`reference/parameters.md`](reference/parameters.md).
 
@@ -186,6 +187,7 @@ python scripts/prepare.py --gc 30                                       # delete
 python scripts/explain.py --frames-json <frames.json> --frame F0042     # why this frame was kept
 python scripts/calibrate.py "C:\Videos\reuniao.mp4" --grid "sensitivity=normal,high"   # compares parameters
 python check_environment.py                                            # checks the environment, without changing anything
+%USERPROFILE%\deepface-env\Scripts\python scripts/webcam_mask.py "C:\Videos\reuniao.mp4" --timeline webcam.json   # webcam over time (DeepFace, separate environment)
 ```
 
 `python scripts/prepare.py --help` lists all the options. The `frames.json` of a video is in
@@ -315,6 +317,7 @@ video-analysis/
 │   ├── prepare.py           command line of the deterministic layer
 │   ├── calibrate.py         parameter sweep of the frame engine
 │   ├── explain.py           panel showing why a frame was kept or ignored
+│   ├── webcam_mask.py       webcam regions (fixed or over time) with DeepFace, in a separate environment
 │   └── va/                  extraction, deduplication, subtitles, alignment, batches, cache and runs
 ├── reference/               contracts, parameters, troubleshooting and the procedure without Workflow
 ├── docs/                    plan, specifications and the earlier prototype (prior-art)

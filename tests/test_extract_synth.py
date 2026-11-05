@@ -178,6 +178,25 @@ def test_static_ignore_region_with_hot_mask_off(rendered, tmp_path):
     assert doc["params"]["ignore_regions"] == [clock] and doc["hot_segments"] == []
 
 
+def test_ignore_timeline_follows_the_layout(rendered, tmp_path):
+    """meeting_layouts: webcam at the top right in the screen share (0-40 s), in the top left tile of the
+    gallery (40-80 s), then a document whose changes at 90/105 s fall in the former webcam area. The
+    timeline masks each webcam only during its layout (with 1 s of slack, as webcam_mask.py pads): the
+    changes at 90/105 s are kept, while the same areas as fixed ignore regions hide them."""
+    mp4, truth = rendered("meeting_layouts")
+    info = probe_video(mp4)
+    share_cam, gallery_cam = [0.8, 0.0, 0.2, 0.2], [0.0, 0.0, 0.5, 0.5]
+    timeline = [[0.0, 41.0, *share_cam], [39.0, 81.0, *gallery_cam]]
+    doc = run_frames_stage(mp4, info, {"ignore_timeline": timeline}, tmp_path / "frames-tl", video_key="synth-0000")
+    ok, msgs = synth.evaluate(doc, truth)
+    assert ok, msgs
+    assert check_frames(doc) == [] and doc["params"]["ignore_timeline"] == timeline
+    assert [round(f["start"]) for f in doc["frames"] if f["captured_at"] >= 80.0] == [80, 90, 105]
+    fixed = run_frames_stage(mp4, info, {"ignore_regions": [share_cam, gallery_cam]}, tmp_path / "frames-fixed",
+                             video_key="synth-0000")
+    assert [round(f["start"]) for f in fixed["frames"] if f["captured_at"] >= 80.0] == [80]
+
+
 def test_progress_callback(rendered, tmp_path):
     mp4, truth = rendered("cursor_only")
     info = probe_video(mp4)

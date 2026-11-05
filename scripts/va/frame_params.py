@@ -61,6 +61,34 @@ def _norm_regions(v: Any) -> list[list[float]]:
     return [list(r) for r in out]
 
 
+def _norm_span(e: Any) -> tuple[float, ...]:
+    """One timeline entry -> (start, end, x, y, w, h): [start, end, x, y, w, h] or
+    {"start": s, "end": s, "region": [x, y, w, h] or "x,y,w,h"} (seconds of the video)."""
+    if isinstance(e, dict):
+        extra = sorted(set(e) - {"start", "end", "region"})
+        if extra or not {"start", "end", "region"} <= set(e):
+            raise ValueError(f"ignore timeline entry needs exactly start, end and region, got {sorted(e)}")
+        start, end, region = e["start"], e["end"], e["region"]
+    elif isinstance(e, (list, tuple)) and len(e) == 6:
+        start, end, region = e[0], e[1], list(e[2:])
+    else:
+        raise ValueError(f"ignore timeline entry must be [start, end, x, y, w, h] or "
+                         f"{{start, end, region}}, got {e!r}")
+    a, b = _num(start, "ignore_timeline"), _num(end, "ignore_timeline")
+    if a < 0 or b <= a:
+        raise ValueError(f"ignore timeline entry {e!r}: need 0 <= start < end (seconds)")
+    return (round(a, 3), round(b, 3), *_norm_region(region))
+
+
+def _norm_timeline(v: Any) -> list[list[float]]:
+    """Regions ignored only during a span of the video -> sorted unique [start, end, x, y, w, h]."""
+    if v is None:
+        return []
+    if not isinstance(v, (list, tuple)):
+        raise ValueError(f"ignore_timeline must be a list of entries, got {type(v).__name__}")
+    return [list(s) for s in sorted({_norm_span(e) for e in v})]
+
+
 def _norm_range(v: Any) -> list[float] | None:
     if v is None:
         return None
@@ -88,7 +116,9 @@ def effective_frame_params(overrides: dict | None = None, *, strict: bool = True
     mean "default". The result is deterministic, JSON-serializable and idempotent
     (``effective_frame_params(effective_frame_params(x)) == effective_frame_params(x)``), so
     the CLI can hash it for the frames cache key. ``sequential`` (execution only, same output)
-    is kept only when true. Unknown keys raise ValueError; ``strict=False`` drops them instead
+    is kept only when true, and ``ignore_timeline`` (regions ignored only during a span of the
+    video, ``[start, end, x, y, w, h]``) only when not empty, so the keys of the runs without
+    them do not change. Unknown keys raise ValueError; ``strict=False`` drops them instead
     (params read back from an older frames.json or run.json).
     """
     ov = {k: v for k, v in dict(overrides or {}).items() if v is not None}
@@ -118,13 +148,15 @@ def effective_frame_params(overrides: dict | None = None, *, strict: bool = True
     p["sensitivity"] = sens
     p["range"] = None
     sequential = bool(ov.pop("sequential", False))
+    timeline = _norm_timeline(ov.pop("ignore_timeline", None))
     unknown = sorted(k for k in ov if k not in p)
     if unknown and not strict:
         for k in unknown:
             ov.pop(k)
         unknown = []
     if unknown:
-        accepted = sorted(set(p) | set(_ALIASES) | {"cursor_size", "no_revisit", "start", "end", "sequential"})
+        accepted = sorted(set(p) | set(_ALIASES) | {"cursor_size", "no_revisit", "start", "end", "sequential",
+                                                    "ignore_timeline"})
         raise ValueError(f"unknown frame params {unknown}; accepted: {accepted}")
     for k, v in ov.items():
         default = p[k]
@@ -164,6 +196,8 @@ def effective_frame_params(overrides: dict | None = None, *, strict: bool = True
         raise ValueError(f"need 0 <= t_lo < t_hi <= 255, got {p['t_lo']} / {p['t_hi']}")
     if p["cell_px"] not in (4, 8, 16) or p["cc_cell_px"] not in (1, 2, 4, 8):
         raise ValueError("cell_px must be 4, 8 or 16 and cc_cell_px 1, 2, 4 or 8")
+    if timeline:
+        p["ignore_timeline"] = timeline
     if sequential:
         p["sequential"] = True
     return p

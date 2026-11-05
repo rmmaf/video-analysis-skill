@@ -47,6 +47,7 @@ The argument reaches the end of the skill as `ARGUMENTS: …`. A request to "con
 | `--speakers "SPEAKER_01=Name;…"` | `speakers` | real names of the speakers in the subtitles |
 | `--sensitivity low\|normal\|high` | `sensitivity` | `high` catches smaller changes (more frames); `low`, the opposite |
 | `--ignore-region x,y,w,h` | `ignore_region` | region (fractions of the frame) left out of the comparison: webcam, clock |
+| `--ignore-timeline FILE.json` | `ignore_timeline` | regions left out only during spans of the video: a webcam that comes and goes with the layout (one file per video, from `scripts/webcam_mask.py --timeline`) |
 
 When to change each one: [`reference/parameters.md`](reference/parameters.md). The Portuguese names of the
 earlier version (`--max-lotes`, `--papeis`, `--curadoria plano|lotes`, `retomar`, the same keys in the request…)

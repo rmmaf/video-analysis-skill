@@ -42,6 +42,7 @@ max_batches: 2
 | `speakers` | `SPEAKER_01=Name;SPEAKER_03=Other` | the labels in the subtitles | `--speakers` | `falantes` |
 | `sensitivity` | `low`, `normal`, `high` | `normal` | `--sensitivity` | `sensibilidade` |
 | `ignore_region` | `x,y,w,h` in fractions of the frame (0 to 1, origin at the top left corner) | none | `--ignore-region` | `ignorar_regiao` |
+| `ignore_timeline` | path of a JSON file of regions per span of the video ([`parameters.md`](parameters.md)); one line per file, one file per video | none | `--ignore-timeline` | `ignorar_linha_do_tempo` |
 
 **Old names.** The names of the earlier version still work. In the request: `pedidos/pedido.md`, the
 sections `# objetivo` and `# opcoes`, the keys of the "old key" column and the values `todos`, `plano` and
@@ -78,7 +79,7 @@ python "<skill>/scripts/prepare.py" --resume <run_id|run_dir|latest> [--roles ag
   than 800 agents, but the Workflow refuses them anyway), `--recursive`, `--json-out FILE`, `--ascii`,
   `--quiet`, `--debug`. The request options also exist as command-line options (`--roles`, `--max-batches`,
   `--parallel`, `--analyst-effort`, `--curator-effort`, `--curation`, `--language`, `--range`,
-  `--speakers`, `--sensitivity`, `--ignore-region`). Full reference: `python prepare.py --help` and
+  `--speakers`, `--sensitivity`, `--ignore-region`, `--ignore-timeline`). Full reference: `python prepare.py --help` and
   `docs/design-deterministic.md`, §2.
 
 **Exit codes**, with the `error.code` of each one:

@@ -376,6 +376,44 @@ def test_second_run_hits_cache_and_force(sb, capsys):
     assert calls(sb) == ["cues", "frames", "batches"]
 
 
+def test_ignore_timeline_reaches_only_its_video(sb, capsys):
+    """ignore_timeline (scripts/webcam_mask.py --timeline): the file reaches the frames params of the
+    video it names, and only those; the other video keeps the cache of a run without the option."""
+    code, env0, _ = run_cli(capsys, "--request", write_request(sb, [sb.v1, sb.v2]))
+    assert code == 0
+    tl = sb.tmp / "linhas" / "venda.json"
+    tl.parent.mkdir()
+    write_json(tl, {"video": as_posix(sb.v2), "made_by": "webcam_mask.py",
+                    "ignore_timeline": [{"start": 0, "end": 40, "region": "0.8,0,0.2,0.2"}]})
+    reset_calls(sb)
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [sb.v1, sb.v2], options={
+        "roles": "inline", "ignore_timeline": as_posix(tl)}))
+    assert code == 0, env
+    assert calls(sb) == ["frames", "batches"]                             # only the second video's frames
+    assert [v["cache_hit"]["frames"] for v in env["videos"]] == [True, False]
+    run_dir = Path(env["run_dir"])
+    rj, rj0 = read_json(run_dir / "run.json"), read_json(Path(env0["run_dir"]) / "run.json")
+    assert rj["videos"][1]["params"]["frames"]["ignore_timeline"] == [[0.0, 40.0, 0.8, 0.0, 0.2, 0.2]]
+    assert "ignore_timeline" not in rj["videos"][0]["params"]["frames"] and "ignore_timeline" not in rj["params"]["frames"]
+    assert rj["videos"][0]["keys"] == rj0["videos"][0]["keys"]
+    assert rj["videos"][1]["keys"]["frames"] != rj0["videos"][1]["keys"]["frames"]
+    assert rj["videos"][1]["keys"]["cues"] == rj0["videos"][1]["keys"]["cues"]
+    md = (run_dir / "objective.md").read_text(encoding="utf-8")
+    assert f"- ignorar_linha_do_tempo: {as_posix(tl)} (1 trecho(s), vídeo venda_zero_clientes.mp4)\n" in md
+    # resume rebuilds with the video's own params
+    shutil.rmtree(Path(rj["videos"][1]["stages"]["frames"]))
+    reset_calls(sb)
+    code, _, _ = run_cli(capsys, "--resume", env["run_id"])
+    assert code == 0 and calls(sb) == ["frames", "batches"]
+    rebuilt = read_json(Path(rj["videos"][1]["stages"]["frames"]) / "frames.json")
+    assert rebuilt["params"]["ignore_timeline"] == [[0.0, 40.0, 0.8, 0.0, 0.2, 0.2]]
+    # a file for a video that is not in the run is refused (command line, Portuguese name)
+    other = sb.tmp / "linhas" / "outro.json"
+    write_json(other, {"video": "C:/nao/existe.mp4", "ignore_timeline": []})
+    code, env, _ = run_cli(capsys, sb.v2, "--ignorar-linha-do-tempo", other)
+    assert code == 2 and env["error"]["code"] == "invalid_option" and "not among the videos" in env["error"]["detail"]
+
+
 def test_warm_run_needs_no_ffprobe_and_no_tool_check(sb, capsys, monkeypatch):
     """Integration (design §9, warm cache <= 2 s per video): a fully cached video is answered from
     the cache. probe.json replaces ffprobe and neither ffmpeg nor ffprobe is checked; a stage to

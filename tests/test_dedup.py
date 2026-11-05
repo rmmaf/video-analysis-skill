@@ -474,6 +474,65 @@ def test_static_ignore_region():
     assert len(run([a] * 10 + [b] * 10).decisions) == 2
 
 
+CORNER = [0.85, 0.0, 0.15, 0.15]
+CAM = [0.6, 0.0, 0.4, 0.4]
+
+
+def _slow_cam_then_change():
+    """A webcam window in the top right area from 5 s to 30 s (samples 10-59 at 2 fps) whose picture
+    changes every 10 s, too seldom for the hot mask; then the screen alone and, from sample 70
+    (35 s), a real change in the same area."""
+    a = screen(13)
+    cam = [block(a, 400, 10, 200, 100, 60 + 60 * (i // 20)) for i in range(50)]
+    return [a] * 10 + cam + [a] * 10 + [block(a, 400, 10, 200, 100, 255)] * 20
+
+
+@pytest.mark.parametrize("hot_mode", ["windowed", "off"])
+def test_ignore_timeline_masks_the_region_only_during_its_span(hot_mode):
+    frames = _slow_cam_then_change()
+    assert len(run(frames, effective_frame_params({"hot_mode": hot_mode})).decisions) > 3   # the webcam leaks
+    span = effective_frame_params({"hot_mode": hot_mode, "ignore_timeline": [[5.0, 30.0, *CAM]]})
+    k = kinds(run(frames, span))
+    assert k[0] == (2, "first", None) and len(k) == 2 and k[1][0] >= 70      # only the change after the span
+    fixed = effective_frame_params({"hot_mode": hot_mode, "ignore_regions": [CAM]})
+    assert kinds(run(frames, fixed)) == [(2, "first", None)]                  # a fixed region hides it too
+    # the spans are seconds of the video: with a range starting at 10 s, the same samples are 15-40 s
+    shifted = effective_frame_params({"hot_mode": hot_mode, "range": [10.0, None],
+                                      "ignore_timeline": [[15.0, 40.0, *CAM]]})
+    assert kinds(run(frames, shifted)) == k
+
+
+def test_ignore_timeline_only_adds_to_the_hot_mask():
+    """The hot tracker still sees the webcam inside a span: its hot mask keeps covering what changes
+    around the window (here, a speaking ring that blinks just under it, outside the span's region),
+    as without the timeline."""
+    a = screen(13)
+    frames = []
+    for i in range(120):
+        f = block(a, 400, 10, 200, 100, 60 + 40 * (i % 4))                   # webcam: changes every sample
+        frames.append(block(f, 400, 112, 200, 4, 0 if (i // 20) % 2 == 0 else 255))   # ring, every 10 s
+    window = [0.625, 0.0278, 0.3125, 0.2778]                                  # the webcam alone: y 10-110
+    plain = run(frames)
+    span = run(frames, effective_frame_params({"ignore_timeline": [[0.0, 60.0, *window]]}))
+    assert len(plain.decisions) == len(span.decisions) == 1
+    assert span.hot_fracs == plain.hot_fracs                                  # the same hot mask
+    # masked in the pair activity too (as a fixed ignore region is), the webcam is not hot and the ring shows
+    assert len(run(frames, effective_frame_params({"ignore_regions": [window]})).decisions) > 1
+
+
+def test_ignore_timeline_spans_overlap_and_outside_the_range():
+    an = Analyzer(effective_frame_params({"range": [10.0, None], "ignore_regions": [[0.0, 0.0, 0.1, 0.1]],
+                                          "ignore_timeline": [[0.0, 5.0, *CORNER], [12.0, 20.0, *CORNER],
+                                                              [15.0, 30.0, 0.0, 0.9, 0.5, 0.1]]}), (AW, AH))
+    assert [(k0, k1) for k0, k1, _m in an.spans] == [(4, 20), (10, 40)]       # 0-5 s is before the range
+    key, ignored, active, n = an._static(3)
+    assert key == () and active is an.static_active
+    key, ignored, active, n = an._static(12)                                   # both spans at 16 s
+    assert key == (0, 1) and ignored[0, 0] and ignored[5, 600] and ignored[350, 10] and not ignored[180, 320]
+    assert n == int(np.count_nonzero(active)) and an._static(12)[2] is active   # cached
+    assert an._static(30)[0] == (1,) and not an._static(30)[1][5, 600]
+
+
 def test_decisions_are_deterministic_and_rows_recorded():
     rng = np.random.default_rng(3)
     base = screen(14)
@@ -534,6 +593,23 @@ def test_effective_params_aliases_presets_and_validation():
         effective_frame_params({"range": [30, 10]})
     with pytest.raises(ValueError):
         effective_frame_params({"ignore_regions": [[0.5, 0.5, 0.0, 0.1]]})
+
+
+def test_effective_params_ignore_timeline():
+    p = effective_frame_params({"ignore_timeline": [{"start": 12, "end": 30.5, "region": "0.85,0,0.15,0.15"},
+                                                    [0, 12, *CORNER], (0, 12, *CORNER)]})
+    assert p["ignore_timeline"] == [[0.0, 12.0, *CORNER], [12.0, 30.5, *CORNER]]   # sorted, duplicates dropped
+    assert effective_frame_params(p) == p and frame_params_for_output(p)["ignore_timeline"] == p["ignore_timeline"]
+    json.dumps(p, allow_nan=False)
+    # absent or empty: no key at all, so the frames key of the runs without a timeline does not change
+    assert "ignore_timeline" not in effective_frame_params({"ignore_timeline": []})
+    assert effective_frame_params({"ignore_timeline": None}) == effective_frame_params({})
+    assert effective_frame_params({"ignore_timeline": [[0, 1, *CORNER]], "x": 1}, strict=False)["ignore_timeline"]
+    for bad in ([[5, 5, *CORNER]], [[-1, 5, *CORNER]], [[0, 5, 0.9, 0.0, 0.2]], [{"start": 0, "end": 5}],
+                [{"start": 0, "end": 5, "region": CORNER, "x": 1}], "0,5,0,0,1,1", [[0, 5, 0.5, 0.5, 0.0, 0.1]],
+                [[0, float("nan"), *CORNER]], [[True, 5, *CORNER]]):
+        with pytest.raises(ValueError):
+            effective_frame_params({"ignore_timeline": bad})
 
 
 def test_static_mask_and_cells_roundtrip():

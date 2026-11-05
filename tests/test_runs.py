@@ -119,7 +119,7 @@ def test_normalize_options_all_keys():
     assert opts == {"roles": "agents", "max_batches": 4, "parallel": 6, "analyst_effort": "high",
                     "curator_effort": "xhigh", "curation": "batches", "language": "en-US", "range": [60.0, 90.5],
                     "speakers": {"SPEAKER_01": "Ana", "SPEAKER_02": "Bruno Silva"}, "sensitivity": "high",
-                    "ignore_region": [[0.8, 0.75, 0.2, 0.25], [0.0, 0.0, 0.2, 0.06]]}
+                    "ignore_region": [[0.8, 0.75, 0.2, 0.25], [0.0, 0.0, 0.2, 0.06]], "ignore_timeline": None}
     empty = R.normalize_options({})
     assert set(empty) == set(R.OPTION_KEYS) and all(v is None for v in empty.values())
     assert R.normalize_options({"max_batches": "0"})["max_batches"] is None
@@ -172,6 +172,55 @@ def test_normalize_options_errors(key, value, needle):
     with pytest.raises(R.RunError) as exc:
         R.normalize_options({key: value})
     assert exc.value.code == "invalid_option" and needle in exc.value.detail
+
+
+def test_ignore_timeline_option(tmp_path):
+    named = tmp_path / "aula 1.webcam.json"
+    named.write_text('{"video": "C:/videos/Aula 1.mp4", "made_by": "webcam_mask.py", "ignore_timeline": '
+                     '[{"start": 40, "end": 80, "region": "0,0,0.5,0.5"}, {"start": 0, "end": 40.5, "region": "0.8,0,0.2,0.2"}]}',
+                     encoding="utf-8-sig")
+    bare = tmp_path / "solto.json"
+    bare.write_text("[[10, 20, 0.8, 0.0, 0.2, 0.2]]", encoding="utf-8")
+    parsed = R.parse_request(f"# videos\nC:/v.mp4\n# objective\nx\n# options\nignore_timeline: {named}\n"
+                             f'ignorar_linha_do_tempo: "{bare}"\n')
+    assert parsed["options"]["ignore_timeline"] == [str(named), str(bare)]       # several lines add up
+    opts = R.normalize_options(parsed["options"])
+    t_named = {"file": as_posix(named), "video": "C:/videos/Aula 1.mp4",
+               "spans": [[0.0, 40.5, 0.8, 0.0, 0.2, 0.2], [40.0, 80.0, 0.0, 0.0, 0.5, 0.5]]}
+    t_bare = {"file": as_posix(bare), "video": None, "spans": [[10.0, 20.0, 0.8, 0.0, 0.2, 0.2]]}
+    assert opts["ignore_timeline"] == [t_named, t_bare]
+    # each file goes to its video: same path, else the same file name; a file without "video" needs one video
+    a1, a2 = tmp_path / "x" / "aula 1.mp4", tmp_path / "y" / "Aula 2.mp4"
+    assert R.timeline_spans([t_named], [a2, a1]) == [[], t_named["spans"]]
+    assert R.timeline_spans([t_bare], [a2]) == [t_bare["spans"]]
+    assert R.timeline_spans(None, [a1, a2]) == [[], []]
+    twin = tmp_path / "z" / "aula 1.mp4"
+    assert R.timeline_spans([{**t_bare, "video": str(twin)}], [a1, twin]) == [[], t_bare["spans"]]
+    for timelines, videos, needle in (([t_bare], [a1, a2], "does not say which video"),
+                                      ([t_named], [a2], "not among the videos"),
+                                      ([t_named], [a1, twin], "more than one video")):
+        with pytest.raises(R.RunError) as exc:
+            R.timeline_spans(timelines, videos)
+        assert exc.value.code == "invalid_option" and needle in exc.value.detail
+
+
+@pytest.mark.parametrize("content, needle", [
+    (None, "file not found"),
+    ("{nao e json", "not a readable JSON"),
+    ('{"video": "a.mp4"}', "expected a list"),
+    ('{"video": 3, "ignore_timeline": []}', '"video" must be'),
+    ("[[20, 10, 0.8, 0.0, 0.2, 0.2]]", "start < end"),
+    ('[{"start": 0, "end": 5}]', "start, end and region"),
+    ("[[0, 5, 0.5, 0.5, 0.0, 0.1]]", "x,y in [0,1)"),
+])
+def test_ignore_timeline_option_errors(tmp_path, content, needle):
+    f = tmp_path / "linha.json"
+    if content is not None:
+        f.write_text(content, encoding="utf-8")
+    with pytest.raises(R.RunError) as exc:
+        R.normalize_options({"ignore_timeline": [str(f)]})
+    assert exc.value.code == "invalid_option" and needle in exc.value.detail
+    assert exc.value.detail.startswith("ignore_timeline: ")
 
 
 def test_workflow_options_defaults():

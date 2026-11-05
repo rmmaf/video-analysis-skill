@@ -7,6 +7,17 @@ fundo liso por fora. Sem janela clara, usa as proporcoes do rosto. Um rosto pres
 em 30% a 50% das amostras (camera que some quando o layout muda) so entra com a
 janela achada. Imprime as regioes no formato do ignore_region.
 
+A YuNet fica com os rostos de nota 0,85 ou mais; a DeepFace usa 0,9, e a variavel de ambiente
+yunet_score_threshold troca o valor. Numa chamada do Teams de 28 min, conferida a olho em 60
+quadros, com 0,9 ficaram de fora 16 de 303 rostos, 15 deles com nota entre 0,86 e 0,89, e a
+linha do tempo cobria 92% das webcams. Com 0,85 cobriu 98%, e nenhuma regiao caiu sobre a tela
+compartilhada. Em mais 4 gravacoes (2 h 18 min, 1080p e 720p), as 94 regioes de 0,85 vieram todas
+de rostos de verdade: webcams, fotos de perfil e a camera de uma sala. A faixa de 0,85 a 0,9 tambem
+pega o que nao e rosto (selos de porcentagem num slide, ate 0,89), mas numa amostra so: o que segura
+isso e a regra do trecho (3 amostras no mesmo lugar, com movimento), nao a nota. A variavel aceita
+de 0,75 ate menos de 1, escrita com ponto (0.9): abaixo disso entram mais falsos rostos, e com 1 a
+YuNet nao acha rosto nenhum. Com outro valor, o script sai com erro antes de carregar a DeepFace.
+
 Com --timeline, escreve tambem a linha do tempo: cada janela de camera so durante os
 trechos em que o rosto esta nela, para o --ignore-timeline da skill (prepare.py). Assim a
 mascara acompanha as trocas de layout (so camera -> tela compartilhada -> galeria). Um
@@ -53,9 +64,9 @@ import numpy as np  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-from deepface import DeepFace  # noqa: E402
-
 STEP_S = 2.0       # uma amostra a cada 2 s
+SCORE = 0.85       # nota minima da YuNet (a DeepFace usa 0,9; ver o topo)
+SCORE_MIN = 0.75   # menor nota aceita em yunet_score_threshold (ver o topo e min_score)
 PRESENCE = 0.5     # rosto no mesmo lugar em pelo menos metade das amostras,
 PRESENCE_WINDOW = 0.3  # ou em pelo menos 30% delas, se a janela da camera for achada,
 LIVE = 2.0         # e que se mexe (diferenca media acima de 2 tons de cinza): foto nao mexe
@@ -74,6 +85,28 @@ MARGIN = 0.006     # folga em volta da janela, fracao da largura: pega a moldura
 MAX_GAP = 3        # linha do tempo: ate 3 amostras seguidas sem o rosto ainda e o mesmo trecho
 MIN_HITS = 3       # trecho com menos amostras com o rosto que isso e passageiro: fica de fora
 KEEP_G = 16        # quadros guardados por rosto (a partir da MIN_HITS-esima amostra com ele)
+
+
+def min_score(raw):
+    """A nota minima da YuNet: a da variavel yunet_score_threshold (raw) ou, sem ela, SCORE. Sai com
+    erro se raw nao for um numero de SCORE_MIN ate menos de 1: com nota baixa a YuNet ve rosto no que
+    nao e, e cada falso rosto que se mexe vira regiao ignorada, que pode esconder a tela compartilhada;
+    com 1, nao acha rosto nenhum (a nota dela vai ate 1)."""
+    if raw is None:
+        return SCORE
+    try:
+        v = float(raw)
+    except ValueError:
+        v = math.nan
+    if not SCORE_MIN <= v < 1:   # NaN e infinitos tambem caem aqui
+        sys.exit(f"yunet_score_threshold={raw!r}: use um numero com ponto, de {SCORE_MIN} ate menos de 1"
+                 f" (sem a variavel, {SCORE})")
+    return v
+
+
+# a DeepFace le a nota desta variavel a cada chamada; com nota errada, o script sai antes de carrega-la
+os.environ["yunet_score_threshold"] = str(min_score(os.environ.get("yunet_score_threshold")))
+from deepface import DeepFace  # noqa: E402
 
 
 def starts(length, size, step):
@@ -285,6 +318,7 @@ def main():
     ap.add_argument("--timeline")
     ap.add_argument("--debug")
     a = ap.parse_args()
+    score = float(os.environ["yunet_score_threshold"])
 
     found = glob.glob(a.video)
     if len(found) != 1:
@@ -454,8 +488,8 @@ def main():
 
     print(("ignore_region: " + "; ".join(regions)) if regions else "nenhuma webcam achada")
     per_h = total_s / duration * 60 if duration else 0.0
-    print(f"amostras {n} | chamadas da YuNet {st['calls']} | decodificacao {st['decode']:.1f} s"
-          f" | deteccao {st['detect']:.1f} s | janelas {win_s:.1f} s | total {total_s:.1f} s"
+    print(f"amostras {n} | chamadas da YuNet {st['calls']} (nota minima {score})"
+          f" | decodificacao {st['decode']:.1f} s | deteccao {st['detect']:.1f} s | janelas {win_s:.1f} s | total {total_s:.1f} s"
           f" | video {duration / 60:.1f} min | {per_h:.1f} min por hora de video", file=sys.stderr)
     for r in sorted(report, key=lambda r: -r["presence"]):
         if r["presence"] >= 0.1 or r["spans"]:
@@ -464,7 +498,7 @@ def main():
                   + (f", {r['spans']} trecho(s) na linha do tempo" if r["spans"] else ""), file=sys.stderr)
     if a.timeline:
         doc = {"video": os.path.abspath(found[0]), "made_by": "webcam_mask.py", "step_s": step_s,
-               "tiles": a.tiles, "duration_s": round(duration, 3),
+               "tiles": a.tiles, "min_score": score, "duration_s": round(duration, 3),
                "ignore_timeline": [{"start": t["start"], "end": t["end"], "region": t["region"]} for t in timeline],
                "spans_info": timeline}
         with open(a.timeline, "w", encoding="utf-8") as fh:
@@ -474,7 +508,7 @@ def main():
             print(f"  {hms(t['start'])}-{hms(t['end'])} {t['region']} ({t['hits']} amostras com o rosto,"
                   f" {t['how']})", file=sys.stderr)
     if a.json:
-        out = {"video": found[0], "tiles": a.tiles, "samples_arg": a.samples, "fps": fps,
+        out = {"video": found[0], "tiles": a.tiles, "min_score": score, "samples_arg": a.samples, "fps": fps,
                "duration_s": duration, "size": [W, H], "samples": n, "calls": st["calls"],
                "decode_s": st["decode"], "detect_s": st["detect"], "window_s": win_s,
                "loop_s": loop_s, "total_s": total_s, "min_per_hour": per_h,

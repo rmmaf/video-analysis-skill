@@ -37,7 +37,8 @@ and a screen share comes in later, it also hides the shared content that falls w
 `ignore_timeline` masks each region only during its span, on top of the automatic mask, which stays as it
 is (it also covers what blinks around a webcam: name labels, speaking rings). What it removes is the webcam
 frames the automatic mask lets through: on a 28-min Teams call (screen share, then gallery), 204 frames
-became 188, half of the frames whose change was inside a webcam went away, and no screen content was lost.
+became 182, two thirds of the frames whose change was inside a webcam went away (28 to 9), and no screen
+content was lost.
 The file, one per video:
 
 ```json
@@ -51,9 +52,24 @@ Times are seconds of the video (also with `range`), the region is in fractions a
 of the run it is for; without it, the file is accepted only in a run of one video. In the request, one line
 `ignore_timeline: <file>` per file. `scripts/webcam_mask.py VIDEO --timeline FILE.json` writes it: it finds
 the faces with DeepFace every 2 s and the camera window around each face. DeepFace runs in a separate Python
-environment, outside the skill's setup (instructions at the top of the script). Cost measured on a 4-core
-laptop CPU, for a 1080p 60 fps call: 24 min per hour of video (34 with the machine busy), three quarters of
-it in the face detection; the extraction of the skill takes 3 to 6 min per hour on the same video.
+environment, outside the skill's setup (instructions at the top of the script). It keeps the faces with a
+YuNet score of 0.85 or more, below DeepFace's 0.9. On 60 frames of that call checked by eye, 0.9 missed 16
+of 303 faces, 15 of them between 0.86 and 0.89, and nothing that was not a face scored above 0.73; the
+timeline covered 92% of the live webcams with 0.9 and 98% with 0.85, and no region fell on the shared
+screen with either. On four more recordings (2 h 18 min, 1080p and 720p captured from the browser), all
+94 regions of 0.85 came from real faces: webcams, profile photos and a meeting-room camera. The gain is
+largest in the 720p captures, where the webcams of the side strip are small and score mostly between
+0.85 and 0.9: in one of them, the two webcams of the strip were masked 24 and 12 minutes longer than with
+0.9. Things that are not faces also score in that band (percentage badges on a slide, up to 0.89), so
+the score alone does not keep them out: the rule of the span does, 3 samples in the same place with
+motion, and the badges were in a single sample. Two cases to know: a camera window can come out wider
+than its tile (one covered the edge of the shared window for 28 s), and when a screen share shows a
+Teams window, its webcams are masked like any other. The environment variable `yunet_score_threshold`
+sets another score, from 0.75 up to but not including 1, written with a point: lower scores let in more
+false faces, and at 1 YuNet finds no face. Any other value stops the script before it loads DeepFace.
+Cost measured on a 4-core laptop CPU, for a 1080p 60 fps call: 24 min per hour of video (34 with the
+machine busy), three quarters of it in the face detection, the same with either score; the extraction of
+the skill takes 3 to 6 min per hour on the same video.
 
 ## How a frame becomes "unique"
 

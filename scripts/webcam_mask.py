@@ -10,10 +10,13 @@ janela achada. Imprime as regioes no formato do ignore_region.
 A YuNet fica com os rostos de nota 0,85 ou mais; a DeepFace usa 0,9, e a variavel de ambiente
 yunet_score_threshold troca o valor. Numa chamada do Teams de 28 min, conferida a olho em 60
 quadros, com 0,9 ficaram de fora 16 de 303 rostos, 15 deles com nota entre 0,86 e 0,89, e a
-linha do tempo cobria 92% das webcams. Com 0,85 cobriu 98%, nenhuma regiao caiu sobre a tela
-compartilhada, e nada que nao era rosto passou de 0,73. Por isso a variavel aceita de 0,75 ate
-menos de 1, escrita com ponto (0.9): abaixo disso vem o que nao e rosto, e com 1 a YuNet nao acha
-rosto nenhum. Com outro valor, o script sai com erro antes de carregar a DeepFace.
+linha do tempo cobria 92% das webcams. Com 0,85 cobriu 98%, e nenhuma regiao caiu sobre a tela
+compartilhada. Em mais 4 gravacoes (2 h 18 min, 1080p e 720p), as 94 regioes de 0,85 vieram todas
+de rostos de verdade: webcams, fotos de perfil e a camera de uma sala. A faixa de 0,85 a 0,9 tambem
+pega o que nao e rosto (selos de porcentagem num slide, ate 0,89), mas numa amostra so: o que segura
+isso e a regra do trecho (3 amostras no mesmo lugar, com movimento), nao a nota. A variavel aceita
+de 0,75 ate menos de 1, escrita com ponto (0.9): abaixo disso entram mais falsos rostos, e com 1 a
+YuNet nao acha rosto nenhum. Com outro valor, o script sai com erro antes de carregar a DeepFace.
 
 Com --timeline, escreve tambem a linha do tempo: cada janela de camera so durante os
 trechos em que o rosto esta nela, para o --ignore-timeline da skill (prepare.py). Assim a

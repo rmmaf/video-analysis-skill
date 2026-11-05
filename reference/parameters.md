@@ -56,13 +56,20 @@ environment, outside the skill's setup (instructions at the top of the script). 
 YuNet score of 0.85 or more, below DeepFace's 0.9. On 60 frames of that call checked by eye, 0.9 missed 16
 of 303 faces, 15 of them between 0.86 and 0.89, and nothing that was not a face scored above 0.73; the
 timeline covered 92% of the live webcams with 0.9 and 98% with 0.85, and no region fell on the shared
-screen with either. The environment variable `yunet_score_threshold` sets another score, from 0.75 up to
-but not including 1, written with a point: lower scores let in what is not a face (up to 0.73 in that
-measurement), and every false face that moves becomes an ignored region; at 1, YuNet finds no face. Any
-other value stops the script before it loads DeepFace. Cost measured on a 4-core laptop CPU, for a 1080p
-60 fps call: 24 min per hour of video (34 with the machine busy), three quarters of it in the face
-detection, the same with either score; the extraction of the skill takes 3 to 6 min per hour on the same
-video.
+screen with either. On four more recordings (2 h 18 min, 1080p and 720p captured from the browser), all
+94 regions of 0.85 came from real faces: webcams, profile photos and a meeting-room camera. The gain is
+largest in the 720p captures, where the webcams of the side strip are small and score mostly between
+0.85 and 0.9: in one of them, the two webcams of the strip were masked 24 and 12 minutes longer than with
+0.9. Things that are not faces also score in that band (percentage badges on a slide, up to 0.89), so
+the score alone does not keep them out: the rule of the span does, 3 samples in the same place with
+motion, and the badges were in a single sample. Two cases to know: a camera window can come out wider
+than its tile (one covered the edge of the shared window for 28 s), and when a screen share shows a
+Teams window, its webcams are masked like any other. The environment variable `yunet_score_threshold`
+sets another score, from 0.75 up to but not including 1, written with a point: lower scores let in more
+false faces, and at 1 YuNet finds no face. Any other value stops the script before it loads DeepFace.
+Cost measured on a 4-core laptop CPU, for a 1080p 60 fps call: 24 min per hour of video (34 with the
+machine busy), three quarters of it in the face detection, the same with either score; the extraction of
+the skill takes 3 to 6 min per hour on the same video.
 
 ## How a frame becomes "unique"
 

@@ -13,7 +13,8 @@ again.
 | `--sensitivity high` | a small change that matters did not become a frame: a number, a short word | more frames, more batches, more tokens |
 | `--sensitivity low` | too many frames from compression noise or a large cursor | may miss a small change |
 | `--ignore-region x,y,w,h` | the density warning suggested a region: webcam, clock, animation | what changes there stops counting |
-| `--ignore-timeline FILE.json` | a webcam that exists only in some layouts of the call: camera alone, then a screen share, then the gallery | the region stops counting only during its spans; the file needs DeepFace (`scripts/webcam_mask.py`, outside the setup) |
+| `--ignore-timeline FILE.json` | a webcam that exists only in some layouts of the call: camera alone, then a screen share, then the gallery; with the DeepFace environment, the skill already makes this timeline (below), and a file given here prevails for its video | the region stops counting only during its spans; the file comes from `scripts/webcam_mask.py --timeline` |
+| `--webcam-timeline on\|off` | the default `auto` needs nothing. `on`: a webcam on screen only briefly escaped the probe (60 frames); `off`: skip DeepFace in this call | `on`: the full scan even when the probe finds no face (about 24 min per hour of 1080p video); `off`: the webcam only goes through the automatic mask |
 | `--range hh:mm:ss-hh:mm:ss` | only one part matters, or to go deeper into a segment of an earlier run | the first segment of a new video still extracts the whole video (it stays in the cache) |
 | `--max-batches N` | to test the objective before the whole run | partial coverage, stated in the report |
 | `--speakers "SPEAKER_01=Name;…"` | the subtitles have generic labels (WhisperX) and you know the names | redoes only the subtitles and the batches, without re-extracting frames |
@@ -23,7 +24,8 @@ again.
 | `--curator-effort medium` | with `--curation batches`, to also save on the curator before each batch | without `--curation batches`, it changes nothing: the plan and the curator's reports always stay at `high` |
 
 `--sensitivity`, `--ignore-region` and `--ignore-timeline` change the extraction: the frames are extracted again, and the
-subtitles come from the cache. For several regions, separate them with `;` in the request
+subtitles come from the cache. So does a webcam timeline with spans, the first time it is made, and
+`--webcam-timeline off` on a video that has one. For several regions, separate them with `;` in the request
 (`ignore_region: 0.80,0.75,0.20,0.25; 0.00,0.00,0.20,0.06`). The other parameters on this page exist only
 on the `prepare.py` command line, for manual use and calibration; the skill does not pass them.
 
@@ -39,6 +41,40 @@ is (it also covers what blinks around a webcam: name labels, speaking rings). Wh
 frames the automatic mask lets through: on a 28-min Teams call (screen share, then gallery), 204 frames
 became 182, two thirds of the frames whose change was inside a webcam went away (28 to 9), and no screen
 content was lost.
+
+**The timeline the skill makes** (`webcam_timeline`, default `auto`). When the DeepFace environment of
+the setup exists (step 6 of [`setup.md`](../setup.md)), `prepare.py` makes the timeline of each video
+before extracting its frames, with `scripts/webcam_mask.py`. First comes a probe of up to 60 frames spread
+over the video (one every 10 s in a video shorter than 10 min): if no face shows up in the same place in
+2 of them, there is no webcam, the timeline is empty and the full scan does not run. Otherwise the full
+scan, one sample every 2 s, writes the timeline. A video of 10 s or less goes straight to the full scan:
+its probe would have one frame, which cannot show a face in 2. Each sample is timed by the frame's own timestamp, so the
+spans also fall in the right place in a variable frame rate (VFR) recording, such as a screen recording
+that only gets frames when the screen changes. There the probe's seeks miss, because OpenCV seeks by
+counting frames: the probe checks where each one landed and goes through the video from the start for
+the parts left without a sample. A probe that still does not cover the video counts for nothing, and the
+full scan runs. The timeline stays in the video's cache (`webcam-<h8>\`), and every later run reuses it,
+also with `range` and `max_batches`. Its spans enter the frames key like an `ignore_timeline` file, so an
+empty timeline changes nothing. The environment must be the setup's: deepface 0.0.104 and the YuNet
+weights with their SHA-256, both in the timeline's cache key, so a timeline is never reused across
+detectors; another version or damaged weights count as no environment, with a warning. `on` skips the
+probe and always runs the full scan (without the environment, `prepare.py` stops with exit code 3);
+`off` does not run DeepFace. A video with its own
+`ignore_timeline` file keeps that file and gets no automatic timeline, even when the file has no spans:
+an empty file turns the timeline off for that video alone. A failure becomes a warning, and the video is
+extracted without the timeline. Measured on the same 4-core laptop:
+- **1080p calls:** the probe took 55 to 66 s on three of them, plus about 7 s to load DeepFace, and
+  found a face in all three.
+- **3024×1964 screen recording** (VFR, 3 min): all 19 seeks landed in their part, so there was no pass
+  from the start. The probe took 40 to 90 s and found no face, so the full scan (about 6 min by the
+  estimate) did not run.
+- **9-min 1080p call** (VFR, 16 frames/s on average): all 55 seeks also landed. Probe and full scan took
+  4 min 13 s, against up to 5 min in the estimate, and made 3 spans (54 frames became 53). A 16 frames/s
+  constant copy of the call gave the same 3 spans, to the second.
+
+The estimate counts the worst case, probe and full scan, for each video whose timeline is not in the
+cache yet, plus one decoding pass for the probe when ffprobe sees a variable frame rate.
+
 The file, one per video:
 
 ```json
@@ -52,7 +88,7 @@ Times are seconds of the video (also with `range`), the region is in fractions a
 of the run it is for; without it, the file is accepted only in a run of one video. In the request, one line
 `ignore_timeline: <file>` per file. `scripts/webcam_mask.py VIDEO --timeline FILE.json` writes it: it finds
 the faces with DeepFace every 2 s and the camera window around each face. DeepFace runs in a separate Python
-environment, outside the skill's setup (instructions at the top of the script). It keeps the faces with a
+environment, which the setup creates (`check_environment.py --install-deepface`). It keeps the faces with a
 YuNet score of 0.85 or more, below DeepFace's 0.9. On 60 frames of that call checked by eye, 0.9 missed 16
 of 303 faces, 15 of them between 0.86 and 0.89, and nothing that was not a face scored above 0.73; the
 timeline covered 92% of the live webcams with 0.9 and 98% with 0.85, and no region fell on the shared
@@ -200,7 +236,8 @@ subtitles they come from are redone):
 | new objective, `max_batches`, `parallel`, efforts, `language`, `roles` | only the agents | the whole cache |
 | `range` | the batches of the segment | frames and subtitles of the whole video |
 | `speakers`, edited subtitles | subtitles and batches | frames |
-| `sensitivity`, `ignore_region`, `ignore_timeline` | frames and batches | subtitles |
+| `sensitivity`, `ignore_region`, `ignore_timeline`, a webcam timeline with spans (made, or turned `off`) | frames and batches | subtitles |
+| a webcam timeline without spans (no webcam) | nothing | the whole cache |
 | video moved, renamed or edited | everything (another cache key) | — |
 
 ## Diagnostics (manual use, by a person)

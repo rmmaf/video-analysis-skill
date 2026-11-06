@@ -13,6 +13,9 @@ Manual use:
 
 stdout: exactly one JSON line (the last one), also written to <run_dir>/prepare.json and to logs/.
 stderr: first "run_dir: …", then the progress; <run_dir>/status.json is updated every 5 s.
+Webcam timeline: with the DeepFace environment of the setup, before extracting the frames, prepare.py runs
+scripts/webcam_mask.py in it (a probe, then the full scan if a face shows up) and keeps the timeline in the
+video's cache (--webcam-timeline auto|on|off; scripts/va/webcam.py).
 Exit code: 0 ok · 2 input · 3 environment · 4 a video failed (the others come in the JSON) · 130 interrupted.
 Contracts: reference/contracts.md; full CLI: docs/design-deterministic.md §2.
 """
@@ -37,11 +40,12 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 import va  # noqa: E402
-from va import WORKFLOW_DEFAULTS, WORKSPACE_DIRS, environment, cache, contracts, discover, runs  # noqa: E402
+from va import WEBCAM_DEFAULTS, WORKFLOW_DEFAULTS, WORKSPACE_DIRS, environment, cache, contracts, discover, runs, webcam  # noqa: E402
 from va.common import (as_posix, fmt_hms, parse_time, read_json, resolve_unicode_paths, setup_console,  # noqa: E402
                        video_title, workspace_home, write_json, write_text)
 
 SCRIPT_PATH = as_posix(SKILL_DIR / "workflow" / "video-analysis.js")
+WEBCAM_SCRIPT = SCRIPTS_DIR / "webcam_mask.py"   # run with the Python of the DeepFace environment
 STATUS_INTERVAL_S = 5.0
 LONG_PATH = 240
 DEFAULT_LANGUAGE = "pt-BR"
@@ -118,6 +122,10 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--ignore-timeline", "--ignorar-linha-do-tempo", dest="ignore_timeline", action="append",
                    metavar="FILE.json", help="regions ignored only during spans of the video (scripts/webcam_mask.py "
                                              "--timeline writes it); one file per video, each naming its video")
+    a.add_argument("--webcam-timeline", "--linha-do-tempo-webcam", dest="webcam_timeline", metavar="auto|on|off",
+                   help="the webcam timeline made with DeepFace, when its environment exists (setup.md, step 6): "
+                        "auto (default) probes the video and runs the full scan only if a face shows up; "
+                        "on always runs the full scan (without the environment: exit 3); off never runs it")
     d = p.add_argument_group("extraction and batches (manual use; design §2)")
     d.add_argument("--start", metavar="T", help="start of the extracted range ([HH:]MM:SS[.mmm] or seconds)")
     d.add_argument("--end", metavar="T", help="end of the extracted range")
@@ -412,6 +420,91 @@ def video_params(params: dict, overrides: dict, segment: list | None, spans: lis
     return effective_params({**overrides, "frames": {**overrides["frames"], "ignore_timeline": spans}}, segment)
 
 
+# --- webcam timeline (scripts/va/webcam.py) ------------------------------------------------------------
+
+def webcam_plan(mode: str, given: list | None, vdir: Path, vkey: str) -> dict:
+    """The webcam timeline of one video before the run: ``given`` (the request has an ignore_timeline
+    file for it, which prevails, even without spans: None means no file), ``off``, ``cached`` (spans from
+    the cache) or ``pending`` (to make: ``scan`` probe with auto, full with on)."""
+    if given is not None:
+        return {"state": "given", "scan": None, "spans": list(given)}
+    if mode == "off":
+        return {"state": "off", "scan": None, "spans": []}
+    key = webcam.webcam_key(vkey, webcam.score_setting())
+    hit = webcam.cached(vdir, key, need_full=mode == "on")
+    if hit:
+        return {**hit, "state": "cached", "key": key}
+    return {"state": "pending", "scan": "full" if mode == "on" else "probe", "spans": [], "key": key}
+
+
+def webcam_environment(ctx: Ctx, mode: str, known: list[dict]) -> str | None:
+    """The Python of the DeepFace environment when some timeline is ``pending``; else None. Without a
+    working environment, ``on`` fails (exit 3) and ``auto`` goes on without the timeline
+    (``unavailable``), with a warning only when the environment exists but does not run."""
+    pending = [k for k in known if k["webcam"]["state"] == "pending"]
+    if not pending:
+        return None
+    st = environment.deepface_status()
+    if st["ok"]:
+        return st["python"]
+    if mode == "on":
+        raise Fail("missing_dependency", f"webcam_timeline: on, but {st['detail']}: run /video-analysis setup "
+                   "(step 6 creates the DeepFace environment)")
+    if st["state"] != "absent":
+        ctx.warnings.append(f"webcam timeline skipped: {st['detail']} (run /video-analysis setup)")
+    for k in pending:
+        k["webcam"] = {**k["webcam"], "state": "unavailable", "scan": None, "detail": st["detail"]}
+    return None
+
+
+def webcam_view(w: dict) -> dict:
+    """``videos[].webcam_timeline`` of the stdout (reference/contracts.md, section 3); ``spans`` counts the
+    spans of the timeline the frames use (given, cached, made), null otherwise."""
+    used = w["state"] in ("given", "cached", "made")
+    return {"state": w["state"], "scan": w.get("scan"), "spans": len(w["spans"]) if used else None,
+            "path": w.get("path"), "seconds": w.get("seconds") if w["state"] == "made" else None,
+            "estimate_s": w.get("estimate_s"), "detail": w.get("detail")}
+
+
+def make_webcam_timeline(ctx: Ctx, it: dict, python: str, overrides: dict, params: dict, segment: list | None,
+                         force: set[str]) -> None:
+    """Make the ``pending`` webcam timeline of one video, under the video's lock, and recompute its keys
+    and cache state with the spans. A failure becomes a warning: the frames are extracted without it."""
+    w, vdir = it["webcam"], it["vdir"]
+    scan = w["scan"]
+    est = webcam.estimate_seconds(it["info"], scan)
+    what = "a probe, then the full scan if a face shows up" if scan == "probe" else "the full scan"
+    ctx.log(f"{it['slug']}: webcam timeline with DeepFace ({what}; up to ~{max(1, round(est / 60))} min)")
+    if ctx.status is not None:
+        with contextlib.suppress(OSError, ValueError):
+            write_json(ctx.status.progress_path(it["vid"]), {"vid": it["vid"], "stage": "webcam", "state": "processing",
+                                                             "updated": cache.iso_now(), "info": {"scan": scan}})
+    try:
+        vdir.mkdir(parents=True, exist_ok=True)
+        with cache.VideoLock(vdir / ".lock", wait_s=WEBCAM_DEFAULTS["lock_wait_s"],
+                             on_wait=lambda m: ctx.log(f"{it['slug']}: {m}")):
+            hit = webcam.cached(vdir, w["key"], need_full=scan == "full")   # made by another prepare.py meanwhile
+            if hit:
+                w.update(hit, state="cached")
+            else:
+                w.update(webcam.make_timeline(python=python, script=WEBCAM_SCRIPT, video_path=it["video"],
+                                              video_dir=vdir, key=w["key"], scan=scan, duration_s=it["duration"]),
+                         state="made")
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:  # optional: the video goes on without it
+        detail = str(exc) if isinstance(exc, webcam.WebcamError) else f"{type(exc).__name__}: {exc}"
+        w.update(state="failed", spans=[], detail=detail)
+        it["warn"].append(f"webcam timeline failed ({detail}); frames extracted without it")
+        ctx.log(f"{it['slug']}: webcam timeline failed: {detail}")
+    else:
+        took = f", {w['seconds']:.0f} s" if w["state"] == "made" else ", from the cache"
+        ctx.log(f"{it['slug']}: webcam timeline: {len(w['spans'])} span(s) ({w['scan']}{took})")
+    vparams = video_params(params, overrides, segment, w["spans"])
+    keys = cache.stage_keys(it["video_key"], it["vtt"], vparams, it["meta"])
+    it.update(params=vparams, keys=keys, hits=cache.stage_hits(vdir, keys, force))
+
+
 def discover_pairs(ctx: Ctx, args, entries: list[str]) -> list[tuple[Path, Path]]:
     videos, problems = discover.expand_inputs(entries, recursive=args.recursive)
     if problems:
@@ -619,6 +712,8 @@ def option_lines(opts: dict, wopts: dict, roles_mode: str, language: str) -> lis
     for t in opts.get("ignore_timeline") or []:
         target = f", vídeo {Path(t['video']).name}" if t["video"] else ""
         lines.append(f"ignorar_linha_do_tempo: {t['file']} ({len(t['spans'])} trecho(s){target})")
+    if opts.get("webcam_timeline"):
+        lines.append(f"linha_do_tempo_webcam: {opts['webcam_timeline']}")
     return lines
 
 
@@ -673,6 +768,7 @@ def run_prepare(ctx: Ctx, args) -> int:
     wopts = runs.workflow_options(opts)
     language = opts.get("language") or DEFAULT_LANGUAGE
     segment = opts.get("range")
+    wmode = opts.get("webcam_timeline") or WEBCAM_DEFAULTS["mode"]
 
     # keys and cache state first: stat calls and small JSON reads, no subprocess and no frame
     # engine import, so a fully cached run needs neither ffprobe nor ffmpeg (design §9: warm
@@ -680,24 +776,37 @@ def run_prepare(ctx: Ctx, args) -> int:
     errors: list[dict] = []
     known = []
     slugs = runs.unique_slugs([v.stem for v, _ in pairs])
+
+    def unreadable(k: dict, exc: OSError) -> None:
+        errors.append({"vid": k["vid"], "slug": k["slug"], "video": as_posix(k["video"]), "code": "video_failed",
+                       "detail": f"read: {type(exc).__name__}: {exc}"})
+        ctx.log(f"{k['slug']}: could not read the video or the subtitles: {exc}", echo=False)
+
     for i, ((video, vtt), slug) in enumerate(zip(pairs, slugs)):
         vid, title = f"v{i + 1}", video_title(video)
-        meta = {"title": title, "video_path": as_posix(video), "vtt_path": as_posix(vtt)}
-        vparams = video_params(params, overrides, segment, spans[i])
+        k = {"vid": vid, "slug": slug, "title": title, "video": video, "vtt": vtt,
+             "meta": {"title": title, "video_path": as_posix(video), "vtt_path": as_posix(vtt)}}
         try:
             vkey = cache.video_key(video)
-            keys = cache.stage_keys(vkey, vtt, vparams, meta)
         except OSError as exc:
-            errors.append({"vid": vid, "slug": slug, "video": as_posix(video), "code": "video_failed",
-                           "detail": f"read: {type(exc).__name__}: {exc}"})
-            ctx.log(f"{slug}: could not read the video or the subtitles: {exc}", echo=False)
+            unreadable(k, exc)
             continue
         vdir = ctx.home / WORKSPACE_DIRS["cache"] / vkey
-        hits = cache.stage_hits(vdir, keys, force)
-        info = cache.cached_probe(vdir, video) if hits["cues"] and hits["frames"] else None
-        known.append({"vid": vid, "slug": slug, "title": title, "video": video, "vtt": vtt, "video_key": vkey,
-                      "keys": keys, "params": vparams, "meta": meta, "hits": hits, "info": info,
-                      "info_from_cache": info is not None})
+        known.append({**k, "video_key": vkey, "vdir": vdir, "webcam": webcam_plan(wmode, spans[i], vdir, vkey)})
+    deepface = webcam_environment(ctx, wmode, known)
+    for k in list(known):
+        vparams = video_params(params, overrides, segment, k["webcam"]["spans"])
+        try:
+            keys = cache.stage_keys(k["video_key"], k["vtt"], vparams, k["meta"])
+        except OSError as exc:
+            unreadable(k, exc)
+            known.remove(k)
+            continue
+        hits = cache.stage_hits(k["vdir"], keys, force)
+        if k["webcam"]["state"] == "pending":   # the timeline will change the frames key (worst case)
+            hits = {**hits, "frames": False, "batches": False}
+        info = cache.cached_probe(k["vdir"], k["video"]) if hits["cues"] and hits["frames"] else None
+        k.update(keys=keys, params=vparams, hits=hits, info=info, info_from_cache=info is not None)
     need = ["numpy", "pillow"]  # find_spec only: cheap
     if any(k["info"] is None for k in known):
         need.insert(0, "ffprobe")
@@ -740,6 +849,9 @@ def run_prepare(ctx: Ctx, args) -> int:
         ctx.status.start()
     ctx.stderr_on = True
     ctx.log(f"{len(items)} video(s); log at {as_posix(ctx.log_path)}")
+    for it in items:   # one at a time: DeepFace already uses every core
+        if it["webcam"]["state"] == "pending":
+            make_webcam_timeline(ctx, it, deepface, overrides, params, segment, force)
 
     jobs = []
     for it in items:
@@ -778,7 +890,8 @@ def run_prepare(ctx: Ctx, args) -> int:
         state = {"start_batch": 1, "ledger_exists": False, "start_prompt_exists": False, "final_exists": False,
                  "remaining": remaining}
         states.append(state)
-        videos_out.append(video_entry(it["vid"], it["slug"], it["title"], res, it["warn"]))
+        videos_out.append({**video_entry(it["vid"], it["slug"], it["title"], res, it["warn"]),
+                           "webcam_timeline": webcam_view(it["webcam"])})
         wvideos.append({"slug": it["slug"], "title": it["title"], "n_frames": n_frames, "batch_images": images,
                         "duration_s": span(res.get("summary") or {}, it["duration"], segment),
                         "batches_dir": res["dirs"]["batches"],
@@ -811,13 +924,18 @@ def run_prepare(ctx: Ctx, args) -> int:
         if segment:
             line += f" · trecho {fmt_hms(segment[0], 0)}-{fmt_hms(min(segment[1], it['duration']), 0)}"
         vlines.append(line)
-    write_text(ctx.run_dir / "objective.md", runs.objective_markdown(objective, option_lines(opts, wopts, roles_mode, language), vlines))
+    made = [(v["_it"]["webcam"], v["_it"]["video"]) for v in wvideos]
+    made = [f"ignorar_linha_do_tempo: {w['path']} ({len(w['spans'])} trecho(s), vídeo {Path(video).name}, DeepFace)"
+            for w, video in made if w["state"] in ("made", "cached") and w["spans"]]
+    write_text(ctx.run_dir / "objective.md",
+               runs.objective_markdown(objective, option_lines(opts, wopts, roles_mode, language) + made, vlines))
     run_doc = {
         "schema": "va.run/1", "version": va.VERSION, "run_id": ctx.run_id, "run_dir": as_posix(ctx.run_dir),
         "created": cache.iso_now(), "argv": sys.argv[1:], "home": as_posix(ctx.home),
         "request": as_posix(ctx.run_dir / runs.REQUEST_MD) if ctx.request else None,
         "objective_md": as_posix(ctx.run_dir / "objective.md"), "objective": objective, "language": language,
-        "options": {**wopts, "roles_mode_requested": requested, "roles_mode": roles_mode, "range": segment},
+        "options": {**wopts, "roles_mode_requested": requested, "roles_mode": roles_mode, "range": segment,
+                    "webcam_timeline": wmode},
         "overrides": overrides, "params": params,
         "versions": {"algo": va.ALGO_VERSION, "vtt": va.VTT_VERSION, "render": va.RENDER_VERSION},
         "videos": [{"vid": v["_it"]["vid"], "slug": v["slug"], "title": v["title"],
@@ -825,7 +943,8 @@ def run_prepare(ctx: Ctx, args) -> int:
                     "video_key": v["_it"]["video_key"], "out_dir": as_posix(v["out_dir"]),
                     "keys": v["_it"]["keys"], "params": v["_it"]["params"], "meta": v["_it"]["meta"],
                     "stages": v["_res"]["dirs"], "duration_s": v["_it"]["duration"], "probe": v["_res"].get("info"),
-                    "n_frames": v["n_frames"], "n_batches": len(v["batch_images"]), "batch_images": v["batch_images"]}
+                    "n_frames": v["n_frames"], "n_batches": len(v["batch_images"]), "batch_images": v["batch_images"],
+                    "webcam_timeline": webcam_view(v["_it"]["webcam"])}
                    for v in wvideos],
         "workflow_args": wargs, "resumes": [],
     }
@@ -863,11 +982,16 @@ def finish_estimate(ctx: Ctx, args, items: list[dict], errors: list[dict], wopts
     ctx.stderr_on = True
     videos_out, states, secs = [], [], []
     known = True
+    web = 0.0   # the webcam timelines run one at a time, before the extraction
     for it in items:
         vdir = ctx.home / WORKSPACE_DIRS["cache"] / it["video_key"]
         hits = dict(it["hits"])  # cache.stage_hits: valid and not forced
         s = estimate_seconds(it["info"], hits, it["params"]["frames"])
         secs.append(s)
+        w = it["webcam"]
+        if w["state"] == "pending":
+            w["estimate_s"] = round(webcam.estimate_seconds(it["info"], w["scan"]), 1)
+            web += w["estimate_s"]
         n_batches = n_frames = None
         if hits["batches"]:
             res = (cache.read_stage(cache.stage_dir(vdir, "batches", it["keys"]["batches"])) or {}).get("result") or {}
@@ -880,7 +1004,8 @@ def finish_estimate(ctx: Ctx, args, items: list[dict], errors: list[dict], wopts
                            "vtt_path": as_posix(it["vtt"]), "video_key": it["video_key"], "duration_s": round(it["duration"], 3),
                            "resolution": [cache.info_get(it["info"], "width"), cache.info_get(it["info"], "height")],
                            "fps_avg": cache.info_get(it["info"], "fps_avg", "fps"), "n_frames": n_frames,
-                           "n_batches": n_batches, "cache_hit": hits, "estimate_s": round(s, 1), "warnings": it["warn"]})
+                           "n_batches": n_batches, "cache_hit": hits, "estimate_s": round(s, 1), "warnings": it["warn"],
+                           "webcam_timeline": webcam_view(w)})
     jobs = max(1, min(args.jobs or 1, len(secs) or 1))
     if jobs > 1:
         # decoding is CPU-bound: measured on this machine, 2 Teams 1080p16 videos in parallel took
@@ -888,13 +1013,15 @@ def finish_estimate(ctx: Ctx, args, items: list[dict], errors: list[dict], wopts
         total = max(max(secs) * 1.3, sum(secs) * 0.75)
     else:
         total = sum(secs)
+    total += web
     agents = runs.estimate_agents(states, wopts["curation"]) if known and states else None
     estimate = {"batches": sum(s["remaining"] for s in states) if known and states else None, "agents": agents,
                 "seconds": int(-(-total // 1))}
     env_info, _ = env_status(ctx)
     if agents is not None:
         guard(ctx, agents, args.ignore_agent_limit, videos=videos_out, estimate=estimate, env=env_info, errors=errors)
-    ctx.log(f"estimate: ~{estimate['seconds']} s for {len(items)} video(s)")
+    ctx.log(f"estimate: ~{estimate['seconds']} s for {len(items)} video(s)"
+            + (f", up to ~{round(web)} s of them for the webcam timeline (DeepFace)" if web else ""))
     if errors and not items:
         raise Fail("video_failed", "; ".join(f"{e['slug']}: {e['detail']}" for e in errors), errors=errors)
     env = envelope(ctx, not errors, error=_partial_error(errors, len(items) + len(errors)) if errors else None,

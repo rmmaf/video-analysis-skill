@@ -1,11 +1,12 @@
 """Checks whether this machine is ready for the video-analysis skill (procedure in setup.md).
 
-Read-only, except with the two action options, which the setup runs after the person's "yes":
+Read-only, except with the three action options, which the setup runs after the person's "yes":
 
     python check_environment.py                        # full check
     python check_environment.py --json                 # same thing, in machine format
     python check_environment.py --install-agents       # copies the 2 roles to ~/.claude/agents and the workflow to ~/.claude/workflows
     python check_environment.py --apply-permissions    # backup of settings.json and merge of the 6 Read/Edit/Write rules
+    python check_environment.py --install-deepface     # optional: the DeepFace environment of the webcam timeline (about 350 MB)
     python check_environment.py --home FOLDER          # another central folder (default: VIDEO_ANALYSIS_HOME or %USERPROFILE%\\video-analysis)
     python check_environment.py --claude-home FOLDER   # another Claude Code folder (default: VA_CLAUDE_HOME or %USERPROFILE%\\.claude)
 
@@ -14,9 +15,18 @@ and --aplicar-permissoes.
 
 Items: python (3.10+), ffmpeg, ffprobe, numpy, pillow, central-folder and permissions come out [OK] or
 [MISSING]; agents and workflow come out [OK] or [WARN] (without the copies, the skill runs in inline mode
-and passes the script inline to the Workflow). Each [MISSING]/[WARN] points to the setup.md step that
+and passes the script inline to the Workflow); deepface comes out [OK] or [WARN] (optional: without it,
+the skill does not mask the webcam over time; [OK] only when DeepFace, in the version the setup installs
+and with intact YuNet weights, runs a detection, a few seconds). Each [MISSING]/[WARN] points to the setup.md step that
 resolves it. When --install-agents changes the saved workflow, a [WARN] (in --json, the action's note
 field) reminds that the open Claude Code session may keep the previous version in memory.
+
+--install-deepface creates %USERPROFILE%\\deepface-env (or the folder in VA_DEEPFACE_ENV) with
+``python -m venv``, installs deepface==0.0.104 in it and downloads the YuNet weights to
+%USERPROFILE%\\.deepface\\weights (or DEEPFACE_HOME), skipping what is already there (damaged weights are
+downloaded again). Then DeepFace runs a detection, always; if it fails, deepface is reinstalled with its
+dependencies and the detection runs again. The environment takes about 350 MB on disk, and pip can take
+several minutes.
 
 Exit code 0 = ready (a warning does not count), 1 = something is missing.
 """
@@ -42,6 +52,7 @@ STEPS = {
     "agents": "4-agents", "install-agents": "4-agents",
     "workflow": "4-agents", "install-workflow": "4-agents",
     "permissions": "5-permissions", "apply-permissions": "5-permissions",
+    "deepface": "6-webcam timeline", "install-deepface": "6-webcam timeline",
 }
 LABEL = {"ok": "[OK]     ", "missing": "[MISSING]", "warn": "[WARN]   "}
 # The Workflow keeps in memory, per session, the saved workflow it has already read: once the file is
@@ -106,6 +117,33 @@ def action_permissions(home: Path, chome: Path) -> dict:
     return item("apply-permissions", "ok", txt, added=r["added"], backup=r["backup"], rules=rules)
 
 
+def action_install_deepface() -> dict:
+    try:
+        r = environment.install_deepface()
+    except (environment.SetupError, OSError) as exc:
+        return item("install-deepface", "missing", str(exc))
+    st = r["status"]
+    if not st["ok"]:
+        return item("install-deepface", "missing", f"{st['detail']} after the installation", done=r["done"])
+    txt = ("; ".join(r["done"]) if r["done"] else "already in place") + f"; DeepFace ran a detection: {st['detail']}"
+    return item("install-deepface", "ok", txt, done=r["done"], env=r["env"])
+
+
+def deepface_item() -> dict:
+    """The optional DeepFace environment: [OK] when it has the version the setup installs and intact YuNet
+    weights, and runs a detection (a few seconds); [WARN] otherwise (it never makes the setup fail)."""
+    df = environment.deepface_status(deep=True)
+    extra = {k: df[k] for k in ("env", "python", "version", "expected", "weights")}
+    if df["state"] == "absent":
+        return item("deepface", "warn", f"optional: {df['detail']}; without it, the skill does not mask the webcam "
+                                        "over time (--install-deepface creates it, about 350 MB)", **extra)
+    if not df["ok"]:
+        return item("deepface", "warn", f"{df['detail']}; until it is repaired, the skill does not mask the webcam "
+                                        "over time (--install-deepface repairs it)", **extra)
+    return item("deepface", "ok", f"{df['detail']}, and it ran a detection: the skill masks the webcam over time",
+                **extra)
+
+
 def checks(home: Path, chome: Path) -> list[dict]:
     items = []
     py = environment.python_status()
@@ -134,6 +172,7 @@ def checks(home: Path, chome: Path) -> list[dict]:
     det = wf["detail"] if wf["current"] else wf["detail"] + (
         " (--install-agents copies it; without it the skill passes the script inline to the Workflow, spending more tokens)")
     items.append(item("workflow", "ok" if wf["current"] else "warn", det, path=wf["path"], copy=wf["state"]))
+    items.append(deepface_item())
     return items
 
 
@@ -145,6 +184,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="copies the 2 roles to <claude home>/agents and the workflow to <claude home>/workflows")
     ap.add_argument("--apply-permissions", "--aplicar-permissoes", dest="apply_permissions", action="store_true",
                     help="backup of settings.json and merge of the Read/Edit/Write rules of the central folder")
+    ap.add_argument("--install-deepface", dest="install_deepface", action="store_true",
+                    help="optional: creates the DeepFace environment of the webcam timeline (python -m venv, "
+                         "deepface==0.0.104, YuNet weights; about 350 MB)")
     ap.add_argument("--home", help="central folder (default: VIDEO_ANALYSIS_HOME or %%USERPROFILE%%\\video-analysis)")
     ap.add_argument("--claude-home", help="Claude Code folder (default: VA_CLAUDE_HOME or %%USERPROFILE%%\\.claude)")
     a = ap.parse_args(argv)
@@ -157,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
         actions.append(action_install_workflow(chome))
     if a.apply_permissions:
         actions.append(action_permissions(home, chome))
+    if a.install_deepface:
+        actions.append(action_install_deepface())
     items = checks(home, chome)
     missing = [r for r in actions + items if r["state"] == "missing"]
 

@@ -47,7 +47,8 @@ The argument reaches the end of the skill as `ARGUMENTS: …`. A request to "con
 | `--speakers "SPEAKER_01=Name;…"` | `speakers` | real names of the speakers in the subtitles |
 | `--sensitivity low\|normal\|high` | `sensitivity` | `high` catches smaller changes (more frames); `low`, the opposite |
 | `--ignore-region x,y,w,h` | `ignore_region` | region (fractions of the frame) left out of the comparison: webcam, clock |
-| `--ignore-timeline FILE.json` | `ignore_timeline` | regions left out only during spans of the video: a webcam that comes and goes with the layout (one file per video, from `scripts/webcam_mask.py --timeline`) |
+| `--ignore-timeline FILE.json` | `ignore_timeline` | regions left out only during spans of the video: a webcam that comes and goes with the layout (one file per video, from `scripts/webcam_mask.py --timeline`; it prevails over the automatic timeline of that video, even without spans) |
+| `--webcam-timeline auto\|on\|off` | `webcam_timeline` | the webcam timeline that `prepare.py` makes with DeepFace when the setup created its environment: `auto` (default) probes the video and runs the full scan only if a face shows up; `on` always runs the full scan; `off` never runs it |
 
 When to change each one: [`reference/parameters.md`](reference/parameters.md). The Portuguese names of the
 earlier version (`--max-lotes`, `--papeis`, `--curadoria plano|lotes`, `retomar`, the same keys in the request…)
@@ -100,7 +101,10 @@ still work: map them to the ones above.
 
    The estimate does not consume the request; an error here is handled as in step 5. If
    `estimate.seconds` exceeds 400, run step 5 with `run_in_background`, say in one line that the
-   extraction continues in the background and wait for the notification: Bash cuts off at 600 s.
+   extraction continues in the background and wait for the notification: Bash cuts off at 600 s. A video
+   whose `webcam_timeline.state` is `pending` first gets its webcam timeline with DeepFace, already counted
+   in `estimate.seconds` (up to `webcam_timeline.estimate_s`, which assumes a face is found): mention it in
+   that line.
 5. **Prepare.** The same command without `--estimate`, with `timeout` 600000. The last line of stdout is a
    JSON (fields in [`reference/contracts.md`](reference/contracts.md)); the request moves to the run folder.
    - exit code other than 0, or `ok: false` → state the problem in one sentence, by exit code:
@@ -108,7 +112,8 @@ still work: map them to the ones above.
        from the `detail` (the user is the one who decides to rename); `video_not_found` → confirm
        the path; `run_too_large` (more than 800 agents) → propose `--range` or `--max-batches`;
        invalid request or option → fix the request.
-     - `3` environment (ffmpeg, Python, numpy, Pillow): offer `/video-analysis setup`.
+     - `3` environment (ffmpeg, Python, numpy, Pillow; with `webcam_timeline: on`, the DeepFace
+       environment): offer `/video-analysis setup`.
      - `4` a video failed: say which one (`errors`); if `workflow_args` came back, the others are ready:
        ask whether to go on with them (step 6, with that JSON).
      - `130` interrupted: the completed stages stay in the cache; offer to run it again.
@@ -122,6 +127,11 @@ still work: map them to the ones above.
      batch, in series within the video, videos in parallel) and ask before going on.
    - a high-density warning with a suggested region to ignore → offer to repeat with
      `ignore_region: x,y,w,h` in a new request (fewer frames, lower cost).
+   - `webcam timeline failed` (in the video's warnings) or `webcam timeline skipped` (in `warnings`) → the
+     frames were extracted without the webcam timeline; for `skipped`, the DeepFace environment is not the
+     setup's (it does not run, another deepface version, damaged weights), and for a `failed` whose detail
+     points to DeepFace or its libraries (an `ImportError`, a DLL), it does not load: offer
+     `/video-analysis setup` at the end.
 
    Gather into a single question whatever needs an answer. A warning that needs no answer fits in one of
    the 3 lines of step 6. Other errors and warnings: [`reference/troubleshooting.md`](reference/troubleshooting.md).
@@ -177,19 +187,19 @@ report; a video with a finished `relatorio.md` is left out.
 
 Follow [`setup.md`](setup.md). The verifier is at the root of the skill; always run it with this prefix,
 which the skill pre-approves, plus the options the setup indicates (`--json`, `--install-agents`,
-`--apply-permissions`):
+`--apply-permissions`, `--install-deepface`):
 
 ```bash
 python "${CLAUDE_SKILL_DIR}/check_environment.py"
 ```
 
-`--install-agents` and `--apply-permissions` change files outside the central folder: only after the
-"yes".
+`--install-agents`, `--apply-permissions` and `--install-deepface` change files outside the central
+folder: only after the "yes".
 
 ## Files
 
-Central folder `C:\Users\digom\video-analysis\`: `cache\<slug>-<fp8>\` (subtitles, frames and batches,
-reused across runs) · `runs\<YYYYMMDD-HHMMSS>-<slug>\` (combined `relatorio.md`, with 2+ videos; per
+Central folder `C:\Users\digom\video-analysis\`: `cache\<slug>-<fp8>\` (subtitles, frames, batches and the
+webcam timeline, reused across runs) · `runs\<YYYYMMDD-HHMMSS>-<slug>\` (combined `relatorio.md`, with 2+ videos; per
 video, `v1\relatorio.md`, `v2\…`, with ledger, prompts and batch reports) · `requests\` · `roles\` ·
 `logs\`. Formats and paths: [`reference/contracts.md`](reference/contracts.md). Errors and warnings:
 [`reference/troubleshooting.md`](reference/troubleshooting.md).

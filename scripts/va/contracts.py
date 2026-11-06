@@ -17,7 +17,7 @@ from .common import cue_id, frame_filename, frame_id, s_to_ms
 
 __all__ = [
     "BatchDoc", "BatchFrame", "BatchIndexEntry", "BatchesDoc", "Cue", "CuesDoc", "FrameChange",
-    "FrameEntry", "FramesDoc", "PrepareError", "PrepareOutput", "PrepareVideo", "SummaryDoc",
+    "FrameEntry", "FramesDoc", "PrepareError", "PrepareOutput", "PrepareVideo", "PrepareWebcam", "SummaryDoc",
     "TimelineDoc", "WorkflowArgs", "WorkflowOptions", "WorkflowVideo",
     "CUE_STYLES", "FRAME_KINDS",
     "check_contiguity", "check_cues", "check_frames", "check_workflow_args", "is_abs_posix",
@@ -347,10 +347,21 @@ class PrepareEnv(TypedDict):
     workflow_current: bool         # <claude home>/workflows/video-analysis.js byte-identical to the skill's
 
 
+class PrepareWebcam(TypedDict):
+    state: str                     # pending (--estimate) | made | cached | given | off | unavailable | failed
+    scan: str | None               # probe (no face: an empty timeline) | full
+    spans: int | None              # spans the frames use (given, cached, made); else null
+    path: str | None               # cache/<video_key>/webcam-<h8>/timeline.json
+    seconds: float | None          # made: time of webcam_mask.py
+    estimate_s: float | None       # pending: the worst case (probe and full scan)
+    detail: str | None             # failed, unavailable: why
+
+
 class PrepareVideo(SummaryDoc):
     vid: str
     cache_hit: dict[str, bool]     # {"cues": bool, "frames": bool, "batches": bool}
     timing_s: dict[str, float]     # not deterministic
+    webcam_timeline: PrepareWebcam # prepare and --estimate (not --resume)
 
 
 class PrepareOutput(TypedDict):

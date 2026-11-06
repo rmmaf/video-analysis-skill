@@ -23,6 +23,8 @@ and the templates of the reports stay in Portuguese. Reports are written in the 
   (Sonnet) examines each one, in series.
 - Delivers a `relatorio.md` per video and, with two or more videos, a combined report.
 - Keeps frames, subtitles and batches in a cache: a new question about the same video extracts nothing again.
+- With the optional DeepFace environment, leaves each webcam out of the comparison only while it is on
+  screen, so a call whose layout changes yields fewer frames that only show someone moving.
 
 ## How it works
 
@@ -33,7 +35,9 @@ The skill has two layers.
    what really changed stays, each frame with the time interval it represents and a JPEG whose longer
    side is 1568 px. Then it reads the subtitles, fixes and merges the cues, aligns the cues to the frames
    and writes the batches: the timeline of each batch (`batch_NNN.md`), a contact sheet of thumbnails and
-   the transcript.
+   the transcript. Before the extraction, when the optional DeepFace environment exists, it finds the
+   webcams with `scripts/webcam_mask.py` and masks each one only while it is on screen (the webcam
+   timeline).
 2. **Agentic** (`workflow/` and `agents/`). A Claude Code Workflow runs the batches of each video in
    series, with up to 3 videos in parallel. The curator reads the objective and the transcript, records
    the plan in a ledger and writes the prompt of the first batch. The analyst opens all the images of a
@@ -76,7 +80,8 @@ above 800, it refuses the run.
 | Claude Code | with skills and the Workflow tool | without Workflow, the skill runs the same loop with the Agent tool ([`reference/without-workflow.md`](reference/without-workflow.md)) |
 | Python | 3.10 or newer (tested on 3.14) | deterministic layer |
 | ffmpeg and ffprobe | on the PATH (tested on 8.1) | probing and frame extraction |
-| numpy and Pillow | any recent version | frame comparison and images; the skill does not use OpenCV |
+| numpy and Pillow | any recent version | frame comparison and images; the skill itself does not use OpenCV |
+| DeepFace (optional) | 0.0.104, in its own Python environment (about 350 MB) | the webcam timeline; the setup creates it if you want it |
 | Node.js | 24 | only for the workflow tests |
 | pytest | any recent version | only for the tests |
 
@@ -95,14 +100,16 @@ above 800, it refuses the run.
    ```
 
    The setup runs `check_environment.py` and handles one item at a time: Python, ffmpeg, numpy and
-   Pillow, the central folder, the agents and the workflow, and the permission rules. Nothing is installed
-   or written without your confirmation. Outside the central folder, it writes to three places:
+   Pillow, the central folder, the agents and the workflow, the permission rules and, if you want it, the
+   DeepFace environment of the webcam timeline. Nothing is installed or written without your confirmation.
+   Outside the central folder, it writes to these places (the last row only if you accept DeepFace):
 
    | what | where | how to undo |
    |---|---|---|
    | the curator and analyst roles | `%USERPROFILE%\.claude\agents\video-analysis-*.md` | delete the two files |
    | the saved workflow | `%USERPROFILE%\.claude\workflows\video-analysis.js` | delete the file |
    | the permission rules for the central folder | `%USERPROFILE%\.claude\settings.json` | restore the `settings.json.bak-<date>` |
+   | the DeepFace environment and the YuNet weights | `%USERPROFILE%\deepface-env\` and `%USERPROFILE%\.deepface\weights\` | delete the two folders |
 
 3. Close and reopen Claude Code, so that it loads the agents and the workflow. Start with a short
    analysis, with `--max-batches 1`: it confirms that the run does not ask for permission at every frame.
@@ -157,7 +164,8 @@ from where it stopped.
 | `--speakers "SPEAKER_01=Name;…"` | — | real names of the speakers in the subtitles |
 | `--sensitivity low\|normal\|high` | `normal` | `high` catches smaller changes and produces more frames |
 | `--ignore-region x,y,w,h` | — | region of the frame, in fractions, left out of the comparison: webcam, clock |
-| `--ignore-timeline FILE.json` | — | regions left out only during spans of the video: a webcam that comes and goes with the layout (`scripts/webcam_mask.py --timeline`) |
+| `--ignore-timeline FILE.json` | — | regions left out only during spans of the video: a webcam that comes and goes with the layout (`scripts/webcam_mask.py --timeline`); it prevails over the automatic timeline of that video, even without spans |
+| `--webcam-timeline auto\|on\|off` | `auto` | with the DeepFace environment, the webcam timeline made before the extraction: `auto` probes the video and runs the full scan only if a face shows up (about 24 min per hour of 1080p video, once per video); `on` always runs the full scan; `off` never |
 
 When to change each one and what it costs: [`reference/parameters.md`](reference/parameters.md).
 
@@ -165,7 +173,7 @@ When to change each one and what it costs: [`reference/parameters.md`](reference
 
 ```text
 %USERPROFILE%\video-analysis\
-├── cache\<slug>-<fp8>\              subtitles, frames and batches of each video, reused across runs
+├── cache\<slug>-<fp8>\              subtitles, frames, batches and webcam timeline of each video, reused across runs
 ├── runs\<YYYYMMDD-HHMMSS>-<slug>\
 │   ├── relatorio.md                 combined report, with 2+ videos
 │   └── v1\                          the video's relatorio.md, ledger.md, prompts\ and reports\
@@ -187,7 +195,7 @@ python scripts/prepare.py --gc 30                                       # delete
 python scripts/explain.py --frames-json <frames.json> --frame F0042     # why this frame was kept
 python scripts/calibrate.py "C:\Videos\reuniao.mp4" --grid "sensitivity=normal,high"   # compares parameters
 python check_environment.py                                            # checks the environment, without changing anything
-%USERPROFILE%\deepface-env\Scripts\python scripts/webcam_mask.py "C:\Videos\reuniao.mp4" --timeline webcam.json   # webcam over time (DeepFace, separate environment)
+%USERPROFILE%\deepface-env\Scripts\python scripts/webcam_mask.py "C:\Videos\reuniao.mp4" --timeline webcam.json   # webcam over time by hand (prepare.py already runs it)
 ```
 
 `python scripts/prepare.py --help` lists all the options. The `frames.json` of a video is in
@@ -241,7 +249,9 @@ Symptoms, causes and fixes, including permissions, agents and Workflow:
 
 ## Data and privacy
 
-- The skill uses no secrets and no login: it works with local files, ffmpeg and Python.
+- The skill uses no secrets and no login: it works with local files, ffmpeg and Python. The optional
+  DeepFace environment comes from PyPI, and the setup also downloads the YuNet weights (about 230 KB, from
+  OpenCV's model repository on GitHub, checked by their SHA-256), so that an analysis does not have to.
 - The agents do not copy sensitive values that appear on the screen or in the speech, such as a password,
   token, key, connection string, CPF, phone number or personal e-mail. They record only that the data
   appeared, in which frame and at what time.
@@ -284,6 +294,7 @@ Out of scope for version 1, according to the [plan](docs/plan.md):
 | frame extraction and deduplication | `dedup-1.1` | `ALGO_VERSION` |
 | subtitle parser | `vtt-1.0` | `PARSER_VERSION` |
 | alignment, batches and rendering | `render-1.1` | `RENDER_VERSION` |
+| webcam timeline | `webcam-1.1` | `WEBCAM_VERSION` |
 | `workflow_args` contract | `1` | `SCHEMA_VERSION` |
 
 The stage versions go into the cache keys: changing one of them redoes only the affected stage and the
@@ -310,14 +321,15 @@ following ones.
 video-analysis/
 ├── SKILL.md                 the skill's instructions for Claude Code
 ├── setup.md                 setup procedure
-├── check_environment.py    checks Python, ffmpeg, agents, workflow and permissions
+├── check_environment.py    checks Python, ffmpeg, agents, workflow, permissions and the optional DeepFace
 ├── agents/                  roles of the curator (Opus) and the analyst (Sonnet)
 ├── workflow/                video-analysis.js, the Workflow script
 ├── scripts/
 │   ├── prepare.py           command line of the deterministic layer
 │   ├── calibrate.py         parameter sweep of the frame engine
 │   ├── explain.py           panel showing why a frame was kept or ignored
-│   ├── webcam_mask.py       webcam regions (fixed or over time) with DeepFace, in a separate environment
+│   ├── webcam_mask.py       webcam regions (fixed or over time) with DeepFace, in a separate environment;
+│   │                        prepare.py runs it before the extraction
 │   └── va/                  extraction, deduplication, subtitles, alignment, batches, cache and runs
 ├── reference/               contracts, parameters, troubleshooting and the procedure without Workflow
 ├── docs/                    plan, specifications and the earlier prototype (prior-art)

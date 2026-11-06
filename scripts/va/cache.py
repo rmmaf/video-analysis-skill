@@ -7,6 +7,7 @@ Layout (``<home>/cache/<video_key>/``)::
     frames-<h8>/   F0001_000000.jpg ...  frames.json  samples.csv  stage.json
     batches-<h8>/  batch_001.md/.json  sheet_001.jpg ...  batches.json  timeline.json
                    transcript.md  summary.json  overview.jpg  stage.json
+    webcam-<h8>/   timeline.json  webcam_mask.log  stage.json   (the webcam timeline: va/webcam.py)
 
 Keys
 - ``video_key`` = slug + "-" + fp8, fp8 = sha1(NFC.casefold(abs path) | size | mtime_ns)[:8].
@@ -215,6 +216,7 @@ _STAGE_HOME = {   # name -> (module, attribute)
     "run_cues_stage": ("va.vtt", "run_cues_stage"),
     "effective_batch_params": ("va.batching", "effective_batch_params"),
     "run_batches_stage": ("va.render", "run_batches_stage"),
+    "run_webcam_mask": ("va.webcam", "run_process"),   # the webcam_mask.py subprocess (webcam-<h8>)
 }
 EXEC_ONLY_FRAME_KEYS = ("sequential",)   # execution choices with identical output: not in the frames key
 _shim_cache: dict[str, Any] = {}

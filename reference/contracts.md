@@ -43,6 +43,7 @@ max_batches: 2
 | `sensitivity` | `low`, `normal`, `high` | `normal` | `--sensitivity` | `sensibilidade` |
 | `ignore_region` | `x,y,w,h` in fractions of the frame (0 to 1, origin at the top left corner) | none | `--ignore-region` | `ignorar_regiao` |
 | `ignore_timeline` | path of a JSON file of regions per span of the video ([`parameters.md`](parameters.md)); one line per file, one file per video | none | `--ignore-timeline` | `ignorar_linha_do_tempo` |
+| `webcam_timeline` | `auto`, `on`, `off`: the webcam timeline `prepare.py` makes with DeepFace ([`parameters.md`](parameters.md), "Region over time") | `auto` | `--webcam-timeline` | `linha_do_tempo_webcam` |
 
 **Old names.** The names of the earlier version still work. In the request: `pedidos/pedido.md`, the
 sections `# objetivo` and `# opcoes`, the keys of the "old key" column and the values `todos`, `plano` and
@@ -79,8 +80,12 @@ python "<skill>/scripts/prepare.py" --resume <run_id|run_dir|latest> [--roles ag
   than 800 agents, but the Workflow refuses them anyway), `--recursive`, `--json-out FILE`, `--ascii`,
   `--quiet`, `--debug`. The request options also exist as command-line options (`--roles`, `--max-batches`,
   `--parallel`, `--analyst-effort`, `--curator-effort`, `--curation`, `--language`, `--range`,
-  `--speakers`, `--sensitivity`, `--ignore-region`, `--ignore-timeline`). Full reference: `python prepare.py --help` and
-  `docs/design-deterministic.md`, §2.
+  `--speakers`, `--sensitivity`, `--ignore-region`, `--ignore-timeline`, `--webcam-timeline`). Full reference:
+  `python prepare.py --help` and `docs/design-deterministic.md`, §2.
+- Webcam timeline: before extracting the frames, `prepare.py` runs `scripts/webcam_mask.py` with the Python of
+  the DeepFace environment (`VA_DEEPFACE_ENV` or `%USERPROFILE%\deepface-env`, created by the setup), one video
+  at a time, and keeps the timeline in the video's cache. The skill's command line does not change, and nothing
+  else needs a permission.
 
 **Exit codes**, with the `error.code` of each one:
 
@@ -88,7 +93,7 @@ python "<skill>/scripts/prepare.py" --resume <run_id|run_dir|latest> [--roles ag
 |---|---|---|
 | `0` | ok (there may be `warnings`) | — |
 | `2` | input | `invalid_usage`, `invalid_request`, `missing_objective`, `invalid_option`, `video_not_found`, `missing_vtt`, `run_not_found`, `inconsistent_run`, `run_too_large` |
-| `3` | environment | `missing_ffmpeg`, `missing_dependency`, `workspace_not_writable`, `incomplete_install` |
+| `3` | environment (`missing_dependency` also comes from `webcam_timeline: on` without the DeepFace environment) | `missing_ffmpeg`, `missing_dependency`, `workspace_not_writable`, `incomplete_install` |
 | `4` | one video failed; the others come in the JSON | `video_failed` |
 | `130` | interrupted; the completed stages stay in the cache | `interrupted` |
 | `1` | internal error (a bug in `prepare.py`; traceback in the log, or on stderr with `--debug`) | `internal_error` |
@@ -109,7 +114,11 @@ stderr starts with `run_dir: …` and carries the progress; the run's `status.js
  "videos": [{"vid": "v1", "slug": "venda-zero-clientes", "title": "venda_zero_clientes", "duration_s": 441.3,
    "n_frames": 86, "n_batches": 4, "frames_per_min": 11.7, "n_cues": 98, "language": "pt",
    "cache_hit": {"cues": false, "frames": false, "batches": false},
-   "timing_s": {"frames": 26.4, "batches": 1.1}, "warnings": [], "…": "other fields of summary.json"}],
+   "timing_s": {"frames": 26.4, "batches": 1.1}, "warnings": [],
+   "webcam_timeline": {"state": "made", "scan": "full", "spans": 3,
+     "path": "C:/Users/digom/video-analysis/cache/<slug>-<fp8>/webcam-<h8>/timeline.json",
+     "seconds": 253.2, "estimate_s": null, "detail": null},
+   "…": "other fields of summary.json"}],
  "estimate": {"batches": 2, "agents": 4, "seconds": 28},
  "env": {"permissions_ok": true, "agents_current": false, "workflow_current": true},
  "script_path": "C:/Users/digom/.claude/skills/video-analysis/workflow/video-analysis.js",
@@ -142,7 +151,8 @@ exception is exit code 4 with some video ready, which brings usable `videos` and
 | field | use by the main agent |
 |---|---|
 | `ok`, `error.code`, `error.detail` | the error in one sentence |
-| `estimate.seconds` | with `--estimate`, the estimate of the extraction: above 400 s, the prepare runs in the background. In the prepare and the resume, the time it took |
+| `estimate.seconds` | with `--estimate`, the estimate of the extraction, webcam timelines to make included: above 400 s, the prepare runs in the background. In the prepare and the resume, the time it took |
+| `videos[].webcam_timeline` | the webcam timeline of the video (not on `--resume`): `state` is `pending` (only with `--estimate`: it will be made; `estimate_s` assumes a face, so probe and full scan), `made` (now; `seconds`), `cached`, `given` (the request has an `ignore_timeline` file for the video, even one without spans), `off`, `unavailable` (`auto` without a working DeepFace environment; `detail` says why) or `failed` (`detail`; the frames were extracted without it, with a warning). `scan`: `probe` (the probe covered the video and saw no face: an empty timeline) or `full`. `spans` counts the spans the frames use (`given`, `cached`, `made`), null otherwise; `path` is the `timeline.json` in the cache |
 | `estimate.batches`, `estimate.agents` | above 80 agents, confirm with the user |
 | `env.permissions_ok` | `false`: warn and offer the setup |
 | `env.agents_current` | the copies in `~/.claude/agents/` are identical to the skill's; if not, `roles: agents` becomes `inline`, with a warning |
@@ -388,6 +398,7 @@ C:\Users\digom\video-analysis\
     frames-<h8>\                        F0001_hhmmss.jpg…, frames.json, samples.csv, ffmpeg_a.log, ffmpeg_b.log, stage.json
     batches-<h8>\                       batch_NNN.md/.json, sheet_NNN.jpg, overview.jpg, transcript.md,
                                         summary.json, timeline.json, batches.json, stage.json
+    webcam-<h8>\                        timeline.json (webcam_mask.py --timeline), webcam_mask.log, stage.json
   runs\<YYYYMMDD-HHMMSS>-<slug>\        request.md, objective.md, run.json, prepare.json, status.json, relatorio.md (combined)
     v<N>\                               ledger.md, relatorio.md, prompts\batch_NNN.md, reports\batch_NNN.md
   requests\                             request.md (temporary), request.error.md
@@ -405,4 +416,10 @@ C:\Users\digom\video-analysis\
 - Each cache stage has its own key (`<h8>`): changing the batching does not re-extract frames; changing the
   subtitles or the speakers does not re-extract frames; changing the sensitivity or the ignored region
   re-extracts frames and redoes the batches.
+- `webcam-<h8>`: the key comes from the video's `<slug>-<fp8>`, the version of the webcam timeline, the
+  `yunet_score_threshold` variable, when it is set, and the detector the setup installs (the deepface
+  version and the YuNet weights' SHA-256, the only ones `prepare.py` runs). `timeline.json` has `"scan": "probe"` (the probe covered
+  the video, `"complete": true` in its `probe`, and saw no face: empty) or `"full"`; `on` makes a `probe` one
+  again with the full scan, and a `probe` one without `complete` is not used. Its spans go into the frames
+  key, like an `ignore_timeline` file.
 - The agents only read the cache; they write only in `runs\`.

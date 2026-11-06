@@ -71,6 +71,9 @@ def never_real_claude_home(monkeypatch):
     monkeypatch.setattr(environment, "merge_permissions", safe_merge)
     monkeypatch.setattr(environment, "install_agents", safe_install)
     monkeypatch.setattr(environment, "install_workflow", safe_install_wf)
+    # pip must never run in the tests: a test of --install-deepface replaces it
+    monkeypatch.setattr(environment, "install_deepface",
+                        lambda *a, **k: pytest.fail("install_deepface must be replaced in the tests"))
 
 
 @pytest.fixture
@@ -97,6 +100,10 @@ def run(capsys, *argv):
     return code, out
 
 
+def item_of(data: dict, ident: str) -> dict:
+    return next(i for i in data["items"] if i["id"] == ident)
+
+
 def line_of(out: str, ident: str) -> str:
     return next(l for l in out.splitlines() if l.startswith("[") and l.split("]", 1)[1].split()[0] == ident)
 
@@ -106,7 +113,7 @@ def test_not_ready_without_permissions(sandbox, tools_ok, capsys):
     code, out = run(capsys)
     assert code == 1
     lines = out.splitlines()
-    assert lines[-1] == "1 item(s) missing: run /video-analysis setup."      # the two WARNs do not count
+    assert lines[-1] == "1 item(s) missing: run /video-analysis setup."      # the three WARNs do not count
     assert any(l.startswith("[OK]      python ") for l in lines)
     assert any(l.startswith("[OK]      central-folder ") for l in lines) and (home / "runs").is_dir()
     perm = line_of(out, "permissions")
@@ -145,7 +152,9 @@ def test_install_apply_then_ready(sandbox, tools_ok, capsys):
     code, out = run(capsys, "--install-agents", "--apply-permissions")      # idempotent
     assert code == 0 and "were already" in out and len(list(chome.glob("settings.json.bak-*"))) == 1
     assert "the workflow was already identical in " in line_of(out, "install-workflow")
-    assert "[WARN]" not in out and "previous version" not in out                 # nothing changed: no warning
+    # nothing changed: no warning, except the optional DeepFace environment, absent in the sandbox
+    assert [l.split()[1] for l in out.splitlines() if l.startswith("[WARN]")] == ["deepface"]
+    assert "previous version" not in out
     assert sorted(p.name for p in (chome / "workflows").iterdir()) == ["video-analysis.js"]
 
 
@@ -155,14 +164,14 @@ def test_outdated_workflow_is_warn_until_reinstalled(sandbox, tools_ok, capsys):
     installed.parent.mkdir()
     installed.write_text("export const meta = {name: 'video-analysis'}  // versão antiga", encoding="utf-8")
     code, out = run(capsys, "--json")
-    wf = json.loads(out)["items"][-1]
+    wf = item_of(json.loads(out), "workflow")
     assert wf["id"] == "workflow" and wf["state"] == "warn" and wf["copy"] == "different"
     assert wf["detail"].startswith("video-analysis.js different in ") and wf["step"] == "4-agents"
     code, out = run(capsys, "--install-agents", "--json")
     data = json.loads(out)
     action = next(a for a in data["actions"] if a["id"] == "install-workflow")
     assert action["state"] == "ok" and action["copied"] is True and action["path"] == installed.as_posix()
-    assert data["items"][-1]["state"] == "ok" and data["items"][-1]["copy"] == "ok"
+    assert item_of(data, "workflow")["state"] == "ok" and item_of(data, "workflow")["copy"] == "ok"
     assert installed.read_bytes() == WORKFLOW_SRC.read_bytes()
     # replaced with this session open: the note says the session may keep the old version in memory
     assert action["note"] == CLI.NOTE_WORKFLOW and "previous version" in action["note"]
@@ -207,13 +216,17 @@ def test_json_output(sandbox, tools_ok, capsys):
     assert code == 1 and data["ready"] is False and data["actions"] == []
     assert data["claude_home"] == chome.as_posix() and data["home"] == home.as_posix()
     ids = [i["id"] for i in data["items"]]
-    assert ids == ["python", "ffmpeg", "ffprobe", "numpy", "pillow", "central-folder", "permissions", "agents", "workflow"]
+    assert ids == ["python", "ffmpeg", "ffprobe", "numpy", "pillow", "central-folder", "permissions", "agents", "workflow",
+                   "deepface"]
     perm = data["items"][6]
     assert perm["state"] == "missing" and perm["step"] == "5-permissions" and perm["rules"] == environment.workspace_rules(home)
     assert data["items"][7]["state"] == "warn"
     wf = data["items"][8]
     assert wf["state"] == "warn" and wf["step"] == "4-agents" and wf["copy"] == "missing"
     assert wf["path"] == (chome / "workflows" / "video-analysis.js").as_posix()
+    df = data["items"][9]
+    assert df["state"] == "warn" and df["step"] == "6-webcam timeline" and df["version"] is None
+    assert df["env"] == (user / "deepface-env").as_posix() and df["expected"] == "0.0.104"
 
 
 def test_bad_settings_json_is_not_overwritten(sandbox, tools_ok, capsys):
@@ -230,7 +243,7 @@ def test_claude_home_flag_wins_over_env(sandbox, tools_ok, capsys, tmp_path):
     data = json.loads(out)
     assert data["claude_home"] == other.as_posix() and (other / "agents").is_dir()
     assert (other / "workflows" / "video-analysis.js").read_bytes() == WORKFLOW_SRC.read_bytes()
-    assert data["items"][-1]["path"] == (other / "workflows" / "video-analysis.js").as_posix()
+    assert item_of(data, "workflow")["path"] == (other / "workflows" / "video-analysis.js").as_posix()
     assert not (sandbox[1] / "agents").exists() and not (sandbox[1] / "workflows").exists()
 
 
@@ -268,3 +281,66 @@ def test_old_names_still_work(sandbox, tools_ok, capsys):
     assert data["claude_home"] == chome.as_posix() and [i["id"] for i in data["items"]][0] == "python"
     assert {i["id"]: i["state"] for i in data["items"]}["agents"] == "ok"
     assert r.returncode == (0 if data["ready"] else 1)
+
+
+def _deepface(user, **fields) -> dict:
+    env = (user / "deepface-env").as_posix()
+    st = {"id": "deepface", "ok": True, "state": "ok", "problem": None, "env": env, "python": env + "/Scripts/python.exe",
+          "version": "0.0.104", "expected": "0.0.104", "weights": True, "detail": f"deepface 0.0.104 in {env}"}
+    return {**st, **fields}
+
+
+@pytest.mark.parametrize("fields, state, needle", [
+    ({}, "ok", ", and it ran a detection: the skill masks the webcam over time"),
+    ({"ok": False, "state": "absent", "version": None, "detail": "no DeepFace environment at C:/x"}, "warn",
+     "optional: no DeepFace environment at C:/x; without it, the skill does not mask the webcam over time"),
+    ({"ok": False, "state": "broken", "problem": "modules", "detail": "C:/x lacks cv2"}, "warn",
+     "C:/x lacks cv2; until it is repaired, the skill does not mask the webcam over time (--install-deepface repairs it)"),
+    ({"ok": False, "state": "broken", "problem": "version", "detail": "C:/x has deepface 0.0.99, and the skill uses 0.0.104"},
+     "warn", "has deepface 0.0.99, and the skill uses 0.0.104; until it is repaired"),
+    ({"ok": False, "state": "broken", "problem": "detection", "weights": True,
+      "detail": "DeepFace did not run a detection in C:/x (exit 1): ImportError: DLL load failed"},
+     "warn", "ImportError: DLL load failed; until it is repaired"),
+])
+def test_deepface_is_optional(sandbox, tools_ok, capsys, monkeypatch, fields, state, needle):
+    """The DeepFace environment never makes the check fail: [OK], or [WARN] pointing to step 6. The check
+    is the deep one: [OK] needs a detection that ran."""
+    user, chome, home = sandbox
+    asked = []
+    monkeypatch.setattr(environment, "deepface_status", lambda **k: asked.append(k) or _deepface(user, **fields))
+    code, out = run(capsys, "--install-agents", "--apply-permissions")
+    assert code == 0 and out.splitlines()[-1] == "Ready." and asked == [{"deep": True}]
+    line = line_of(out, "deepface")
+    assert line.startswith("[OK]" if state == "ok" else "[WARN]") and needle in line
+    assert line.endswith("-> setup.md, step 6 (webcam timeline)") == (state == "warn")
+
+
+def test_install_deepface_action(sandbox, tools_ok, capsys, monkeypatch):
+    user, chome, home = sandbox
+    ok = _deepface(user)
+    monkeypatch.setattr(environment, "deepface_status", lambda **k: ok)
+    monkeypatch.setattr(environment, "install_deepface",
+                        lambda: {"env": ok["env"], "done": ["install deepface 0.0.104"], "status": ok})
+    code, out = run(capsys, "--install-deepface", "--json")
+    action = json.loads(out)["actions"][0]
+    assert action["id"] == "install-deepface" and action["state"] == "ok" and action["step"] == "6-webcam timeline"
+    assert action["detail"] == f"install deepface 0.0.104; DeepFace ran a detection: deepface 0.0.104 in {ok['env']}"
+    monkeypatch.setattr(environment, "install_deepface", lambda: {"env": ok["env"], "done": [], "status": ok})
+    code, out = run(capsys, "--install-deepface")
+    assert line_of(out, "install-deepface").startswith("[OK]")
+    assert (f"already in place; DeepFace ran a detection: deepface 0.0.104 in {ok['env']}"
+            in line_of(out, "install-deepface"))
+    # it ran but the environment still does not work: the action is [MISSING]
+    monkeypatch.setattr(environment, "install_deepface", lambda: {"env": ok["env"], "done": ["x"],
+                                                                  "status": _deepface(user, ok=False, detail="C:/x lacks cv2")})
+    code, out = run(capsys, "--install-deepface", "--install-agents", "--apply-permissions")
+    assert code == 1 and "C:/x lacks cv2 after the installation" in line_of(out, "install-deepface")
+
+    def refuse():
+        raise environment.SetupError("could not install deepface 0.0.104 (exit 1): ERROR: No matching distribution")
+    monkeypatch.setattr(environment, "install_deepface", refuse)
+    code, out = run(capsys, "--install-deepface", "--install-agents", "--apply-permissions")
+    action = line_of(out, "install-deepface")
+    assert code == 1 and action.startswith("[MISSING]") and "No matching distribution" in action
+    assert action.endswith("-> setup.md, step 6 (webcam timeline)")
+    assert out.splitlines()[-1] == "1 item(s) missing: run /video-analysis setup."

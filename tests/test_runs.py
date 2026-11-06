@@ -114,12 +114,13 @@ def test_normalize_options_all_keys():
     opts = R.normalize_options({
         "papeis": "Agentes", "max_lotes": "4", "paralelo": "6", "esforco_analista": "alto", "esforco_curador": "xhigh",
         "curadoria": "Por lote", "idioma": "en_US", "trecho": "1:00 a 1:30.5", "falantes": "SPEAKER_01 = Ana ; SPEAKER_02=Bruno Silva",
-        "sensibilidade": "ALTA", "ignorar_regiao": ["0.8,0.75,0.2,0.25; 0 0 0.2 0.06"],
+        "sensibilidade": "ALTA", "ignorar_regiao": ["0.8,0.75,0.2,0.25; 0 0 0.2 0.06"], "linha_do_tempo_webcam": " OFF ",
     })
     assert opts == {"roles": "agents", "max_batches": 4, "parallel": 6, "analyst_effort": "high",
                     "curator_effort": "xhigh", "curation": "batches", "language": "en-US", "range": [60.0, 90.5],
                     "speakers": {"SPEAKER_01": "Ana", "SPEAKER_02": "Bruno Silva"}, "sensitivity": "high",
-                    "ignore_region": [[0.8, 0.75, 0.2, 0.25], [0.0, 0.0, 0.2, 0.06]], "ignore_timeline": None}
+                    "ignore_region": [[0.8, 0.75, 0.2, 0.25], [0.0, 0.0, 0.2, 0.06]], "ignore_timeline": None,
+                    "webcam_timeline": "off"}
     empty = R.normalize_options({})
     assert set(empty) == set(R.OPTION_KEYS) and all(v is None for v in empty.values())
     assert R.normalize_options({"max_batches": "0"})["max_batches"] is None
@@ -129,6 +130,8 @@ def test_normalize_options_all_keys():
     assert R.normalize_options({"range": "0:10:00 to 0:20:00"})["range"] == [600.0, 1200.0]
     assert [R.normalize_options({"curation": v})["curation"] for v in ("plano", "Inicial", "lotes", "batches")] == \
         ["plan", "plan", "batches", "batches"]
+    assert [R.normalize_options({"webcam_timeline": v})["webcam_timeline"] for v in ("auto", "On", "off")] == \
+        ["auto", "on", "off"]
 
 
 def test_request_option_names():
@@ -163,6 +166,8 @@ def test_request_option_names():
     ("ignore_region", "0,8,0,75,0,2,0,25", "decimal point"),
     ("ignore_region", "0.9,0.9,0.2,0.2", "x+w"),
     ("ignore_region", "0.1,0.1,0,0.2", "fractions"),
+    ("webcam_timeline", "sempre", "auto, on, off"),
+    ("linha_do_tempo_webcam", "yes", "webcam_timeline: 'yes' is invalid"),
     ("roles", "   ", "empty"),
     ("max_batches", "dois", "max_batches: 'dois' is invalid"),
     ("max_lotes", "dois", "max_batches: 'dois' is invalid"),      # an old key is reported by its new name
@@ -189,13 +194,17 @@ def test_ignore_timeline_option(tmp_path):
                "spans": [[0.0, 40.5, 0.8, 0.0, 0.2, 0.2], [40.0, 80.0, 0.0, 0.0, 0.5, 0.5]]}
     t_bare = {"file": as_posix(bare), "video": None, "spans": [[10.0, 20.0, 0.8, 0.0, 0.2, 0.2]]}
     assert opts["ignore_timeline"] == [t_named, t_bare]
-    # each file goes to its video: same path, else the same file name; a file without "video" needs one video
+    # each file goes to its video: same path, else the same file name; a file without "video" needs one video.
+    # A video without a file gets None; a file with no span gives [] (an empty timeline is still a timeline)
     a1, a2 = tmp_path / "x" / "aula 1.mp4", tmp_path / "y" / "Aula 2.mp4"
-    assert R.timeline_spans([t_named], [a2, a1]) == [[], t_named["spans"]]
+    assert R.timeline_spans([t_named], [a2, a1]) == [None, t_named["spans"]]
     assert R.timeline_spans([t_bare], [a2]) == [t_bare["spans"]]
-    assert R.timeline_spans(None, [a1, a2]) == [[], []]
+    assert R.timeline_spans(None, [a1, a2]) == [None, None]
     twin = tmp_path / "z" / "aula 1.mp4"
-    assert R.timeline_spans([{**t_bare, "video": str(twin)}], [a1, twin]) == [[], t_bare["spans"]]
+    assert R.timeline_spans([{**t_bare, "video": str(twin)}], [a1, twin]) == [None, t_bare["spans"]]
+    empty = {**t_bare, "spans": []}
+    assert R.timeline_spans([empty], [a2]) == [[]]
+    assert R.timeline_spans([empty, t_bare], [a2]) == [t_bare["spans"]]          # files of one video add up
     for timelines, videos, needle in (([t_bare], [a1, a2], "does not say which video"),
                                       ([t_named], [a2], "not among the videos"),
                                       ([t_named], [a1, twin], "more than one video")):

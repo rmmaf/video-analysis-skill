@@ -9,7 +9,8 @@ contract items 1-4; design-agentic DL-2, DL-5, DL-6, DL-11, DL-12).
   keys of ``OPTION_KEYS`` (the request's keys and the command-line options: --max-batches ->
   max_batches). The Portuguese keys of before the rename (``OPTION_NAMES``) still work.
   ``ignore_timeline`` reads JSON files (``parse_timelines``); ``timeline_spans`` gives each video
-  the spans of the files made for it.
+  the spans of the files made for it. ``webcam_timeline`` is ``auto``, ``on`` or ``off`` (the
+  timeline prepare.py makes with DeepFace: va/webcam.py).
 - ``new_run``: ``runs/<YYYYMMDD-HHMMSS>-<slug24>`` (``-2``... on a collision in the same second).
 - ``resume_video``: DL-11. No ledger -> prompts/ and reports/ go to ``_descartado/<stamp>/`` and the
   video starts at batch 1; ``relatorio.md`` becomes ``relatorio.anterior.md`` when work remains. The
@@ -32,7 +33,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
-from . import EFFORT_LEVELS, SCHEMA_VERSION, WORKFLOW_DEFAULTS
+from . import EFFORT_LEVELS, SCHEMA_VERSION, WEBCAM_MODES, WORKFLOW_DEFAULTS
 from .common import as_posix, fmt_hms, ms_to_s, parse_time_ms, read_json, resolve_unicode_paths, slugify
 
 __all__ = [
@@ -169,12 +170,13 @@ def read_request(path: str | os.PathLike) -> dict:
 
 # the keys of the request's '# options', also the command-line options (--max-batches -> max_batches)
 OPTION_KEYS = ("roles", "max_batches", "parallel", "analyst_effort", "curator_effort", "curation", "language",
-               "range", "speakers", "sensitivity", "ignore_region", "ignore_timeline")
+               "range", "speakers", "sensitivity", "ignore_region", "ignore_timeline", "webcam_timeline")
 # the Portuguese keys (of before the rename; also the old command-line options: --max-lotes) -> the keys
 OPTION_NAMES = {"papeis": "roles", "max_lotes": "max_batches", "paralelo": "parallel",
                 "esforco_analista": "analyst_effort", "esforco_curador": "curator_effort", "curadoria": "curation",
                 "idioma": "language", "trecho": "range", "falantes": "speakers", "sensibilidade": "sensitivity",
-                "ignorar_regiao": "ignore_region", "ignorar_linha_do_tempo": "ignore_timeline"}
+                "ignorar_regiao": "ignore_region", "ignorar_linha_do_tempo": "ignore_timeline",
+                "linha_do_tempo_webcam": "webcam_timeline"}
 _OPTION_ALIASES = {
     **OPTION_NAMES,
     "papel": "roles", "roles_mode": "roles", "modo": "roles",
@@ -312,9 +314,11 @@ def parse_timelines(value: Any) -> list[dict]:
     return out
 
 
-def timeline_spans(timelines: list[dict] | None, videos: list) -> list[list[list[float]]]:
+def timeline_spans(timelines: list[dict] | None, videos: list) -> list[list[list[float]] | None]:
     """The ignore_timeline spans of each video, in the order of ``videos``: a file goes to the video
-    its "video" names (same path, else same file name); a file without "video" needs a run of one video."""
+    its "video" names (same path, else same file name); a file without "video" needs a run of one video.
+    None for a video without a file; a file with no span gives [] (the video has its timeline: an empty
+    one, which also keeps prepare.py from making one with DeepFace)."""
     def full(p: Any) -> str:
         return unicodedata.normalize("NFC", os.path.normcase(os.path.abspath(os.fspath(p))))
 
@@ -322,7 +326,7 @@ def timeline_spans(timelines: list[dict] | None, videos: list) -> list[list[list
         return unicodedata.normalize("NFC", str(p).replace("\\", "/").rsplit("/", 1)[-1]).casefold()
 
     paths, names = [full(v) for v in videos], [name(v) for v in videos]
-    per: list[list[list[float]]] = [[] for _ in videos]
+    per: list[list[list[float]] | None] = [None for _ in videos]
     for t in timelines or []:
         if t["video"] is None:
             if len(videos) != 1:
@@ -336,7 +340,7 @@ def timeline_spans(timelines: list[dict] | None, videos: list) -> list[list[list
                 why = ("which is not among the videos of this run" if not hit else
                        'and more than one video of this run has that name (use the full path in "video")')
                 raise RunError("invalid_option", f"ignore_timeline: {t['file']} is for {t['video']!r}, {why}")
-        per[hit[0]].extend(t["spans"])
+        per[hit[0]] = (per[hit[0]] or []) + list(t["spans"])
     return per
 
 
@@ -390,6 +394,11 @@ def normalize_options(raw: dict) -> dict:
             opts[key] = parse_regions(value)
         elif key == "ignore_timeline":
             opts[key] = parse_timelines(value)
+        elif key == "webcam_timeline":
+            mode = fold(value)
+            if mode not in WEBCAM_MODES:
+                raise _bad(key, value, "use " + ", ".join(WEBCAM_MODES))
+            opts[key] = mode
     return opts
 
 

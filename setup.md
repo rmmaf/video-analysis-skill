@@ -15,6 +15,10 @@ which works the same and spends a little more per agent. Without the workflow sa
 `~/.claude/workflows/`, or with a copy different from the skill's, the skill passes the whole script to
 the Workflow on every run, which costs ~13k more tokens.
 
+**The DeepFace environment is optional: `[OK]` or `[WARN]`, never `[MISSING]`.** With it, `prepare.py`
+leaves each webcam out of the comparison only while it is on screen (step 6). Without it, the skill
+works the same, with the automatic mask only.
+
 What is only confirmed in use:
 
 - the first analysis proves the permission rules: no permission prompt during the run. Start with a
@@ -25,13 +29,15 @@ What is only confirmed in use:
 ## What the setup does not ask for
 
 The skill uses **no secrets** and no login: it works with local files, `ffmpeg` and Python. Outside the
-central folder, the setup writes to only three places, and only after the person's "yes":
+central folder, the setup writes to only these places, and only after the person's "yes" (the last row
+only if the person accepts the optional step 6):
 
 | what | where | how to undo |
 |---|---|---|
 | the two agent roles | `C:\Users\digom\.claude\agents\video-analysis-*.md` | delete the two files |
 | the saved workflow | `C:\Users\digom\.claude\workflows\video-analysis.js` | delete the file |
 | the permission rules for the central folder | `C:\Users\digom\.claude\settings.json` | restore `settings.json.bak-<date>` |
+| the DeepFace environment and the YuNet weights | `C:\Users\digom\deepface-env\` and `C:\Users\digom\.deepface\weights\` | delete the two folders |
 
 You also do not accept terms or run an installation that asks for elevation on the person's behalf.
 
@@ -61,7 +67,8 @@ You also do not accept terms or run an installation that asks for elevation on t
      another Claude Code folder; they are for testing, not for the normal setup.
 3. **Resolve the `[MISSING]` items in step order, one at a time.** The order follows the
    dependencies: each step only needs what the previous ones left ready. Steps 4 and 5 apply even
-   when the rest is `[OK]`.
+   when the rest is `[OK]`. Step 6 is optional: offer it once, at the end, when `deepface` comes out
+   `[WARN]`.
 4. **Each action carries one of two marks:**
    - **you run it**: show the command, say in one sentence what it changes on the machine and run it
      only after the person's "yes";
@@ -160,6 +167,43 @@ of prompts per run.
    The verifier makes a backup at `settings.json.bak-<date>` and merges the rules into `settings.json`,
    without touching `enabledPlugins` or anything else.
 
+## Step 6 — optional: the DeepFace environment (webcam timeline)
+
+In a call whose layout changes (the camera alone, then a screen share, then the gallery), a webcam makes
+frames that are only someone moving, and a fixed region to ignore would also hide the shared screen
+where the webcam used to be. With this environment, `prepare.py` finds the webcams with DeepFace before
+extracting the frames and leaves each one out of the comparison only while it is on screen (the webcam
+timeline; `--webcam-timeline` in [`SKILL.md`](SKILL.md)).
+
+**Offer it once**, when `deepface` comes out `[WARN]`, saying what it costs:
+
+- the installation puts DeepFace 0.0.104, ONNX Runtime and OpenCV (without TensorFlow) in
+  `C:\Users\digom\deepface-env\`, a Python environment separate from the skill's, which takes about
+  350 MB on disk;
+- then each new video gets a probe of up to 60 frames, about a minute at 1080p. When a face shows up,
+  the full scan takes about 24 minutes of CPU per hour of 1080p video (34 with the machine busy), once
+  per video: the timeline stays in the video's cache. Both run before the extraction and are counted in
+  the estimate.
+
+**You run it**, after the "yes". pip may take several minutes: use `timeout` 600000, or
+`run_in_background` and wait for the notification.
+
+```bash
+python "<skill folder>/check_environment.py" --install-deepface
+```
+
+- Creates `C:\Users\digom\deepface-env\` with `python -m venv`, installs `deepface==0.0.104` in it and
+  downloads the weights of the YuNet face detector (about 230 KB) to `C:\Users\digom\.deepface\weights\`,
+  checked by their SHA-256, so that an analysis needs no network. A part already in place is skipped,
+  and damaged weights are downloaded again. Then DeepFace runs a detection, always: if it fails, deepface
+  is reinstalled with its dependencies (pip again, several minutes) and the detection runs once more.
+  Running it again therefore repairs an environment that does not work, not only an incomplete one.
+- `prepare.py` runs only this version of deepface, with these weights: another version or damaged
+  weights come out `[WARN]` here and make the analyses skip the timeline until the repair.
+- If the person declines, leave it: the `[WARN]` stays and blocks nothing. With the environment, an
+  analysis can still skip the timeline with `--webcam-timeline off`; to remove it, delete the two
+  folders of the table above.
+
 ## When you finish
 
 Run the verifier one last time and show the result. Remind the person:
@@ -171,4 +215,6 @@ Run the verifier one last time and show the result. Remind the person:
   the name `video-analysis`, close and reopen Claude Code. Until then the skill passes the script inline,
   which works the same and costs ~13k more tokens per run.
 - If the permission prompts continue after the rules are written, close and reopen Claude Code.
+- With the DeepFace environment installed, the next analysis of each video starts with its webcam
+  timeline; the estimate says how long it may take.
 - If there was an analysis before the setup, offer to resume it.

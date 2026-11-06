@@ -12,6 +12,11 @@ DL-13; plan, "Permissions and setup").
 - Saved workflow: ``<claude home>/workflows/video-analysis.js`` byte-identical to
   ``<skill>/workflow/video-analysis.js``, so the Workflow tool runs it by name (``name: "video-analysis"``)
   instead of receiving the script inline.
+- DeepFace (optional, for the webcam timeline): a separate Python environment, ``VA_DEEPFACE_ENV`` or
+  ``%USERPROFILE%\\deepface-env``, whose Python has deepface (the version the setup installs), cv2 and
+  numpy, and the YuNet weights, checked by their SHA-256. ``install_deepface`` creates it (venv),
+  installs ``deepface==0.0.104``, downloads the weights and proves it all with a detection, reinstalling
+  deepface when the detection fails; the setup runs it only after the person's "yes".
 
 The Claude home is ``--claude-home`` / env ``VA_CLAUDE_HOME`` / ``%USERPROFILE%\\.claude``: tests must
 always point it somewhere else, so the real settings are never touched.
@@ -19,6 +24,7 @@ always point it somewhere else, so the real settings are never touched.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import importlib.util
 import json
 import os
@@ -27,17 +33,19 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
-from . import WORKSPACE_DIRS
+from . import WEBCAM_DEFAULTS, WORKSPACE_DIRS
 from .common import as_posix, atomic_write_bytes
 
 __all__ = [
-    "CLAUDE_HOME_ENV", "MIN_PYTHON", "RULE_TOOLS", "WORKFLOW_SCRIPT", "SetupError", "AmbienteError",
-    "agents_status", "claude_home", "install_agents", "install_workflow", "merge_permissions",
+    "CLAUDE_HOME_ENV", "DEEPFACE_ENV", "MIN_PYTHON", "RULE_TOOLS", "WORKFLOW_SCRIPT", "SetupError", "AmbienteError",
+    "agents_status", "claude_home", "deepface_env_dir", "deepface_python", "deepface_status", "install_agents",
+    "install_deepface", "install_workflow", "merge_permissions",
     "module_status", "permissions_status", "python_status", "role_files", "runtime_problems",
     "tool_status", "user_home", "workflow_source", "workflow_status", "workspace_rules",
-    "workspace_status",
+    "workspace_status", "yunet_weights",
 ]
 
 CLAUDE_HOME_ENV = "VA_CLAUDE_HOME"
@@ -427,3 +435,198 @@ def install_workflow(skill_dir: str | os.PathLike, chome: str | os.PathLike | No
         pass
     atomic_write_bytes(target, data)
     return {"path": as_posix(target), "copied": True}
+
+
+# --- DeepFace environment (optional: the webcam timeline) ----------------------------------------------
+
+DEEPFACE_ENV = "VA_DEEPFACE_ENV"   # another folder for the DeepFace environment (tests, another machine)
+DEEPFACE_CHECK_TIMEOUT_S = 300.0   # the detection below: DeepFace, ONNX Runtime and OpenCV load in seconds, more when cold
+# run by the environment's Python: deepface's version (empty without it), then the modules
+# webcam_mask.py imports that are missing (find_spec only: nothing heavy is imported)
+_DEEPFACE_PROBE = ("import importlib.metadata as m, importlib.util as u\n"
+                   "try:\n    print(m.version('deepface'))\nexcept m.PackageNotFoundError:\n    print('')\n"
+                   "print(','.join(n for n in ('deepface', 'cv2', 'numpy') if u.find_spec(n) is None))\n")
+# run by the environment's Python: a detection on a black image, the proof that DeepFace, what it loads
+# and the YuNet weights work, which find_spec does not see (a native library that does not load, half an
+# interrupted install). The weights must already be in place: DeepFace would download them otherwise.
+_DEEPFACE_CHECK = ("import numpy as np\n"
+                   "from deepface import DeepFace\n"
+                   "DeepFace.extract_faces(img_path=np.zeros((64, 64, 3), np.uint8), detector_backend='yunet',"
+                   " enforce_detection=False, align=False)\n")
+
+
+def deepface_env_dir(override: str | os.PathLike | None = None) -> Path:
+    """``override`` > env VA_DEEPFACE_ENV > %USERPROFILE%\\deepface-env."""
+    for value in (os.fspath(override) if override is not None else "", os.environ.get(DEEPFACE_ENV, "")):
+        value = value.strip().strip('"').strip()
+        if value:
+            return Path(os.path.abspath(os.path.expanduser(value)))
+    return user_home() / WEBCAM_DEFAULTS["env_name"]
+
+
+def deepface_python(env_dir: str | os.PathLike | None = None) -> Path:
+    d = deepface_env_dir(env_dir)
+    return d / "Scripts" / "python.exe" if os.name == "nt" else d / "bin" / "python"
+
+
+def yunet_weights() -> Path:
+    """Where DeepFace keeps the YuNet weights: <DEEPFACE_HOME, or the user folder>/.deepface/weights."""
+    base = os.environ.get("DEEPFACE_HOME", "").strip() or os.path.expanduser("~")
+    return Path(base) / ".deepface" / "weights" / WEBCAM_DEFAULTS["yunet_weights"]
+
+
+def weights_state(path: str | os.PathLike | None = None) -> str:
+    """The YuNet weights (``yunet_weights()`` by default): ``ok`` (the file the setup downloads, by its
+    SHA-256), ``missing`` or ``damaged`` (another content: a cut download, a page instead of the file)."""
+    p = Path(path) if path is not None else yunet_weights()
+    try:
+        data = p.read_bytes()
+    except FileNotFoundError:
+        return "missing"
+    except OSError:
+        return "damaged"
+    return "ok" if hashlib.sha256(data).hexdigest() == WEBCAM_DEFAULTS["yunet_sha256"] else "damaged"
+
+
+def download_weights(opener=None, attempts: int = 8, pause_s: float = 2.0) -> int:
+    """Download the YuNet weights (about 230 KB) to ``yunet_weights()``, checked by their SHA-256, so that an
+    analysis needs no network. Up to ``attempts`` GETs, with a growing pause between them: DeepFace tries
+    once, and a connection reset on the way fails it (seen on a network that reset 4 in 10 connections to
+    GitHub). ``opener(url, timeout)`` replaces urllib's (tests). Returns the attempts it took; raises
+    SetupError when all fail."""
+    url, expected = WEBCAM_DEFAULTS["yunet_url"], WEBCAM_DEFAULTS["yunet_sha256"]
+    fetch = opener or (lambda u, timeout: urllib.request.urlopen(u, timeout=timeout))
+    last = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            with fetch(url, 60) as r:
+                data = r.read()
+            got = hashlib.sha256(data).hexdigest()
+            if got != expected:
+                raise ValueError(f"{len(data)} bytes with SHA-256 {got[:12]}..., not the YuNet weights")
+            atomic_write_bytes(yunet_weights(), data)
+            return attempt
+        except Exception as exc:   # the network, the server or the content: try again
+            last = f"{type(exc).__name__}: {exc}"
+            if attempt < attempts:
+                time.sleep(min(pause_s * attempt, 10.0))
+    raise SetupError(f"could not download the YuNet weights from {url} ({attempts} attempts): {last}")
+
+
+def _last_line(text: str | None) -> str:
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    return lines[-1][-300:] if lines else ""
+
+
+def deepface_status(env_dir: str | os.PathLike | None = None, python: str | os.PathLike | None = None,
+                    timeout: float = 60.0, deep: bool = False) -> dict:
+    """The DeepFace environment of the webcam timeline. ``ok``: its Python runs and has deepface in the
+    version the setup installs, cv2 and numpy, and the YuNet weights are in place and intact (their
+    SHA-256); with ``deep``, DeepFace also runs a detection (seconds: check_environment.py; prepare.py
+    leaves that proof to webcam_mask.py itself). ``python`` replaces the environment's own (tests).
+    ``state``: ok, absent (no Python in the folder) or broken, with ``problem`` (absent, python, modules,
+    version, weights or detection; None when ok) for install_deepface; ``version`` of deepface,
+    ``expected`` and ``weights`` (intact) are for check_environment.py."""
+    d = deepface_env_dir(env_dir)
+    py = Path(python) if python is not None else deepface_python(d)
+    expected, w = WEBCAM_DEFAULTS["deepface_version"], yunet_weights()
+    weights = weights_state(w)
+    out = {"id": "deepface", "ok": False, "state": "absent", "problem": "absent", "env": as_posix(d),
+           "python": as_posix(py), "version": None, "expected": expected, "weights": weights == "ok",
+           "detail": f"no DeepFace environment at {as_posix(d)}"}
+
+    def broken(problem: str, detail: str) -> dict:
+        out.update(state="broken", problem=problem, detail=detail)
+        return out
+
+    if not py.is_file():
+        return out
+    try:
+        r = subprocess.run([str(py), "-B", "-c", _DEEPFACE_PROBE], stdin=subprocess.DEVNULL, capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=timeout, creationflags=_NO_WINDOW)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return broken("python", f"the Python of {as_posix(d)} did not run: {exc}")
+    lines = (r.stdout or "").splitlines()
+    if r.returncode != 0 or len(lines) < 2:
+        tail = _last_line(r.stderr or r.stdout)
+        return broken("python", f"the Python of {as_posix(d)} exited with {r.returncode}: {tail}".rstrip(": "))
+    out["version"] = lines[0].strip() or None
+    missing = [m for m in lines[1].strip().split(",") if m]
+    if missing:
+        return broken("modules", f"{as_posix(d)} lacks {', '.join(missing)}")
+    if out["version"] != expected:
+        return broken("version", f"{as_posix(d)} has deepface {out['version'] or 'of an unknown version'}, "
+                                 f"and the skill uses {expected}")
+    if weights == "missing":
+        return broken("weights", f"the YuNet weights are not in {as_posix(w.parent)}")
+    if weights == "damaged":
+        return broken("weights", f"the YuNet weights in {as_posix(w)} are damaged (not the file the setup downloads)")
+    if deep:
+        try:
+            r = subprocess.run([str(py), "-B", "-c", _DEEPFACE_CHECK], stdin=subprocess.DEVNULL, capture_output=True,
+                               text=True, encoding="utf-8", errors="replace", creationflags=_NO_WINDOW,
+                               timeout=max(timeout, DEEPFACE_CHECK_TIMEOUT_S),
+                               env={**os.environ, "PYTHONIOENCODING": "utf-8"})   # DeepFace logs emojis
+        except (OSError, subprocess.SubprocessError) as exc:
+            return broken("detection", f"DeepFace did not run a detection in {as_posix(d)}: {exc}")
+        if r.returncode != 0:
+            return broken("detection", f"DeepFace did not run a detection in {as_posix(d)} (exit {r.returncode}): "
+                                       f"{_last_line(r.stderr or r.stdout)}")
+    out.update(ok=True, state="ok", problem=None, detail=f"deepface {out['version']} in {as_posix(d)}")
+    return out
+
+
+def _run_step(cmd: list[str], timeout: float) -> tuple[int, str]:
+    r = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=timeout, creationflags=_NO_WINDOW,
+                       env={**os.environ, "PYTHONIOENCODING": "utf-8"})   # DeepFace logs emojis
+    return r.returncode, (r.stdout or "") + (r.stderr or "")
+
+
+def install_deepface(env_dir: str | os.PathLike | None = None, base_python: str | None = None, runner=None,
+                     timeout: float = 1800.0, opener=None) -> dict:
+    """Create the DeepFace environment with ``python -m venv`` (``base_python``: the Python that runs this,
+    by default), install ``deepface==<WEBCAM_DEFAULTS version>`` in it and download the YuNet weights (a
+    damaged copy goes away first), skipping each step already done; then prove it all with a detection,
+    which always runs. When it fails, deepface is reinstalled with its dependencies (``--force-reinstall``:
+    a package that does not load, half an interrupted install) and the detection runs again.
+    ``runner(cmd, timeout) -> (returncode, output)`` replaces the subprocess and ``opener`` the download
+    (tests). Returns ``{"env", "done", "status"}``; raises SetupError with the end of the output of the
+    step that failed."""
+    d = deepface_env_dir(env_dir)
+    run = runner or _run_step
+    version = WEBCAM_DEFAULTS["deepface_version"]
+    pip = [deepface_python(d), "-m", "pip", "install", "--disable-pip-version-check"]
+    check = [deepface_python(d), "-B", "-c", _DEEPFACE_CHECK]
+    done = []
+
+    def attempt(cmd: list) -> tuple[int, str]:
+        try:
+            return run([str(c) for c in cmd], timeout)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return -1, f"{type(exc).__name__}: {exc}"
+
+    def step(cmd: list, what: str) -> None:
+        code, output = attempt(cmd)
+        if code != 0:
+            tail = " | ".join([line.strip() for line in output.splitlines() if line.strip()][-3:])
+            raise SetupError(f"could not {what} (exit {code}): {tail}")
+        done.append(what)
+
+    if not deepface_python(d).is_file():
+        step([base_python or sys.executable, "-m", "venv", d], f"create the environment {as_posix(d)}")
+    if deepface_status(d)["problem"] in ("absent", "python", "modules", "version"):
+        step(pip + [f"deepface=={version}"], f"install deepface {version}")
+    weights = weights_state()
+    if weights == "damaged":
+        yunet_weights().unlink()
+        done.append("remove the damaged YuNet weights")
+    if weights != "ok":
+        download_weights(opener=opener)
+        done.append("download the YuNet weights")
+    code, output = attempt(check)
+    if code != 0:
+        step(pip + ["--force-reinstall", f"deepface=={version}"],
+             f"reinstall deepface {version}, since DeepFace did not run a detection ({_last_line(output)})")
+        step(check, "run a detection with DeepFace after the reinstall")
+    return {"env": as_posix(d), "done": done, "status": deepface_status(d)}

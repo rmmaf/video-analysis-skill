@@ -23,16 +23,31 @@ trechos em que o rosto esta nela, para o --ignore-timeline da skill (prepare.py)
 mascara acompanha as trocas de layout (so camera -> tela compartilhada -> galeria). Um
 trecho e uma sequencia de amostras com o rosto no mesmo lugar (ate 3 falhas seguidas nao
 o cortam), com pelo menos 3 delas e com o rosto se mexendo; ele vai de 1 passo (2 s) antes
-da primeira ate 1 passo depois da ultima. Nao precisa da presenca minima do modo fixo.
+da primeira ate 1 passo depois da ultima. Nao precisa da presenca minima do modo fixo. O tempo
+de cada amostra e o carimbo de tempo do quadro (pts), que acerta tambem em video de taxa
+variavel (VFR); a conta quadro / taxa media poe o trecho em outro lugar do video.
 
-Instalacao, fora do setup da skill, num ambiente Python separado:
-  python -m venv %USERPROFILE%\\deepface-env
-  %USERPROFILE%\\deepface-env\\Scripts\\python -m pip install deepface==0.0.104
+Com --probe N, antes da varredura faz uma sondagem: o video em N partes iguais e uma amostra
+de cada uma. Se nenhum rosto aparece no mesmo lugar em pelo menos 2 amostras, nao ha webcam:
+a linha do tempo sai vazia, com "scan": "probe", e a varredura de 2 em 2 s nem comeca. Com
+rosto, segue a varredura, e a linha do tempo sai com "scan": "full". As amostras vem de uma
+busca (seek) no meio de cada parte, conferida pelo carimbo do quadro lido: o OpenCV busca pela
+contagem de quadros, que em video VFR cai em outra parte ou passa do fim. As partes que ficam
+sem amostra saem de uma passada do comeco ao fim, sem busca. Se nem assim as amostras cobrem
+o video (ele nao abre, ou a passada para antes do fim), a sondagem nao vale: segue a varredura.
+Com N menor que 2 (o prepare.py pede 1 num video de ate 10 s), a sondagem nem roda: uma amostra
+nao mostra o rosto em 2, e a varredura de um video curto custa pouco.
+
+A skill roda este script sozinha: o prepare.py o chama com o Python do ambiente da DeepFace
+(%USERPROFILE%\\deepface-env, ou a variavel VA_DEEPFACE_ENV), com --probe e --watch-stdin, e guarda
+a linha do tempo no cache do video. O ambiente e criado pelo setup da skill (/video-analysis setup, que
+roda check_environment.py --install-deepface): um ambiente Python separado, com
+deepface==0.0.104 e os pesos da YuNet (para outra pasta: DEEPFACE_HOME). A mao:
   %USERPROFILE%\\deepface-env\\Scripts\\python webcam_mask.py VIDEO --timeline SAIDA.json
-Os pesos da YuNet sao baixados no primeiro uso (para outra pasta: DEEPFACE_HOME).
 
-Uso: python webcam_mask.py VIDEO [--tiles overlap|grid|frame] [--samples N] [--json SAIDA]
-                                 [--timeline SAIDA.json] [--debug PASTA]
+Uso: python webcam_mask.py VIDEO [--tiles overlap|grid|frame] [--samples N] [--probe N]
+                                 [--json SAIDA] [--timeline SAIDA.json] [--debug PASTA]
+                                 [--watch-stdin]
   --tiles overlap  pedacos de 640x540 sobrepostos pela metade: 15 num quadro 1080p (padrao)
   --tiles grid     pedacos de 640x540 lado a lado: 6 num quadro 1080p
   --tiles frame    o quadro inteiro numa chamada; a DeepFace o reduz a 640 px de lado,
@@ -40,10 +55,14 @@ Uso: python webcam_mask.py VIDEO [--tiles overlap|grid|frame] [--samples N] [--j
   --samples N      so N amostras espalhadas pelo video, com busca (seek), em vez de
                    uma a cada 2 s do comeco ao fim (para a linha do tempo, use o padrao:
                    com amostras espacadas, o inicio e o fim dos trechos ficam imprecisos)
+  --probe N        sondagem de N amostras antes; sem rosto, para sem a varredura (acima)
   --timeline SAIDA.json  a linha do tempo, no formato do --ignore-timeline da skill
   --debug PASTA    salva, para cada rosto, a mediana com o rosto (amarelo), a janela
                    achada (verde) e a regiao pelas proporcoes do rosto (vermelho)
-VIDEO aceita curingas (* ?), para nomes com acentos decompostos.
+  --watch-stdin    sai (codigo 3) quando a entrada padrao fecha: o prepare.py o passa, com um
+                   cano aberto nela, para o script nao seguir sozinho se o prepare.py morrer
+VIDEO e o caminho do arquivo; se nao houver arquivo com esse nome, vale como curinga (* ?),
+para nomes com acentos decompostos.
 Os tempos e os grupos de rostos vao para a saida de erro.
 """
 import time
@@ -56,6 +75,7 @@ import json  # noqa: E402
 import math  # noqa: E402
 import os  # noqa: E402
 import sys  # noqa: E402
+import threading  # noqa: E402
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
@@ -85,6 +105,7 @@ MARGIN = 0.006     # folga em volta da janela, fracao da largura: pega a moldura
 MAX_GAP = 3        # linha do tempo: ate 3 amostras seguidas sem o rosto ainda e o mesmo trecho
 MIN_HITS = 3       # trecho com menos amostras com o rosto que isso e passageiro: fica de fora
 KEEP_G = 16        # quadros guardados por rosto (a partir da MIN_HITS-esima amostra com ele)
+PROBE_HITS = 2     # sondagem: um rosto no mesmo lugar em 2 amostras ja pede a varredura completa
 
 
 def min_score(raw):
@@ -103,6 +124,29 @@ def min_score(raw):
                  f" (sem a variavel, {SCORE})")
     return v
 
+
+def watch_stdin():
+    """--watch-stdin: sai (codigo 3) quando a entrada padrao chega ao fim. O prepare.py deixa um cano
+    aberto nela enquanto espera o script. Se ele morre de vez (pelo Gerenciador de Tarefas, por exemplo),
+    nao leva o processo filho junto, mas o cano fecha, e o script sai em vez de seguir sozinho numa
+    varredura que ninguem vai ler. Comeca antes de carregar a DeepFace, a parte mais lenta da partida.
+    Le o descritor 0 com os.read, e nao o sys.stdin: parada dentro do leitor do sys.stdin, a thread
+    seguraria a trava dele, e o Python, ao fecha-lo no fim, pararia com erro fatal, com a linha do tempo
+    ja escrita mas o codigo de saida diferente de 0, e o prepare.py a descartaria."""
+    def wait():
+        try:
+            while os.read(0, 4096):
+                pass
+        except OSError:
+            pass
+        print("a entrada padrao fechou (o prepare.py parou): saindo", file=sys.stderr, flush=True)
+        os._exit(3)
+
+    threading.Thread(target=wait, name="watch-stdin", daemon=True).start()
+
+
+if "--watch-stdin" in sys.argv[1:] and sys.stdin is not None:
+    watch_stdin()
 
 # a DeepFace le a nota desta variavel a cada chamada; com nota errada, o script sai antes de carrega-la
 os.environ["yunet_score_threshold"] = str(min_score(os.environ.get("yunet_score_threshold")))
@@ -142,6 +186,83 @@ def iou(a, b):
     iy = max(0, min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1]))
     union = a[2] * a[3] + b[2] * b[3] - ix * iy
     return ix * iy / union if union > 0 else 0.0
+
+
+def best_place(sample_faces):
+    """Sondagem: (maior numero de amostras com um rosto no mesmo lugar, lugares com rosto). Os rostos
+    (x, y, w, h) de cada amostra vao para o grupo do primeiro rosto com IoU >= 0,5, como na varredura."""
+    groups = []   # [rosto, amostras com ele]
+    for k, boxes in enumerate(sample_faces):
+        for box in boxes:
+            g = next((g for g in groups if iou(g[0], box) >= 0.5), None)
+            if g is None:
+                groups.append([box, {k}])
+            else:
+                g[1].add(k)
+    return max((len(g[1]) for g in groups), default=0), len(groups)
+
+
+def frame_s(cap, i, fps):
+    """Tempo, em segundos, do quadro que o cap acabou de ler (o i-esimo dele): o carimbo de tempo do
+    quadro (pts), que acerta tambem em video de taxa variavel (VFR); sem carimbo (o OpenCV da 0 depois
+    do primeiro quadro), a conta pela taxa media, i / fps."""
+    t = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+    return t if t > 0 or i == 0 or fps <= 0 else i / fps
+
+
+def probe(path, duration, n, mode, fps):
+    """Sondagem: o video em n partes iguais e uma amostra de cada parte. Devolve (achou, info): achou
+    quando um rosto aparece no mesmo lugar em pelo menos PROBE_HITS amostras; info["complete"] diz se
+    as amostras cobrem o video. Sem cobertura a sondagem nao vale, e quem chama faz a varredura.
+
+    Primeiro, uma busca (seek) no meio de cada parte, conferida pelo carimbo do quadro lido: o OpenCV
+    busca pela contagem de quadros, que em video de taxa variavel (VFR) nao bate com o tempo, e a
+    leitura cai em outra parte ou passa do fim. O quadro lido fica com a parte em que caiu. As partes
+    que ficam sem amostra saem de uma passada do comeco ao fim, sem busca: o primeiro quadro de cada
+    uma. Uma parte sem quadro nenhum (a tela parada num video VFR) nao tem o que mostrar alem do quadro
+    de antes e conta como coberta, inclusive no fim, se ele ocupa no maximo as 2 ultimas partes. Nao
+    cobre quando o video nao abre, quando um quadro achado nao se le, ou quando a passada para antes."""
+    t0 = time.perf_counter()
+    cell = duration / n
+    taken = {}           # parte -> rostos do quadro dela
+
+    def part(t):
+        return min(n - 1, max(0, int(t / cell)))
+
+    cap = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
+    try:
+        for k in range(n if cap.isOpened() else 0):
+            cap.set(cv2.CAP_PROP_POS_MSEC, (k + 0.5) * cell * 1000)
+            ok, frame = cap.read()
+            if ok:
+                j = part(cap.get(cv2.CAP_PROP_POS_MSEC) / 1000)
+                if j not in taken:
+                    taken[j] = list(faces(frame, mode))
+    finally:
+        cap.release()
+    walked, framed, last = len(taken) < n, set(), None   # framed: partes com algum quadro na passada
+    if walked:
+        cap = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
+        try:
+            i = 0
+            while cap.isOpened() and len(taken) < n and cap.grab():
+                last = frame_s(cap, i, fps)
+                j = part(last)
+                framed.add(j)
+                if j not in taken:
+                    ok, frame = cap.retrieve()
+                    if ok:
+                        taken[j] = list(faces(frame, mode))
+                i += 1
+        finally:
+            cap.release()
+    reached = part(last) if last is not None else -1
+    tail = last is not None and last >= duration - 2 * cell
+    covered = sum(1 for j in range(n) if j in taken or (j < reached and j not in framed) or (j > reached and tail))
+    best, places = best_place([taken[j] for j in sorted(taken)])
+    return best >= PROBE_HITS, {"targets": n, "samples": len(taken), "covered": covered,
+                                "complete": covered == n and bool(taken), "walked": walked, "places": places,
+                                "best_hits": best, "seconds": round(time.perf_counter() - t0, 1)}
 
 
 def ratio_box(x, y, w, h):
@@ -314,13 +435,16 @@ def main():
     ap.add_argument("video")
     ap.add_argument("--tiles", choices=["overlap", "grid", "frame"], default="overlap")
     ap.add_argument("--samples", type=int, default=0)
+    ap.add_argument("--probe", type=int, default=0)
     ap.add_argument("--json")
     ap.add_argument("--timeline")
     ap.add_argument("--debug")
+    ap.add_argument("--watch-stdin", action="store_true")   # o watch_stdin() ja comecou, la em cima
     a = ap.parse_args()
     score = float(os.environ["yunet_score_threshold"])
 
-    found = glob.glob(a.video)
+    # o caminho como esta, antes do curinga: "[1]" num nome de arquivo e literal, nao uma classe do glob
+    found = [a.video] if os.path.isfile(a.video) else glob.glob(a.video)
     if len(found) != 1:
         sys.exit(f"esperava um video, achei {len(found)}: {a.video}")
     cap = cv2.VideoCapture(found[0], cv2.CAP_FFMPEG)
@@ -328,6 +452,46 @@ def main():
         sys.exit("o OpenCV nao abriu o video")
     fps = cap.get(cv2.CAP_PROP_FPS)
     duration = cap.get(cv2.CAP_PROP_FRAME_COUNT) / fps if fps > 0 else 0.0
+
+    def write_timeline(scan, probe_info, step_s, timeline):
+        doc = {"video": os.path.abspath(found[0]), "made_by": "webcam_mask.py", "scan": scan, "probe": probe_info,
+               "step_s": step_s, "tiles": a.tiles, "min_score": score, "duration_s": round(duration, 3),
+               "ignore_timeline": [{"start": t["start"], "end": t["end"], "region": t["region"]} for t in timeline],
+               "spans_info": timeline}
+        with open(a.timeline, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh, indent=1, ensure_ascii=False)
+        print(f"linha do tempo: {len(timeline)} trecho(s) em {a.timeline}", file=sys.stderr)
+
+    probe_info = None
+    if a.probe > 0 and duration <= 0:
+        print("sondagem: o video nao informa a duracao; segue a varredura completa", file=sys.stderr)
+    elif 0 < a.probe < PROBE_HITS:
+        print(f"sondagem: {a.probe} amostra(s) nao mostram um rosto em {PROBE_HITS}, entao nao dizem que nao ha"
+              " webcam; segue a varredura completa (video curto)", file=sys.stderr)
+    elif a.probe > 0:
+        cap.release()
+        seen, probe_info = probe(found[0], duration, a.probe, a.tiles, fps)
+        walk = ", com passada do comeco ao fim (a busca nao acertou o tempo)" if probe_info["walked"] else ""
+        print(f"sondagem: {probe_info['samples']} de {probe_info['targets']} amostras{walk}, em"
+              f" {probe_info['seconds']:.1f} s (nota minima {score}); {probe_info['places']} lugar(es) com rosto,"
+              f" o mais visto em {probe_info['best_hits']} amostra(s)", file=sys.stderr)
+        if not probe_info["complete"]:
+            print(f"sondagem incompleta: {probe_info['covered']} de {probe_info['targets']} partes do video cobertas;"
+                  " segue a varredura completa", file=sys.stderr)
+        elif not seen:
+            print("nenhuma webcam achada")
+            print(f"sem rosto no mesmo lugar em {PROBE_HITS} amostras: sem a varredura completa"
+                  f" | total {time.perf_counter() - T_START:.1f} s | video {duration / 60:.1f} min", file=sys.stderr)
+            if a.timeline:
+                write_timeline("probe", probe_info, None, [])
+            if a.json:
+                with open(a.json, "w", encoding="utf-8") as fh:
+                    json.dump({"video": found[0], "tiles": a.tiles, "min_score": score, "duration_s": duration,
+                               "probe": probe_info, "regions": [], "groups": [], "timeline": []}, fh, indent=1)
+            return
+        cap = cv2.VideoCapture(found[0], cv2.CAP_FFMPEG)   # de novo do comeco, para a varredura
+        if not cap.isOpened():
+            sys.exit("o OpenCV nao abriu o video")
 
     groups = []   # um grupo por rosto que fica no mesmo lugar
     store = []    # (amostra, quadro em cinza reduzido), espalhados pelo video
@@ -388,15 +552,18 @@ def main():
                 add(frame, (k + 0.5) * duration / a.samples)
                 st["detect"] += time.perf_counter() - t0
     else:
+        step_ms = STEP_S * 1000
         i, next_ms, t_ms = 0, 0.0, 0.0
         while True:
             t0 = time.perf_counter()
             ok, frame = cap.grab(), None
             if ok:
-                t_ms = i * 1000 / fps if fps > 0 else cap.get(cv2.CAP_PROP_POS_MSEC)
+                t_ms = frame_s(cap, i, fps) * 1000
                 if t_ms >= next_ms:
                     ok, frame = cap.retrieve()
-                    next_ms += STEP_S * 1000
+                    # a proxima marca de 2 s depois deste quadro: num video VFR, a tela parada nao tem
+                    # quadros, e as marcas que ficaram para tras nao viram uma rajada de amostras
+                    next_ms = (math.floor(t_ms / step_ms) + 1) * step_ms
             st["decode"] += time.perf_counter() - t0
             if not ok:
                 break
@@ -497,19 +664,13 @@ def main():
                   f" {'MASCARA' if r['kept'] else 'descartado'} {r['region']} ({r['how']})"
                   + (f", {r['spans']} trecho(s) na linha do tempo" if r["spans"] else ""), file=sys.stderr)
     if a.timeline:
-        doc = {"video": os.path.abspath(found[0]), "made_by": "webcam_mask.py", "step_s": step_s,
-               "tiles": a.tiles, "min_score": score, "duration_s": round(duration, 3),
-               "ignore_timeline": [{"start": t["start"], "end": t["end"], "region": t["region"]} for t in timeline],
-               "spans_info": timeline}
-        with open(a.timeline, "w", encoding="utf-8") as fh:
-            json.dump(doc, fh, indent=1, ensure_ascii=False)
-        print(f"linha do tempo: {len(timeline)} trecho(s) em {a.timeline}", file=sys.stderr)
+        write_timeline("full", probe_info, step_s, timeline)
         for t in timeline:
             print(f"  {hms(t['start'])}-{hms(t['end'])} {t['region']} ({t['hits']} amostras com o rosto,"
                   f" {t['how']})", file=sys.stderr)
     if a.json:
         out = {"video": found[0], "tiles": a.tiles, "min_score": score, "samples_arg": a.samples, "fps": fps,
-               "duration_s": duration, "size": [W, H], "samples": n, "calls": st["calls"],
+               "duration_s": duration, "probe": probe_info, "size": [W, H], "samples": n, "calls": st["calls"],
                "decode_s": st["decode"], "detect_s": st["detect"], "window_s": win_s,
                "loop_s": loop_s, "total_s": total_s, "min_per_hour": per_h,
                "regions": regions, "groups": report, "timeline": timeline}

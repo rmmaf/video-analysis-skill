@@ -53,7 +53,8 @@ are those of `SKILL.md`, with the same pre-approved prefix.
 - **What to do:** `/video-analysis setup`. Right after installing something, the new PATH only applies in
   a reopened Claude Code. `workspace_not_writable` is the central folder without write access (step 3 of
   the setup); `incomplete_install` is the skill folder without the whole of `scripts\va`: reinstall the
-  skill.
+  skill. `missing_dependency` starting with `webcam_timeline: on` is the DeepFace environment, which only
+  `on` requires: step 6 of the setup creates it, or run without the option (`auto` goes on without it).
 
 ### A video failed (exit code 4)
 
@@ -88,9 +89,15 @@ are those of `SKILL.md`, with the same pre-approved prefix.
 
 ### The prepare seems stuck right at the start
 
-- **Cause:** another `prepare.py` is using the same video (cache lock). It waits up to 30 min; a lock with
-  no sign of life for 10 min is discarded.
-- **What to do:** wait, or check whether there is another run of the same video in progress.
+- **Cause:** another `prepare.py` is using the same video (cache lock). It waits up to 30 min (4 h for
+  the webcam timeline); a lock with no sign of life for 10 min is discarded, like the one a `prepare.py`
+  killed in the task manager leaves (the `webcam_mask.py` it ran stops with it). Or the webcam timeline is
+  being made: with the DeepFace environment, a video without one in the cache gets it before the
+  extraction (the log says `webcam timeline with DeepFace`), up to about 24 min per hour of 1080p video
+  when a face shows up.
+- **What to do:** wait, or check whether there is another run of the same video in progress. The
+  estimate already counts the timeline (`videos[].webcam_timeline.estimate_s`); `--webcam-timeline off`
+  skips it in a call.
 
 ### Strange characters in the output, or `python` opens the Microsoft Store
 
@@ -122,8 +129,25 @@ are those of `SKILL.md`, with the same pre-approved prefix.
   `--sensitivity low`. The subtitles come from the cache; the frames are extracted again. Details in
   [`parameters.md`](parameters.md).
 - **Webcam in only part of the call** (camera alone at the start, a screen share later): a fixed region
-  also hides the shared content in that area. Use `ignore_timeline` with the file of
-  `scripts/webcam_mask.py --timeline` (region over time, in [`parameters.md`](parameters.md)).
+  also hides the shared content in that area. With the DeepFace environment (step 6 of the setup), the
+  skill already masks each webcam only while it is on screen (`webcam_timeline`); without it, use
+  `ignore_timeline` with the file of `scripts/webcam_mask.py --timeline` (region over time, in
+  [`parameters.md`](parameters.md)). A webcam that shows up only briefly can escape the probe:
+  `--webcam-timeline on` runs the full scan anyway.
+
+### `webcam timeline failed` or `webcam timeline skipped` warning
+
+- **Cause:** `failed` (in the video's warnings): `webcam_mask.py` stopped with an error; the end of its
+  report comes in the warning, and the whole of it in `webcam_mask.log`, in
+  `cache\<slug>-<fp8>\webcam-<h8>\`. `skipped` (in `warnings`): the DeepFace environment exists but is
+  not the setup's: a package missing, a broken Python, another deepface version, or the YuNet weights
+  missing or damaged.
+- **What to do:** nothing for this run: the frames were extracted without the timeline, as before the
+  option. `/video-analysis setup` checks the environment with a detection, and its step 6
+  (`--install-deepface`) repairs it: it installs what is missing, downloads damaged weights again and,
+  when the detection fails, reinstalls deepface. The same goes for a `failed` whose report points to
+  DeepFace or its libraries (an `ImportError`, a DLL that does not load). A failed timeline is not kept:
+  the next run of the video tries again; `--webcam-timeline off` skips it.
 
 ### A small change did not become a frame
 

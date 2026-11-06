@@ -19,6 +19,7 @@ PARSER_VERSION = "vtt-1.0"      # VTT parser and cue repairs (cues-<h8>)
 VTT_VERSION = PARSER_VERSION    # alias: spec section 7 calls it VTT_VERSION
 RENDER_VERSION = "render-1.1"   # alignment, batching, batch_NNN.md/json, transcript, sheets (batches-<h8>)
                                 # 1.1 = the " (revisita de Fxxxx)" path marker is the same in every language
+WEBCAM_VERSION = "webcam-1.1"   # webcam timeline of scripts/webcam_mask.py with DeepFace (webcam-<h8>)
 
 SCHEMA_VERSION = 1              # workflow_args["schema_version"]
 
@@ -202,6 +203,31 @@ BATCH_DEFAULTS = {
     # range: None = the whole frames range; [t0, t1] seconds = batch only the frames that
     # overlap it (own batches stage over the whole-video cache, numbering restarts at 001)
     "range": None,
+}
+
+# --- webcam timeline (scripts/webcam_mask.py, in the DeepFace environment) -----------------
+
+WEBCAM_MODES = ["auto", "on", "off"]   # auto: probe, then the full scan only if a face shows up
+WEBCAM_DEFAULTS = {
+    "mode": "auto",
+    "env_name": "deepface-env",     # %USERPROFILE%\<this>, or the folder in VA_DEEPFACE_ENV
+    "deepface_version": "0.0.104",  # what webcam_mask.py was measured with; the setup installs it, and
+                                    # prepare.py runs no other (it is in the timeline's cache key)
+    "yunet_weights": "face_detection_yunet_2023mar.onnx",   # in <DEEPFACE_HOME or ~>\.deepface\weights
+    # where deepface 0.0.104 downloads them from, and their SHA-256 (the one opencv_zoo publishes for the file,
+    # 232,589 bytes): a damaged copy is downloaded again, and the hash is in the timeline's cache key too
+    "yunet_url": "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/"
+                 "face_detection_yunet_2023mar.onnx",
+    "yunet_sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+    "probe_samples": 60,            # the probe: up to 60 frames spread over the video,
+    "probe_every_s": 10.0,          # one every 10 s in a video shorter than 10 min
+    # Rough cost model, from the measurements on a 4-core laptop CPU (reference/parameters.md):
+    # 640x540 tiles half overlapping (15 in a 1080p frame), one sample every 2 s in the full scan.
+    "startup_s": 10.0,              # Python, DeepFace and YuNet loading (7 s measured)
+    "detect_s_per_tile": 0.05,      # one YuNet call (0.04 idle, 0.06 with the machine busy)
+    "decode_s_per_mpx": 0.0008,     # the full scan decodes every frame: 0.1 s per second of 1080p60
+    "probe_seek_s": 0.35,           # one seek and read in the probe (0.13 to 0.40 s measured)
+    "lock_wait_s": 4 * 3600.0,      # another prepare.py making the same timeline: wait up to this
 }
 
 # --- agentic layer (plan, unified contract) ---------------------------------------------

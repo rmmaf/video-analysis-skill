@@ -414,6 +414,199 @@ def test_ignore_timeline_reaches_only_its_video(sb, capsys):
     assert code == 2 and env["error"]["code"] == "invalid_option" and "not among the videos" in env["error"]["detail"]
 
 
+# --- the webcam timeline (scripts/va/webcam.py) ---------------------------------------------------------
+
+SPAN = {"start": 0, "end": 40, "region": "0.8,0,0.2,0.2"}
+
+
+def deepface_ok(**fields) -> dict:
+    return {"id": "deepface", "ok": True, "state": "ok", "env": "C:/deepface-env", "python": sys.executable,
+            "version": "0.0.104", "expected": "0.0.104", "weights": True, "detail": "deepface 0.0.104 in C:/deepface-env",
+            **fields}
+
+
+@pytest.fixture
+def deepface(sb, monkeypatch):
+    """A working DeepFace environment and an in-process webcam_mask.py driven by the fake video's spec:
+    "webcam" (the spans of the webcam it finds; without it the probe sees no face) and "webcam_fail"."""
+    statuses = []
+
+    def mask(cmd, log_path, env=None):
+        args = cmd[3:]                                  # [python, -B, webcam_mask.py, video, ...]
+        video, out = Path(args[0]), Path(args[args.index("--timeline") + 1])
+        probe = int(args[args.index("--probe") + 1]) if "--probe" in args else 0
+        spec = json.loads(video.read_text(encoding="utf-8"))
+        with open(sb.calls, "a", encoding="utf-8") as fh:
+            fh.write(f"webcam {out.parent.parent.name} {out.parent.name}\n")
+        Path(log_path).write_text(f"sondagem {probe}\no OpenCV nao abriu o video\n", encoding="utf-8")
+        if spec.get("webcam_fail"):
+            return 1
+        spans = spec.get("webcam") or []
+        write_json(out, {"video": str(video), "made_by": "webcam_mask.py", "scan": "probe" if probe and not spans else "full",
+                         "probe": {"targets": probe, "samples": probe, "complete": True} if probe else None,
+                         "ignore_timeline": spans})
+        return 0
+
+    monkeypatch.setattr(environment, "deepface_status", lambda *a, **k: statuses.append(1) or deepface_ok())
+    monkeypatch.setitem(cache.STAGE_OVERRIDES, "run_webcam_mask", mask)
+    return SimpleNamespace(statuses=statuses)
+
+
+def camera_video(sb, name="com camera", **spec) -> Path:
+    fake_vtt(sb.vids / "chamadas" / f"{name}.vtt")
+    return fake_video(sb.vids / "chamadas" / f"{name}.mp4", **spec)
+
+
+def test_webcam_timeline_auto_makes_it_once_and_reuses_it(sb, capsys, deepface):
+    """auto with the DeepFace environment: the timeline is made before the frames (a probe; the full scan
+    only with a face), its spans reach the frames params, and the next run takes it from the cache."""
+    cam = camera_video(sb, webcam=[SPAN])
+    code, env, err = run_cli(capsys, "--request", write_request(sb, [cam, sb.v2]))
+    assert code == 0, env
+    assert calls(sb) == ["webcam", "webcam", "cues", "frames", "batches", "cues", "frames", "batches"]
+    w1, w2 = (v["webcam_timeline"] for v in env["videos"])
+    assert (w1["state"], w1["scan"], w1["spans"], w1["estimate_s"], w1["detail"]) == ("made", "full", 1, None, None)
+    assert w1["path"].endswith("/timeline.json") and "/cache/com-camera-" in w1["path"] and w1["seconds"] >= 0
+    assert (w2["state"], w2["scan"], w2["spans"]) == ("made", "probe", 0)          # no face: an empty timeline
+    assert (Path(w2["path"]).parent / "webcam_mask.log").read_text(encoding="utf-8").startswith("sondagem 45\n")
+    assert "webcam timeline: 1 span(s) (full" in err and env["warnings"] == []
+    run_dir = Path(env["run_dir"])
+    rj = read_json(run_dir / "run.json")
+    assert rj["videos"][0]["params"]["frames"]["ignore_timeline"] == [[0.0, 40.0, 0.8, 0.0, 0.2, 0.2]]
+    assert "ignore_timeline" not in rj["videos"][1]["params"]["frames"]
+    assert rj["options"]["webcam_timeline"] == "auto" and rj["videos"][0]["webcam_timeline"] == w1
+    md = (run_dir / "objective.md").read_text(encoding="utf-8")
+    assert f"- ignorar_linha_do_tempo: {w1['path']} (1 trecho(s), vídeo com camera.mp4, DeepFace)\n" in md
+    assert "linha_do_tempo_webcam" not in md and md.count("ignorar_linha_do_tempo") == 1
+    # the next run: everything from the cache, and DeepFace is not even checked
+    deepface.statuses.clear(), reset_calls(sb)
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [cam, sb.v2], objective="Outra pergunta."))
+    assert code == 0 and calls(sb) == [] and deepface.statuses == []
+    assert [(v["webcam_timeline"]["state"], v["webcam_timeline"]["spans"]) for v in env["videos"]] == [("cached", 1),
+                                                                                                    ("cached", 0)]
+    assert all(v["cache_hit"] == {"cues": True, "frames": True, "batches": True} for v in env["videos"])
+    # off: the video with a webcam goes back to the frames without the timeline; the empty one keeps its cache
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [cam, sb.v2], options={
+        "roles": "inline", "webcam_timeline": "off"}))
+    assert code == 0 and calls(sb) == ["frames", "batches"] and deepface.statuses == []
+    assert [v["webcam_timeline"]["state"] for v in env["videos"]] == ["off", "off"]
+    assert "- linha_do_tempo_webcam: off\n" in (Path(env["run_dir"]) / "objective.md").read_text(encoding="utf-8")
+
+
+def test_webcam_timeline_without_the_environment(sb, capsys):
+    """No DeepFace environment (the sandbox's USERPROFILE has none): auto changes nothing, silently; on
+    stops with exit 3 already in the estimate, pointing to the setup."""
+    code, env0, _ = run_cli(capsys, "--request", write_request(sb, [sb.v1, sb.v2], options={
+        "roles": "inline", "webcam_timeline": "off"}))
+    assert code == 0
+    reset_calls(sb)
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [sb.v1, sb.v2]))
+    assert code == 0 and calls(sb) == [] and env["warnings"] == []
+    assert [v["webcam_timeline"]["state"] for v in env["videos"]] == ["unavailable", "unavailable"]
+    assert env["videos"][0]["webcam_timeline"]["detail"].startswith("no DeepFace environment at ")
+    keys = lambda e: [v["keys"] for v in read_json(Path(e["run_dir"]) / "run.json")["videos"]]  # noqa: E731
+    assert keys(env) == keys(env0)
+    for extra in (["--estimate"], []):
+        req = write_request(sb, [sb.v1], options={"roles": "inline", "webcam_timeline": "on"})
+        code, env, _ = run_cli(capsys, "--request", req, *extra)
+        assert code == 3 and env["error"]["code"] == "missing_dependency"
+        assert env["error"]["detail"].startswith("webcam_timeline: on, but no DeepFace environment at ")
+        assert "/video-analysis setup (step 6" in env["error"]["detail"]
+    assert (sb.requests / "request.error.md").exists()
+
+
+def test_broken_environment_is_a_warning(sb, capsys, monkeypatch):
+    monkeypatch.setattr(environment, "deepface_status",
+                        lambda *a, **k: deepface_ok(ok=False, state="broken", detail="C:/deepface-env lacks cv2"))
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [sb.v1, sb.v2]))
+    assert code == 0 and env["warnings"] == ["webcam timeline skipped: C:/deepface-env lacks cv2 (run /video-analysis setup)"]
+    assert [(v["webcam_timeline"]["state"], v["webcam_timeline"]["detail"]) for v in env["videos"]] == \
+        [("unavailable", "C:/deepface-env lacks cv2")] * 2
+
+
+def test_webcam_timeline_on_replaces_a_probe(sb, capsys, deepface):
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [sb.v2]))
+    assert code == 0 and env["videos"][0]["webcam_timeline"]["scan"] == "probe"
+    reset_calls(sb)
+    req = write_request(sb, [sb.v2], options={"roles": "inline", "webcam_timeline": "on"})
+    code, env, _ = run_cli(capsys, "--request", req)
+    w = env["videos"][0]["webcam_timeline"]
+    assert code == 0 and (w["state"], w["scan"], w["spans"]) == ("made", "full", 0)
+    assert calls(sb) == ["webcam"]                         # no span: the frames key does not change
+    assert (Path(w["path"]).parent / "webcam_mask.log").read_text(encoding="utf-8").startswith("sondagem 0\n")
+    reset_calls(sb)
+    for mode in ("on", "auto"):                            # a full scan serves both
+        code, env, _ = run_cli(capsys, "--request", write_request(sb, [sb.v2], options={"roles": "inline",
+                                                                                       "webcam_timeline": mode}))
+        assert code == 0 and calls(sb) == [] and env["videos"][0]["webcam_timeline"]["state"] == "cached"
+
+
+def test_webcam_timeline_failure_is_a_warning(sb, capsys, deepface):
+    cam = camera_video(sb, "quebrado", webcam_fail=True)
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [cam]))
+    assert code == 0 and calls(sb) == ["webcam", "cues", "frames", "batches"]
+    w = env["videos"][0]["webcam_timeline"]
+    assert (w["state"], w["spans"], w["path"]) == ("failed", None, None)
+    assert w["detail"] == "webcam_mask.py exited with 1: sondagem 30 | o OpenCV nao abriu o video"
+    assert env["videos"][0]["warnings"] == [f"webcam timeline failed ({w['detail']}); frames extracted without it"]
+    reset_calls(sb)
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [cam]))   # nothing kept: it tries again
+    assert code == 0 and calls(sb) == ["webcam"] and env["videos"][0]["webcam_timeline"]["state"] == "failed"
+    # on asks for the full scan, but a failure along the way is still a warning (exit 3 is only for a
+    # missing environment, checked before anything runs): the frames are the ones without the timeline
+    reset_calls(sb)
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [cam], options={"roles": "inline",
+                                                                                 "webcam_timeline": "on"}))
+    w = env["videos"][0]["webcam_timeline"]
+    assert code == 0 and env["ok"] is True and calls(sb) == ["webcam"]
+    assert (w["state"], w["scan"]) == ("failed", "full")
+    assert w["detail"] == "webcam_mask.py exited with 1: sondagem 0 | o OpenCV nao abriu o video"
+    assert env["videos"][0]["warnings"] == [f"webcam timeline failed ({w['detail']}); frames extracted without it"]
+    assert env["videos"][0]["cache_hit"] == {"cues": True, "frames": True, "batches": True}
+
+
+def test_an_empty_given_timeline_turns_the_automatic_one_off(sb, capsys, deepface):
+    """A video's own ignore_timeline file prevails even with no span: no DeepFace, and the frames of the
+    video without a timeline."""
+    cam = camera_video(sb, webcam=[SPAN])
+    tl = sb.tmp / "linhas" / "vazia.json"
+    tl.parent.mkdir()
+    write_json(tl, {"video": as_posix(cam), "ignore_timeline": []})
+    req = write_request(sb, [cam], options={"roles": "inline", "ignore_timeline": as_posix(tl)})
+    code, env, _ = run_cli(capsys, "--request", req)
+    assert code == 0 and "webcam" not in calls(sb) and deepface.statuses == []
+    assert env["videos"][0]["webcam_timeline"] == {"state": "given", "scan": None, "spans": 0, "path": None,
+                                                   "seconds": None, "estimate_s": None, "detail": None}
+    rj = read_json(Path(env["run_dir"]) / "run.json")
+    assert "ignore_timeline" not in rj["videos"][0]["params"]["frames"]
+    md = (Path(env["run_dir"]) / "objective.md").read_text(encoding="utf-8")
+    assert md.count("ignorar_linha_do_tempo") == 1 and "(0 trecho(s), vídeo com camera.mp4)" in md
+
+
+def test_webcam_estimate_and_a_given_timeline(sb, capsys, deepface):
+    """The estimate counts the timeline to make (the worst case: probe and full scan) and runs nothing; a
+    video with its own ignore_timeline file keeps it and gets no automatic timeline."""
+    tl = sb.tmp / "linhas" / "venda.json"
+    tl.parent.mkdir()
+    write_json(tl, {"video": as_posix(sb.v2), "ignore_timeline": [SPAN]})
+    cam = camera_video(sb, webcam=[SPAN])
+    opts = {"roles": "inline", "ignore_timeline": as_posix(tl)}
+    req = write_request(sb, [cam, sb.v2], options=opts)
+    code, est, _ = run_cli(capsys, "--request", req, "--estimate")
+    assert code == 0 and req.exists() and calls(sb) == [] and deepface.statuses == [1]
+    w1, w2 = (v["webcam_timeline"] for v in est["videos"])
+    assert (w1["state"], w1["scan"], w1["spans"]) == ("pending", "probe", None) and w1["estimate_s"] > 60
+    assert w2 == {"state": "given", "scan": None, "spans": 1, "path": None, "seconds": None, "estimate_s": None,
+                  "detail": None}
+    assert est["estimate"]["seconds"] >= w1["estimate_s"] + est["videos"][0]["estimate_s"]
+    assert est["estimate"]["batches"] is None                   # the frames of the camera video will change
+    code, env, _ = run_cli(capsys, "--request", req)
+    assert code == 0 and calls(sb).count("webcam") == 1
+    assert [v["webcam_timeline"]["state"] for v in env["videos"]] == ["made", "given"]
+    rj = read_json(Path(env["run_dir"]) / "run.json")
+    assert [v["params"]["frames"]["ignore_timeline"] for v in rj["videos"]] == [[[0.0, 40.0, 0.8, 0.0, 0.2, 0.2]]] * 2
+
+
 def test_warm_run_needs_no_ffprobe_and_no_tool_check(sb, capsys, monkeypatch):
     """Integration (design §9, warm cache <= 2 s per video): a fully cached video is answered from
     the cache. probe.json replaces ffprobe and neither ffmpeg nor ffprobe is checked; a stage to

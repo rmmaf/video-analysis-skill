@@ -291,6 +291,7 @@ def test_deepface_status_needs_intact_weights(tmp_path, monkeypatch, weights, co
     monkeypatch.setenv("VA_DEEPFACE_ENV", str(tmp_path / "env"))
     st = environment.deepface_status(python=sys.executable)
     assert st["ok"] is False and st["problem"] == "weights" and needle in st["detail"] and st["weights"] is False
+    assert st["weights_path"] == weights.as_posix()       # under DEEPFACE_HOME, which the fixture moved
     assert environment.weights_state(weights) == ("missing" if content is None else "damaged")
 
 

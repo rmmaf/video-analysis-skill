@@ -2,16 +2,21 @@
 
 Source of truth: the "Unified contract" section of `docs/plan.md`. The schemas and the return hold as
 they are in `workflow/video-analysis.js`; this page repeats them for reference. Every path in JSON and in
-the generated `.md` files is absolute and uses `/` (`C:/Users/digom/...`).
+the generated `.md` files is absolute and uses `/` (`C:/Users/<user>/...`). In the examples, `<user>`
+stands for the Windows user folder (`%USERPROFILE%`), and `C:/Users/<user>/video-analysis` for the
+central folder (`<home>`): `%USERPROFILE%\video-analysis` by default, or the folder in
+`VIDEO_ANALYSIS_HOME`. Its concrete path is the `home` that `prepare.py` and `check_environment.py --json`
+print; `check_environment.py --paths` prints only `{"home", "claude_home"}`, without checking anything.
 
 ## 1. `request.md`
 
-The main agent writes it with Write to `C:/Users/digom/video-analysis/requests/request.md`. Nothing goes
+The main agent writes it with Write to `<home>/requests/request.md` (by default
+`C:/Users/<user>/video-analysis/requests/request.md`). Nothing goes
 through the shell: a path with spaces and an objective with quotes or colons need no escaping.
 
 ```markdown
 # videos
-C:/Users/digom/Downloads/venda_zero_clientes.mp4
+C:/Users/<user>/Downloads/venda_zero_clientes.mp4
 
 # objective
 Explique o indicador "venda zero clientes": o que é pedido, de onde vem cada dado citado e o que
@@ -60,8 +65,8 @@ given on the command line prevails over the one in the request.
 ## 2. The `prepare.py` command line used by the skill
 
 ```bash
-python "<skill>/scripts/prepare.py" --request "C:/Users/digom/video-analysis/requests/request.md" --estimate
-python "<skill>/scripts/prepare.py" --request "C:/Users/digom/video-analysis/requests/request.md"
+python "<skill>/scripts/prepare.py" --request "C:/Users/<user>/video-analysis/requests/request.md" --estimate
+python "<skill>/scripts/prepare.py" --request "C:/Users/<user>/video-analysis/requests/request.md"
 python "<skill>/scripts/prepare.py" --resume <run_id|run_dir|latest> [--roles agents|inline] [--max-batches N] [--curation plan|batches]
 ```
 
@@ -107,21 +112,21 @@ One JSON line, the last one on stdout. It is also saved to `<run_dir>/prepare.js
 stderr starts with `run_dir: …` and carries the progress; the run's `status.json` is updated every 5 s.
 
 ```json
-{"ok": true, "mode": "prepare", "version": "1.0.0", "home": "C:/Users/digom/video-analysis",
+{"ok": true, "mode": "prepare", "version": "1.0.0", "home": "C:/Users/<user>/video-analysis",
  "run_id": "20261006-153012-venda-zero-clientes",
- "run_dir": "C:/Users/digom/video-analysis/runs/20261006-153012-venda-zero-clientes",
- "json_path": "C:/Users/digom/video-analysis/runs/20261006-153012-venda-zero-clientes/prepare.json",
+ "run_dir": "C:/Users/<user>/video-analysis/runs/20261006-153012-venda-zero-clientes",
+ "json_path": "C:/Users/<user>/video-analysis/runs/20261006-153012-venda-zero-clientes/prepare.json",
  "videos": [{"vid": "v1", "slug": "venda-zero-clientes", "title": "venda_zero_clientes", "duration_s": 441.3,
    "n_frames": 86, "n_batches": 4, "frames_per_min": 11.7, "n_cues": 98, "language": "pt",
    "cache_hit": {"cues": false, "frames": false, "batches": false},
    "timing_s": {"frames": 26.4, "batches": 1.1}, "warnings": [],
    "webcam_timeline": {"state": "made", "scan": "full", "spans": 3,
-     "path": "C:/Users/digom/video-analysis/cache/<slug>-<fp8>/webcam-<h8>/timeline.json",
+     "path": "C:/Users/<user>/video-analysis/cache/<slug>-<fp8>/webcam-<h8>/timeline.json",
      "seconds": 253.2, "estimate_s": null, "detail": null},
    "…": "other fields of summary.json"}],
  "estimate": {"batches": 2, "agents": 4, "seconds": 28},
  "env": {"permissions_ok": true, "agents_current": false, "workflow_current": true},
- "script_path": "C:/Users/digom/.claude/skills/video-analysis/workflow/video-analysis.js",
+ "script_path": "C:/Users/<user>/.claude/skills/video-analysis/workflow/video-analysis.js",
  "workflow_args": {"schema_version": 1, "…": "section 4"},
  "errors": [], "warnings": []}
 ```
@@ -173,9 +178,9 @@ exception is exit code 4 with some video ready, which brings usable `videos` and
 {
   "schema_version": 1,
   "run_id": "20261006-153012-venda-zero-clientes",
-  "run_dir": "C:/Users/digom/video-analysis/runs/20261006-153012-venda-zero-clientes",
-  "objective_path": "C:/Users/digom/video-analysis/runs/20261006-153012-venda-zero-clientes/objective.md",
-  "roles_dir": "C:/Users/digom/video-analysis/roles",
+  "run_dir": "C:/Users/<user>/video-analysis/runs/20261006-153012-venda-zero-clientes",
+  "objective_path": "C:/Users/<user>/video-analysis/runs/20261006-153012-venda-zero-clientes/objective.md",
+  "roles_dir": "C:/Users/<user>/video-analysis/roles",
   "roles_mode": "inline",
   "language": "pt-BR",
   "options": {"max_batches": 2, "max_parallel_videos": 3, "analyst_effort": "high", "curator_effort": "high", "curation": "plan"},
@@ -185,8 +190,8 @@ exception is exit code 4 with some video ready, which brings usable `videos` and
     "title": "venda_zero_clientes",
     "duration": "00:07:21",
     "n_frames": 86,
-    "batches_dir": "C:/Users/digom/video-analysis/cache/venda-zero-clientes-1a2b3c4d/batches-5e6f7a8b",
-    "out_dir": "C:/Users/digom/video-analysis/runs/20261006-153012-venda-zero-clientes/v1",
+    "batches_dir": "C:/Users/<user>/video-analysis/cache/venda-zero-clientes-1a2b3c4d/batches-5e6f7a8b",
+    "out_dir": "C:/Users/<user>/video-analysis/runs/20261006-153012-venda-zero-clientes/v1",
     "batch_images": [20, 19, 21, 22],
     "start_batch": 1,
     "ledger_exists": false,
@@ -254,16 +259,16 @@ language):
 # Lote B004 de 11 · F0055–F0072 · 00:08:55.0–00:10:46.0
 Vídeo: <título> · 00:25:02.8 · 1568×882
 Falantes: S1 = SPEAKER_03 · S3 = SPEAKER_00
-Folha de contato: C:/Users/digom/video-analysis/cache/<slug>-<fp8>/batches-<h8>/sheet_004.jpg
+Folha de contato: C:/Users/<user>/video-analysis/cache/<slug>-<fp8>/batches-<h8>/sheet_004.jpg
 Anterior: B003 (…) · Próximo: B005 (…)
 Leitura: frame vale de início a fim; img = instante da imagem; …
 
 ### F0055 · 00:08:55.0–00:08:59.0 · img 00:08:55.5
-C:/Users/digom/video-analysis/cache/<slug>-<fp8>/frames-<h8>/F0055_000855.jpg
+C:/Users/<user>/video-analysis/cache/<slug>-<fp8>/frames-<h8>/F0055_000855.jpg
 - C0141 00:08:55.2–00:08:58.9 S1: <fala completa, na 1ª vez no lote>
 
 ### F0056 · 00:08:59.0–00:09:05.5 · img 00:08:59.0 · = F0054
-C:/Users/digom/video-analysis/cache/<slug>-<fp8>/frames-<h8>/F0054_000851.jpg (revisita de F0054)
+C:/Users/<user>/video-analysis/cache/<slug>-<fp8>/frames-<h8>/F0054_000851.jpg (revisita de F0054)
 - ↳ C0141
 
 ### F0057 · 00:09:05.5–00:09:10.0 · img 00:09:06.0 · movimento · = F0055 (mesma tela, acima)
@@ -357,14 +362,14 @@ const S_FINAL = { type: 'object', required: ['status', 'report_path', 'answered'
 ```json
 {
   "run_id": "20261006-153012-venda-zero-clientes",
-  "run_dir": "C:/Users/digom/video-analysis/runs/20261006-153012-venda-zero-clientes",
+  "run_dir": "C:/Users/<user>/video-analysis/runs/20261006-153012-venda-zero-clientes",
   "roles_mode": "inline",
   "agents": 4,
   "videos": [{
     "slug": "venda-zero-clientes",
     "title": "venda_zero_clientes",
     "status": "partial",
-    "report_path": "C:/Users/digom/video-analysis/runs/20261006-153012-venda-zero-clientes/v1/relatorio.md",
+    "report_path": "C:/Users/<user>/video-analysis/runs/20261006-153012-venda-zero-clientes/v1/relatorio.md",
     "answered": "partly",
     "summary": "…direct answer to the objective, ≤ 120 words…",
     "batches": {"total": 4, "planned": 2, "from": 1, "ok": 2, "partial": [], "failed": []},
@@ -392,7 +397,7 @@ const S_FINAL = { type: 'object', required: ['status', 'report_path', 'answered'
 ## 7. Central folder
 
 ```
-C:\Users\digom\video-analysis\
+%USERPROFILE%\video-analysis\          (or the folder in VIDEO_ANALYSIS_HOME, or --home)
   cache\<slug>-<fp8>\                   source.json, probe.json, last_used, .lock
     cues-<h8>\                          cues.json, stage.json
     frames-<h8>\                        F0001_hhmmss.jpg…, frames.json, samples.csv, ffmpeg_a.log, ffmpeg_b.log, stage.json

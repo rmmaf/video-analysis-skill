@@ -2,8 +2,8 @@
 """Deterministic preparation for the video-analysis skill: unique frames, subtitles, batches and workflow_args.
 
 From the skill (always the Bash tool, always ``python``, never ``python3``):
-    python prepare.py --request "C:/Users/digom/video-analysis/requests/request.md" --estimate
-    python prepare.py --request "C:/Users/digom/video-analysis/requests/request.md"
+    python prepare.py --request "<home>/requests/request.md" --estimate
+    python prepare.py --request "<home>/requests/request.md"
     python prepare.py --resume <run_id|run_dir|latest> [--roles agents|inline] [--max-batches N] [--curation plan|batches]
 The Portuguese option names of before the rename (--estimar, --papeis, --max-lotes, --curadoria plano|lotes,
 --forcar…) still work.

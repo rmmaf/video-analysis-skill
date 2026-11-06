@@ -5,8 +5,9 @@ This is the procedure for the `setup` command. **No video is analysed in this ca
 whatever is already in place comes out `[OK]` and is skipped.
 
 **What code 0 means:** Python 3.10 or newer, `ffmpeg` and `ffprobe` on PATH, numpy and Pillow installed,
-the central folder `C:\Users\digom\video-analysis\` accepts writes, and the permission rules cover that
-folder. With that, the Workflow's agents read frames and write reports without asking for permission for
+the central folder (`%USERPROFILE%\video-analysis\`, or the folder in `VIDEO_ANALYSIS_HOME`) accepts
+writes, and the permission rules cover that folder. The verifier prints the concrete paths of this
+machine (`home` and `claude_home` in `--json`). With that, the Workflow's agents read frames and write reports without asking for permission for
 each file.
 
 **The installed agents and workflow never come out `[MISSING]`, only `[WARN]`.** Without the copies in
@@ -34,10 +35,14 @@ only if the person accepts the optional step 6):
 
 | what | where | how to undo |
 |---|---|---|
-| the two agent roles | `C:\Users\digom\.claude\agents\video-analysis-*.md` | delete the two files |
-| the saved workflow | `C:\Users\digom\.claude\workflows\video-analysis.js` | delete the file |
-| the permission rules for the central folder | `C:\Users\digom\.claude\settings.json` | restore `settings.json.bak-<date>` |
-| the DeepFace environment and the YuNet weights | `C:\Users\digom\deepface-env\` and `C:\Users\digom\.deepface\weights\` | delete the two folders |
+| the two agent roles | `%USERPROFILE%\.claude\agents\video-analysis-*.md` | delete the two files |
+| the saved workflow | `%USERPROFILE%\.claude\workflows\video-analysis.js` | delete the file |
+| the permission rules for the central folder | `%USERPROFILE%\.claude\settings.json` | restore `settings.json.bak-<date>` |
+| the DeepFace environment and the YuNet weights | `%USERPROFILE%\deepface-env\` and `%USERPROFILE%\.deepface\weights\face_detection_yunet_2023mar.onnx` | delete the environment folder and the YuNet file (the `weights` folder is DeepFace's and may hold other models) |
+
+These are the defaults; `VA_CLAUDE_HOME`, `VA_DEEPFACE_ENV` and `DEEPFACE_HOME` move them. When telling
+the person where something goes, use the paths the verifier printed, not this table: in `--json`,
+`claude_home`, and the `env` and `weights_path` of the `deepface` item.
 
 You also do not accept terms or run an installation that asks for elevation on the person's behalf.
 
@@ -112,8 +117,8 @@ dependency.
 
 ## Step 3 — central folder
 
-The folder `C:\Users\digom\video-analysis\` and its subfolders (`cache`, `runs`, `requests`, `roles`,
-`logs`) are created on first use. The permission rules and `request.md` point to it: do not move it. The
+The central folder (`%USERPROFILE%\video-analysis\`, or the folder in `VIDEO_ANALYSIS_HOME`) and its
+subfolders (`cache`, `runs`, `requests`, `roles`, `logs`) are created on first use. The permission rules and `request.md` point to it: do not move it. The
 `pedidos` subfolder of the earlier version is no longer used; if it is empty, the person may delete it.
 
 If the item comes out `[MISSING]`, the folder exists but does not accept writes. **The person does it:**
@@ -128,9 +133,9 @@ whether an antivirus blocks writing. Then run the verifier again.
 python "<skill folder>/check_environment.py" --install-agents
 ```
 
-- Creates `C:\Users\digom\.claude\agents\`, if it does not exist, and copies `video-analysis-curator.md`
+- Creates `%USERPROFILE%\.claude\agents\`, if it does not exist, and copies `video-analysis-curator.md`
   and `video-analysis-analyst.md` there, from the skill's `agents\` folder.
-- Creates `C:\Users\digom\.claude\workflows\`, if it does not exist, and copies `video-analysis.js`
+- Creates `%USERPROFILE%\.claude\workflows\`, if it does not exist, and copies `video-analysis.js`
   there, from the skill's `workflow\` folder. It is the saved workflow that step 6 of `SKILL.md` calls by
   name, without passing the script inline.
 - If the workflow changed, the verifier warns (`[WARN]`): this session may keep the previous version in
@@ -146,12 +151,15 @@ the skill passes the script inline to the Workflow instead of calling the old co
 Without these rules, every frame an agent opens and every report it writes asks for permission: hundreds
 of prompts per run.
 
-1. **Show the snippet to the person** before writing:
+1. **Show the snippet to the person** before writing, with the rules the verifier printed for this
+   machine: the `rules` of the `permissions` item in `--json` (when the item is `[MISSING]`, the text
+   output also lists them after `--apply-permissions merges:`). For the default central folder of a user whose folder is
+   `C:\Users\<user>`, they are:
 
    ```json
    "permissions": { "allow": [
      "Read(~/video-analysis/**)", "Edit(~/video-analysis/**)", "Write(~/video-analysis/**)",
-     "Read(//c/Users/digom/video-analysis/**)", "Edit(//c/Users/digom/video-analysis/**)", "Write(//c/Users/digom/video-analysis/**)"
+     "Read(//c/Users/<user>/video-analysis/**)", "Edit(//c/Users/<user>/video-analysis/**)", "Write(//c/Users/<user>/video-analysis/**)"
    ]}
    ```
 
@@ -178,7 +186,7 @@ timeline; `--webcam-timeline` in [`SKILL.md`](SKILL.md)).
 **Offer it once**, when `deepface` comes out `[WARN]`, saying what it costs:
 
 - the installation puts DeepFace 0.0.104, ONNX Runtime and OpenCV (without TensorFlow) in
-  `C:\Users\digom\deepface-env\`, a Python environment separate from the skill's, which takes about
+  `%USERPROFILE%\deepface-env\`, a Python environment separate from the skill's, which takes about
   350 MB on disk;
 - then each new video gets a probe of up to 60 frames, about a minute at 1080p. When a face shows up,
   the full scan takes about 24 minutes of CPU per hour of 1080p video (34 with the machine busy), once
@@ -192,8 +200,8 @@ timeline; `--webcam-timeline` in [`SKILL.md`](SKILL.md)).
 python "<skill folder>/check_environment.py" --install-deepface
 ```
 
-- Creates `C:\Users\digom\deepface-env\` with `python -m venv`, installs `deepface==0.0.104` in it and
-  downloads the weights of the YuNet face detector (about 230 KB) to `C:\Users\digom\.deepface\weights\`,
+- Creates `%USERPROFILE%\deepface-env\` with `python -m venv`, installs `deepface==0.0.104` in it and
+  downloads the weights of the YuNet face detector (about 230 KB) to `%USERPROFILE%\.deepface\weights\` (or under `DEEPFACE_HOME`),
   checked by their SHA-256, so that an analysis needs no network. A part already in place is skipped,
   and damaged weights are downloaded again. Then DeepFace runs a detection, always: if it fails, deepface
   is reinstalled with its dependencies (pip again, several minutes) and the detection runs once more.
@@ -201,8 +209,8 @@ python "<skill folder>/check_environment.py" --install-deepface
 - `prepare.py` runs only this version of deepface, with these weights: another version or damaged
   weights come out `[WARN]` here and make the analyses skip the timeline until the repair.
 - If the person declines, leave it: the `[WARN]` stays and blocks nothing. With the environment, an
-  analysis can still skip the timeline with `--webcam-timeline off`; to remove it, delete the two
-  folders of the table above.
+  analysis can still skip the timeline with `--webcam-timeline off`; to remove it, delete the
+  environment folder (`env`) and the YuNet file (`weights_path`) that the verifier printed.
 
 ## When you finish
 

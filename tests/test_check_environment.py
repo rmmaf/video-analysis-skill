@@ -1,7 +1,7 @@
 """check_environment.py (skill root): [OK]/[MISSING]/[WARN], --json, exit 0/1, --install-agents (roles
 and the saved workflow) and --apply-permissions; the old names (verificar_ambiente.py, --install-agents,
 --apply-permissions) still work. Always against a temporary Claude home (--claude-home /
-VA_CLAUDE_HOME) and a temporary USERPROFILE: the real C:\\Users\\digom\\.claude is never touched (checked
+VA_CLAUDE_HOME) and a temporary USERPROFILE: the real %USERPROFILE%\\.claude is never touched (checked
 below)."""
 import importlib.util
 import json
@@ -227,6 +227,24 @@ def test_json_output(sandbox, tools_ok, capsys):
     df = data["items"][9]
     assert df["state"] == "warn" and df["step"] == "6-webcam timeline" and df["version"] is None
     assert df["env"] == (user / "deepface-env").as_posix() and df["expected"] == "0.0.104"
+    assert df["weights_path"] == environment.yunet_weights().as_posix()     # where setup.md says the weights go
+
+
+def test_paths_only_resolves_the_folders(sandbox, capsys, monkeypatch, tmp_path):
+    """--paths, which SKILL.md step 3 runs to find <home>: the two folders and nothing else. No check runs
+    (the DeepFace detection can take minutes) and nothing is created."""
+    user, chome, home = sandbox
+    for name in ("checks", "action_install", "action_permissions", "action_install_deepface"):
+        monkeypatch.setattr(CLI, name, lambda *a, **k: pytest.fail("--paths must not check or act"))
+    code, out = run(capsys, "--paths")
+    assert code == 0 and json.loads(out) == {"home": home.as_posix(), "claude_home": chome.as_posix()}
+    assert not home.exists()
+    monkeypatch.delenv("VIDEO_ANALYSIS_HOME")
+    code, out = run(capsys, "--paths", "--claude-home", tmp_path / "outro")
+    assert json.loads(out) == {"home": (user / "video-analysis").as_posix(), "claude_home": (tmp_path / "outro").as_posix()}
+    with pytest.raises(SystemExit) as exc:
+        run(capsys, "--paths", "--install-agents")
+    assert exc.value.code == 2
 
 
 def test_bad_settings_json_is_not_overwritten(sandbox, tools_ok, capsys):
@@ -286,7 +304,9 @@ def test_old_names_still_work(sandbox, tools_ok, capsys):
 def _deepface(user, **fields) -> dict:
     env = (user / "deepface-env").as_posix()
     st = {"id": "deepface", "ok": True, "state": "ok", "problem": None, "env": env, "python": env + "/Scripts/python.exe",
-          "version": "0.0.104", "expected": "0.0.104", "weights": True, "detail": f"deepface 0.0.104 in {env}"}
+          "version": "0.0.104", "expected": "0.0.104", "weights": True,
+          "weights_path": (user / ".deepface" / "weights" / "face_detection_yunet_2023mar.onnx").as_posix(),
+          "detail": f"deepface 0.0.104 in {env}"}
     return {**st, **fields}
 
 
@@ -323,6 +343,7 @@ def test_install_deepface_action(sandbox, tools_ok, capsys, monkeypatch):
                         lambda: {"env": ok["env"], "done": ["install deepface 0.0.104"], "status": ok})
     code, out = run(capsys, "--install-deepface", "--json")
     action = json.loads(out)["actions"][0]
+    assert item_of(json.loads(out), "deepface")["weights_path"] == ok["weights_path"]
     assert action["id"] == "install-deepface" and action["state"] == "ok" and action["step"] == "6-webcam timeline"
     assert action["detail"] == f"install deepface 0.0.104; DeepFace ran a detection: deepface 0.0.104 in {ok['env']}"
     monkeypatch.setattr(environment, "install_deepface", lambda: {"env": ok["env"], "done": [], "status": ok})

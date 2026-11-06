@@ -1,7 +1,8 @@
 # Problems: symptom, cause and what to do
 
-`prepare.py` writes its progress to `C:\Users\digom\video-analysis\logs\` and its state to
-`runs\<run_id>\status.json`. Its errors come out as `{"ok": false, "error": {"code", "detail"}}`, with exit
+`prepare.py` writes its progress to `<home>\logs\` (`<home>` is the central folder,
+`%USERPROFILE%\video-analysis` by default; its concrete path is the `home` of the `prepare.py` JSON) and
+its state to `runs\<run_id>\status.json`. Its errors come out as `{"ok": false, "error": {"code", "detail"}}`, with exit
 code `2` (input), `3` (environment), `4` (a video failed), `130` (interrupted) or `1` (internal error);
 the table of the `error.code` values is in [`contracts.md`](contracts.md), section 2. An error in the
 prepare renames the request to `request.error.md` (`--estimate` does not touch it). The commands cited here
@@ -211,7 +212,7 @@ are those of `SKILL.md`, with the same pre-approved prefix.
   the tool says there is no workflow with the name `video-analysis`.
 - **Cause:** in `scriptPath`, the tool only accepts the path it returned itself or a file of the session
   folder, never the `script_path` of the skill folder. The name only exists with the workflow saved in
-  `C:\Users\digom\.claude\workflows\video-analysis.js`, which the setup installs (step 4) and which may
+  `%USERPROFILE%\.claude\workflows\video-analysis.js`, which the setup installs (step 4) and which may
   only show up in a reopened Claude Code.
 - **What to do:** now, call the Workflow with `script` = the content of the `script_path` (read with Read,
   without editing) and the same `args`. It costs ~13k tokens; in the same conversation, a later run can
@@ -308,5 +309,5 @@ are those of `SKILL.md`, with the same pre-approved prefix.
 
 - **Cause:** the id does not exist in `runs\` (or is a prefix of more than one run), that run's prepare
   failed before writing `run.json`, or `run.json`/`objective.md` are missing from the run folder.
-- **What to do:** check the id with the user (the runs are in `C:\Users\digom\video-analysis\runs\`); a
+- **What to do:** check the id with the user (the runs are in `<home>\runs\`); a
   run without `run.json` cannot be resumed: run the analysis again, and the cache is reused.

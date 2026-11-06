@@ -4,6 +4,7 @@ Read-only, except with the three action options, which the setup runs after the 
 
     python check_environment.py                        # full check
     python check_environment.py --json                 # same thing, in machine format
+    python check_environment.py --paths                # only {"home", "claude_home"} in JSON: no check, nothing created
     python check_environment.py --install-agents       # copies the 2 roles to ~/.claude/agents and the workflow to ~/.claude/workflows
     python check_environment.py --apply-permissions    # backup of settings.json and merge of the 6 Read/Edit/Write rules
     python check_environment.py --install-deepface     # optional: the DeepFace environment of the webcam timeline (about 350 MB)
@@ -133,7 +134,7 @@ def deepface_item() -> dict:
     """The optional DeepFace environment: [OK] when it has the version the setup installs and intact YuNet
     weights, and runs a detection (a few seconds); [WARN] otherwise (it never makes the setup fail)."""
     df = environment.deepface_status(deep=True)
-    extra = {k: df[k] for k in ("env", "python", "version", "expected", "weights")}
+    extra = {k: df[k] for k in ("env", "python", "version", "expected", "weights", "weights_path")}
     if df["state"] == "absent":
         return item("deepface", "warn", f"optional: {df['detail']}; without it, the skill does not mask the webcam "
                                         "over time (--install-deepface creates it, about 350 MB)", **extra)
@@ -180,6 +181,9 @@ def main(argv: list[str] | None = None) -> int:
     setup_console()
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--json", action="store_true", help="output in JSON")
+    ap.add_argument("--paths", action="store_true",
+                    help="only print the resolved central folder and Claude Code folder, in JSON, and exit 0: "
+                         "no check (no DeepFace detection) and nothing created; the action options are refused")
     ap.add_argument("--install-agents", "--instalar-agentes", dest="install_agents", action="store_true",
                     help="copies the 2 roles to <claude home>/agents and the workflow to <claude home>/workflows")
     ap.add_argument("--apply-permissions", "--aplicar-permissoes", dest="apply_permissions", action="store_true",
@@ -192,6 +196,11 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     home = workspace_home(a.home)
     chome = environment.claude_home(a.claude_home)
+    if a.paths:
+        if a.install_agents or a.apply_permissions or a.install_deepface:
+            ap.error("--paths only prints the folders: run the action options without it")
+        print(json.dumps({"home": as_posix(home), "claude_home": as_posix(chome)}, ensure_ascii=False))
+        return 0
 
     actions = []
     if a.install_agents:

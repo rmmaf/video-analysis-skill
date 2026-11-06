@@ -75,14 +75,17 @@ still work: map them to the ones above.
 2. **Roles.** `agents` if `video-analysis-curator` and `video-analysis-analyst` appear in the list of
    available agent types; otherwise `inline`, which works the same and spends a little more per agent.
    The user's `--roles` option prevails.
-3. **Request.** With Write, save `C:\Users\digom\video-analysis\requests\request.md`; if the file exists,
-   read it first (Write requires it). The objective goes in verbatim, with quotes and line breaks: nothing
+3. **Request.** With Write, save `<home>/requests/request.md`, where `<home>` is the central folder
+   (**Files** section) with `/`, such as `C:/Users/<user>/video-analysis`. Take it from the `home` that
+   `prepare.py` or `check_environment.py` already printed in this conversation; otherwise run
+   `python "${CLAUDE_SKILL_DIR}/check_environment.py" --paths` (instant: it checks nothing) and use its
+   `home`. If the file exists, read it first (Write requires it). The objective goes in verbatim, with quotes and line breaks: nothing
    goes through the shell. In `# options`, with the keys of the table above: `roles` always, `language` if
    the objective is not in Portuguese, and only the other options given.
 
    ```
    # videos
-   C:/Users/digom/Downloads/venda_zero_clientes.mp4
+   C:/Users/<user>/Downloads/venda_zero_clientes.mp4
 
    # objective
    <the user's text, verbatim>
@@ -96,7 +99,7 @@ still work: map them to the ones above.
    `python3`):
 
    ```bash
-   python "${CLAUDE_SKILL_DIR}/scripts/prepare.py" --request "C:/Users/digom/video-analysis/requests/request.md" --estimate
+   python "${CLAUDE_SKILL_DIR}/scripts/prepare.py" --request "<home>/requests/request.md" --estimate
    ```
 
    The estimate does not consume the request; an error here is handled as in step 5. If
@@ -170,8 +173,8 @@ still work: map them to the ones above.
 Which run: the run_id the user gave; otherwise, the `run_id` (or the `run_dir`) that `prepare.py` returned
 in this conversation. With neither of the two, or if the user asked for the most recent one (`latest`),
 be careful: the user runs several sessions, and the most recent one may come from **any** of them. Find
-it with Glob in `C:/Users/digom/video-analysis/runs/*/run.json` (the one whose folder has the greatest
-name, which starts with `YYYYMMDD-HHMMSS`), confirm the run_id with the user and only then run with that
+it with Glob in `<home>/runs/*/run.json`, `<home>` as in step 3: the one whose folder has the greatest
+name, which starts with `YYYYMMDD-HHMMSS`. Confirm the run_id with the user and only then run with that
 id: `--resume` already changes the run's files.
 
 ```bash
@@ -198,7 +201,8 @@ folder: only after the "yes".
 
 ## Files
 
-Central folder `C:\Users\digom\video-analysis\`: `cache\<slug>-<fp8>\` (subtitles, frames, batches and the
+Central folder (`<home>`): `%USERPROFILE%\video-analysis\`, or the folder in `VIDEO_ANALYSIS_HOME`;
+the `home` of `check_environment.py --paths` gives its concrete path. `cache\<slug>-<fp8>\` (subtitles, frames, batches and the
 webcam timeline, reused across runs) · `runs\<YYYYMMDD-HHMMSS>-<slug>\` (combined `relatorio.md`, with 2+ videos; per
 video, `v1\relatorio.md`, `v2\…`, with ledger, prompts and batch reports) · `requests\` · `roles\` ·
 `logs\`. Formats and paths: [`reference/contracts.md`](reference/contracts.md). Errors and warnings:

@@ -168,7 +168,7 @@ def _norm(p: str) -> str:
 
 def workspace_rules(home: str | os.PathLike, uhome: str | os.PathLike | None = None) -> list[str]:
     """The allow rules for the workspace, derived from its real path: ``Tool(~/<rel>/**)`` when it
-    is under the user's home, and ``Tool(//<drive>/<path>/**)``. For C:\\Users\\digom\\video-analysis
+    is under the user's home, and ``Tool(//<drive>/<path>/**)``. For C:\\Users\\<user>\\video-analysis
     these are exactly the 6 rules of the plan."""
     ws = Path(os.path.abspath(home))
     uh = Path(os.path.abspath(uhome)) if uhome is not None else user_home()
@@ -526,14 +526,15 @@ def deepface_status(env_dir: str | os.PathLike | None = None, python: str | os.P
     leaves that proof to webcam_mask.py itself). ``python`` replaces the environment's own (tests).
     ``state``: ok, absent (no Python in the folder) or broken, with ``problem`` (absent, python, modules,
     version, weights or detection; None when ok) for install_deepface; ``version`` of deepface,
-    ``expected`` and ``weights`` (intact) are for check_environment.py."""
+    ``expected``, ``weights`` (intact) and ``weights_path`` (the YuNet file, under DEEPFACE_HOME or the
+    user folder) are for check_environment.py."""
     d = deepface_env_dir(env_dir)
     py = Path(python) if python is not None else deepface_python(d)
     expected, w = WEBCAM_DEFAULTS["deepface_version"], yunet_weights()
     weights = weights_state(w)
     out = {"id": "deepface", "ok": False, "state": "absent", "problem": "absent", "env": as_posix(d),
            "python": as_posix(py), "version": None, "expected": expected, "weights": weights == "ok",
-           "detail": f"no DeepFace environment at {as_posix(d)}"}
+           "weights_path": as_posix(w), "detail": f"no DeepFace environment at {as_posix(d)}"}
 
     def broken(problem: str, detail: str) -> dict:
         out.update(state="broken", problem=problem, detail=detail)

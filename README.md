@@ -109,7 +109,7 @@ above 800, it refuses the run.
    | the curator and analyst roles | `%USERPROFILE%\.claude\agents\video-analysis-*.md` | delete the two files |
    | the saved workflow | `%USERPROFILE%\.claude\workflows\video-analysis.js` | delete the file |
    | the permission rules for the central folder | `%USERPROFILE%\.claude\settings.json` | restore the `settings.json.bak-<date>` |
-   | the DeepFace environment and the YuNet weights | `%USERPROFILE%\deepface-env\` and `%USERPROFILE%\.deepface\weights\` | delete the two folders |
+   | the DeepFace environment and the YuNet weights | `%USERPROFILE%\deepface-env\` and `%USERPROFILE%\.deepface\weights\face_detection_yunet_2023mar.onnx` | delete the folder and the file |
 
 3. Close and reopen Claude Code, so that it loads the agents and the workflow. Start with a short
    analysis, with `--max-batches 1`: it confirms that the run does not ask for permission at every frame.
@@ -263,9 +263,10 @@ Symptoms, causes and fixes, including permissions, agents and Workflow:
 
 ## Known limitations
 
-- **Made for one Windows user.** `SKILL.md`, `setup.md` and the files in `reference/` quote absolute
-  paths under `C:\Users\digom\`. For another user, replace those paths; the Python code uses
-  `%USERPROFILE%` or the `VIDEO_ANALYSIS_HOME` variable.
+- **Windows only.** The setup and the paths assume Windows, but any Windows user can install the
+  skill: the docs name paths as `%USERPROFILE%\...`, the scripts find the folders through
+  `%USERPROFILE%`, `VIDEO_ANALYSIS_HOME` (central folder) and `VA_CLAUDE_HOME` (Claude Code folder),
+  and `check_environment.py` prints the concrete paths.
 - **A change of color alone does not become a frame.** The comparison is in grayscale: a new color with
   the same brightness goes unnoticed.
 - **Tiny changes can be mistaken for the cursor.** A digit or a few letters may not become a frame;

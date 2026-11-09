@@ -63,8 +63,9 @@ The design saves tokens in three places:
 
 - The main agent never opens frames, batches or batch reports. It only sees the JSON from `prepare.py`
   and the final summaries.
-- Only unique frames go to analysis. In the project's measurements, 66% to 91% of the samples were
-  discarded.
+- Only unique frames go to analysis. The September prototype discarded 66% to 91% of the samples; the
+  current engine, with the default masks, discarded 95% to 96% on two meetings
+  ([Frame reduction on two meetings](#frame-reduction-on-two-meetings)).
 - The transcript is read once, by the curator, and summarized in the ledger.
 
 Each video uses one analyst per batch, plus the plan and the report; with two or more videos, one more
@@ -200,6 +201,109 @@ python check_environment.py                                            # checks 
 
 `python scripts/prepare.py --help` lists all the options. The `frames.json` of a video is in
 `cache\<slug>-<fp8>\frames-<h8>\`.
+
+## Frame reduction on two meetings
+
+The masks leave parts of the screen out of the comparison, so that a webcam or a clock does not turn
+every sample into a new frame. Two tests measured how many frames they remove, and whether they hide
+content, on two real meeting recordings. Both ran with `ALGO_VERSION` `dedup-1.1` at 2 samples per
+second. The counts do not depend on how fast the machine is, so no times are given. The earlier
+calibration of the engine is in [`tests/data/calibration.md`](tests/data/calibration.md).
+
+In the tables, the rows to look at are the unique images, "one unique image every" and the image tokens.
+The percentages stay above 99% in every run; [Reading these numbers](#reading-these-numbers) says why.
+
+The terms used below:
+
+- **video frame:** a frame of the video file, at its own frame rate.
+- **sample:** one of the 2 frames per second that the skill decodes and compares. The rest of the video
+  frames are never looked at.
+- **kept frame:** a sample that became a frame of the timeline because the screen changed
+  ([how a frame becomes "unique"](reference/parameters.md#how-a-frame-becomes-unique)).
+- **motion frame:** a kept frame taken while the screen keeps changing (scrolling, typing, a moving
+  webcam), without waiting for it to settle.
+- **revisit:** a kept frame whose screen is the same as an earlier one. It reuses the earlier image.
+- **unique image:** a kept frame that is not a revisit, so unique images = kept frames − revisits. Only
+  these go to the analyst, at 1,792 image tokens each (1568×882).
+- **one unique image every N video frames:** the video frames divided by the unique images.
+- **hot regions mask:** leaves out of the comparison the areas that change by themselves for a long time,
+  such as webcams and the ring around whoever is speaking. The skill always uses it
+  (`--hot-mode windowed`); only the `prepare.py` command line can turn it off, with `--hot-mode off`.
+- **webcam timeline:** with the optional DeepFace environment, finds the faces and leaves each webcam
+  out only while it is on screen, on top of the hot regions mask (`--webcam-timeline`). A face counts when
+  the face detector (YuNet) gives it a score of 0.85 or more. That is the skill's default
+  (`yunet_score_threshold`); DeepFace's own default is 0.9.
+
+### Test video 1: hot regions mask against no mask
+
+A meeting recording of 9 min 04 s, 1080p at 16 frames per second on average (variable frame rate): a
+shared screen with a column of webcams on the right. The test compares the default hot regions mask with
+no mask at all (`--hot-mode off`). `off` is not a mode for normal use: here it is only the reference.
+
+| | no mask | hot regions mask (default) |
+|---|---|---|
+| video frames | 8,713 | 8,713 |
+| samples | 1,089 | 1,089 |
+| kept frames | 92 | 54 |
+| of them, motion frames | 47 | 7 |
+| of them, revisits | 5 | 13 |
+| unique images, sent to the analyst | 87 | 41 |
+| one unique image every | 100 video frames | 213 video frames |
+| video frames that are not a unique image | 99.00% | 99.53% |
+| samples that are not a unique image | 92.01% | 96.24% |
+| image tokens | 155,904 | 73,472 |
+
+The mask cut the kept frames by 41% (92 to 54) and the unique images by 53% (87 to 41). Two things
+happened:
+
+- **Fewer motion frames (47 to 7).** Without the mask, the moving webcams kept the screen from ever
+  settling, so the skill took a motion frame from time to time even when the shared screen was still.
+- **More revisits (5 to 13).** Without the mask, the webcams made every screen look new. With it, a
+  return to a screen already seen was recognized and reused its image. Since unique images = kept frames −
+  revisits, the unique images fell more than the kept frames.
+
+Content check: with the mask, 7 states of the shared screen stayed still for at least 1 s and appeared in
+no unique image. 6 of them were indicators of the meeting app (the highlight of who is speaking, the
+border of the stage) or half-typed text; 1 was a minor status message. No important content was lost.
+
+### Test video 2: webcam timeline on top of the hot regions mask
+
+A meeting recording of 28 min 04 s, 1080p at 60 frames per second: a screen share, then the gallery. The
+test compares the hot regions mask alone with the hot regions mask plus a webcam timeline made with
+`scripts/webcam_mask.py` at score 0.85. The hot regions mask is on in both runs.
+
+| | hot regions mask only | plus webcam timeline, score 0.85 |
+|---|---|---|
+| video frames | 101,034 | 101,034 |
+| samples | 3,368 | 3,368 |
+| kept frames | 204 | 182 |
+| unique images, sent to the analyst | 172 | 154 |
+| one unique image every | 587 video frames | 656 video frames |
+| video frames that are not a unique image | 99.83% | 99.85% |
+| samples that are not a unique image | 94.89% | 95.43% |
+| image tokens | 308,224 | 275,968 |
+
+The webcam timeline cut the kept frames by 10.8% (204 to 182) and the unique images by 10.5% (172 to
+154). With a score of 0.9 instead of 0.85, it left 188 kept frames and 159 unique images (−7.6% unique
+images): the lower score finds more of the small webcams (the choice of the score is in
+[`reference/parameters.md`](reference/parameters.md#through-the-skill-the-options-of-the-call)).
+
+Content check: 51 kept frames differ between the two runs. 42 differ only in a webcam. The other 9 were
+doubtful, but their content appears in a frame of the other run at most 2 s away. No content was lost.
+
+### Reading these numbers
+
+- **The two gains cannot be compared.** Test 1 starts from no mask at all; test 2 starts from the hot
+  regions mask, which was already on. The −53% and the −10.5% measure different steps, and test 2 has no
+  run without masks.
+- **The discard percentage hides the effect.** Sampling and change detection alone already discard 99%
+  or more of the video frames, so a mask barely moves that number (99.00% to 99.53%). The effect shows
+  in "one unique image every N video frames" and in the image tokens, which fell by half in test 1.
+- **`--hot-mode off` is only a reference.** It is there to measure the mask, not to be used.
+- **Two meetings are not every video.** Screen recordings, lectures and other layouts can behave
+  differently.
+- **The content check is not a ground truth.** An agent looked at the images and judged what was
+  missing.
 
 ## Tests
 

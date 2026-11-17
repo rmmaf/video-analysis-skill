@@ -1,4 +1,5 @@
 """Unit tests for va.common and the va package defaults (WP0)."""
+import errno
 import io
 import json
 import os
@@ -262,6 +263,102 @@ def test_atomic_write_cleans_up_on_failure(tmp_path, monkeypatch):
     assert os.listdir(tmp_path) == []
 
 
+_REAL_FDOPEN = os.fdopen
+
+
+class _Cut:
+    """A write that stops after 3 bytes: a full disk (ENOSPC) or Ctrl+C."""
+
+    def __init__(self, fh, exc):
+        self.fh, self.exc = fh, exc
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.fh.close()
+
+    def write(self, data):
+        self.fh.write(data[:3])
+        self.fh.flush()
+        raise self.exc
+
+
+def _cut_write(monkeypatch, exc, nth):
+    calls = []
+
+    def fdopen(fd, *a, **k):
+        calls.append(fd)
+        fh = _REAL_FDOPEN(fd, *a, **k)
+        return _Cut(fh, exc) if len(calls) == nth else fh
+    monkeypatch.setattr(C.os, "fdopen", fdopen)
+
+
+@pytest.fixture(params=["platform", "hard link", "no hard links"])
+def publish(request, monkeypatch):
+    """How atomic_create_bytes publishes: this platform's way (Windows: a rename that refuses an existing name;
+    POSIX: a hard link), a hard link (forced on Windows too: NTFS has them), and a volume without hard links
+    (exFAT, FAT, some shares), where an exclusive create stands in."""
+    if request.param != "platform":
+        monkeypatch.setattr(C, "_RENAME_REPLACES", True)
+    if request.param == "no hard links":
+        def no_links(src, dst):
+            raise OSError(errno.EPERM, "Operation not permitted")
+        monkeypatch.setattr(C.os, "link", no_links)
+    return request.param
+
+
+def test_atomic_create_bytes_never_replaces_a_file(tmp_path, publish):
+    p = tmp_path / "f.vtt"
+    assert C.atomic_create_bytes(p, b"WEBVTT\n\nfirst\n") == p and p.read_bytes() == b"WEBVTT\n\nfirst\n"
+    with pytest.raises(FileExistsError):
+        C.atomic_create_bytes(p, b"second")
+    assert p.read_bytes() == b"WEBVTT\n\nfirst\n" and os.listdir(tmp_path) == ["f.vtt"]  # kept, no temp files left
+    with pytest.raises(FileNotFoundError):
+        C.atomic_create_bytes(tmp_path / "gone" / "f.vtt", b"x")                  # the folder is never created
+    assert os.listdir(tmp_path) == ["f.vtt"]
+
+
+@pytest.mark.parametrize("exc", [OSError(errno.ENOSPC, "No space left on device"), KeyboardInterrupt()],
+                         ids=["full disk", "ctrl+c"])
+def test_atomic_create_bytes_leaves_nothing_when_the_write_fails(tmp_path, monkeypatch, publish, exc):
+    # in the middle of the write: no f.vtt, empty or cut (later runs would take it for a whole one), no temp file
+    for nth in ((1, 2) if publish == "no hard links" else (1,)):                 # 2: the exclusive create's write
+        _cut_write(monkeypatch, exc, nth)
+        with pytest.raises(type(exc)):
+            C.atomic_create_bytes(tmp_path / "f.vtt", b"WEBVTT\n" * 100)
+        assert os.listdir(tmp_path) == []
+
+
+def test_atomic_create_bytes_when_a_file_appears_meanwhile(tmp_path, monkeypatch, publish):
+    # another program writes f.vtt while the bytes go to the temp file: its file is kept, the temp file removed
+    p = tmp_path / "f.vtt"
+
+    def fdopen(fd, *a, **k):
+        p.write_bytes(b"da pessoa")
+        return _REAL_FDOPEN(fd, *a, **k)
+    monkeypatch.setattr(C.os, "fdopen", fdopen)
+    with pytest.raises(FileExistsError):
+        C.atomic_create_bytes(p, b"nossa")
+    assert p.read_bytes() == b"da pessoa" and os.listdir(tmp_path) == ["f.vtt"]
+
+
+def test_atomic_create_bytes_waits_for_a_held_file(tmp_path, monkeypatch):
+    # Windows: antivirus or the indexer holds the new file for a moment, and the rename is tried again
+    monkeypatch.setattr(C, "_RENAME_REPLACES", False)
+    monkeypatch.setattr(C, "_REPLACE_DELAYS", (0.0, 0.0, 0.0))
+    real, tries = C.os.rename, []
+
+    def held(src, dst):
+        tries.append(dst)
+        if len(tries) < 3:
+            raise PermissionError(errno.EACCES, "held by another process")
+        real(src, dst)
+    monkeypatch.setattr(C.os, "rename", held)
+    p = C.atomic_create_bytes(tmp_path / "f.vtt", b"x")
+    assert p.read_bytes() == b"x" and len(tries) == 3 and os.listdir(tmp_path) == ["f.vtt"]
+
+
 # --- paths ------------------------------------------------------------------------------------
 
 @pytest.fixture
@@ -420,7 +517,8 @@ def _walk(obj):
 
 
 DEFAULT_GROUPS = ["DEDUP_DEFAULTS", "SENSITIVITY_PRESETS", "OUTPUT_DEFAULTS", "CUES_DEFAULTS", "BATCH_DEFAULTS",
-                  "WORKFLOW_DEFAULTS", "WORKSPACE_DIRS", "NAMES", "SCHEMA_IDS", "EXIT_CODES"]
+                  "WORKFLOW_DEFAULTS", "WORKSPACE_DIRS", "NAMES", "SCHEMA_IDS", "EXIT_CODES", "TRANSCRIBE_DEFAULTS",
+                  "WHISPER_MODELS", "WEBCAM_DEFAULTS", "SHOTS_DEFAULTS"]
 
 
 @pytest.mark.parametrize("name", DEFAULT_GROUPS)
@@ -432,10 +530,10 @@ def test_defaults_are_plain_json(name):
 
 
 def test_versions():
-    assert va.VERSION == "1.0.0"
+    assert va.VERSION == "1.1.0"
     assert va.SCHEMA_VERSION == 1
     assert va.VTT_VERSION == va.PARSER_VERSION
-    for v in (va.ALGO_VERSION, va.PARSER_VERSION, va.RENDER_VERSION):
+    for v in (va.ALGO_VERSION, va.PARSER_VERSION, va.RENDER_VERSION, va.WEBCAM_VERSION, va.TRANSCRIBE_VERSION):
         assert isinstance(v, str) and v
 
 

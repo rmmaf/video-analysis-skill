@@ -17,7 +17,8 @@ again.
 | `--webcam-timeline on\|off` | the default `auto` needs nothing. `on`: a webcam on screen only briefly escaped the probe (60 frames); `off`: skip DeepFace in this call | `on`: the full scan even when the probe finds no face (about 24 min per hour of 1080p video); `off`: the webcam only goes through the automatic mask |
 | `--range hh:mm:ss-hh:mm:ss` | only one part matters, or to go deeper into a segment of an earlier run | the first segment of a new video still extracts the whole video (it stays in the cache) |
 | `--max-batches N` | to test the objective before the whole run | partial coverage, stated in the report |
-| `--speakers "SPEAKER_01=Name;…"` | the subtitles have generic labels (WhisperX) and you know the names | redoes only the subtitles and the batches, without re-extracting frames |
+| `--speakers "SPEAKER_01=Name;…"` | the subtitles have generic labels (WhisperX, or the skill's own transcription) and you know the names | redoes only the subtitles and the batches, without re-extracting frames |
+| `--num-speakers N`, `--whisper-model`, `--audio-language` | a video without subtitles, which the skill transcribes: [below](#local-transcription-a-video-without-subtitles) | the transcription, once per video; another count redoes only the speakers |
 | `--parallel N` | `1` against rate limits; up to 6 with many short videos | — |
 | `--analyst-effort medium` (or `low`) | to save on a simple video, without a dense screen | measured on 14/10 (13 batches, an Excel screen): `medium` cost ~US$ 0.7 less (−13%), but had ~5 p.p. fewer complete facts and ~3 p.p. less precision |
 | `--curation batches` | a long video in which one batch changes the reading of the next (a demonstration in several steps) | Opus curator before each batch: ≈ 2× the cost (measured: US$ 9.9 vs 5.4 on a 13-batch video, with no recall gain) |
@@ -43,7 +44,7 @@ became 182, two thirds of the frames whose change was inside a webcam went away 
 content was lost.
 
 **The timeline the skill makes** (`webcam_timeline`, default `auto`). When the DeepFace environment of
-the setup exists (step 6 of [`setup.md`](../setup.md)), `prepare.py` makes the timeline of each video
+the setup exists (step 8 of [`setup.md`](../setup.md)), `prepare.py` makes the timeline of each video
 before extracting its frames, with `scripts/webcam_mask.py`. First comes a probe of up to 60 frames spread
 over the video (one every 10 s in a video shorter than 10 min): if no face shows up in the same place in
 2 of them, there is no webcam, the timeline is empty and the full scan does not run. Otherwise the full
@@ -106,6 +107,67 @@ false faces, and at 1 YuNet finds no face. Any other value stops the script befo
 Cost measured on a 4-core laptop CPU, for a 1080p 60 fps call: 24 min per hour of video (34 with the
 machine busy), three quarters of it in the face detection, the same with either score; the extraction of
 the skill takes 3 to 6 min per hour on the same video.
+
+## Local transcription (a video without subtitles)
+
+When a video has no `.vtt` of the same name, `prepare.py` transcribes it with `scripts/transcribe.py`,
+which runs WhisperX 3.8.6 in the transcription environment of the setup (step 6 of
+[`setup.md`](../setup.md)), one video at a time, before the webcam timeline and the extraction. The values
+below are in `TRANSCRIBE_DEFAULTS` (`scripts/va/__init__.py`).
+
+| option | when to use | what it costs |
+|---|---|---|
+| `num_speakers` | always worth giving, and the skill asks for it: it guides pyannote when it splits the voices. `3` when you know it; `2-4` or `4+` when you only know roughly; `1` for a lecture or a monologue (pyannote does not run, and every cue is `SPEAKER_00`); `auto` when nobody knows. The form's `Não sei` gives a range instead: an agent counts the people in 12 screenshots of the video ([`speaker-count.md`](speaker-count.md)): the ones seen speaking are the minimum, the ones in the meeting the maximum | on a transcribed video, another count redoes only the speakers, not the speech: on a CPU, about the length of the video (40% of the whole) |
+| `whisper_model` | `large-v3` on a CPU when `large-v3-turbo` gets names or technical terms wrong; `medium` or `small` for a quicker, rougher pass; `large-v3-turbo` on an NVIDIA GPU that runs out of memory | another model transcribes the video again; on a CPU, `large-v3` takes two to three times as long as `large-v3-turbo` |
+| `audio_language` | the language came out wrong (a warning says when the detection was not confident), or the video mixes languages and one of them should prevail | transcribes the video again |
+
+How a video is transcribed:
+
+1. **Audio.** ffmpeg decodes the audio track at 16 kHz, in memory. A video without an audio track gets
+   empty subtitles, with a warning.
+2. **Language** (`auto`). Whisper's language detection over up to 6 windows of 30 s with speech (voice
+   activity detection) in the first 15 minutes, instead of the first 30 s, which in a call are often
+   silence. Below a probability of 0.6, a warning suggests `audio_language`.
+3. **Speech.** In blocks of about 10 minutes (a video of up to 15 minutes is one block), each cut at the
+   quietest half second within 30 s of its boundary, so that no word is cut in two. Each block is a
+   checkpoint (`partial\chunk_NNN.json`): an interrupted transcription resumes at the first block missing.
+   On a CPU, `int8` with batch 8; on an NVIDIA GPU, `float16` with batch 16, halved at each out-of-memory
+   error, then `int8_float16`, before giving up.
+4. **Words.** The alignment model of the language (wav2vec2; the Portuguese one comes with the setup, the
+   others at their first use) gives each word its time. Without a model for the language, or when the
+   alignment fails, the times stay per segment, with a warning.
+5. **Speakers.** pyannote (`speaker-diarization-community-1`, with the Hugging Face token of step 7 of the
+   setup) splits the audio into turns, with `num_speakers` as the exact, minimum or maximum count. Each word
+   goes to the turn it overlaps the most, or to the nearest one within 1 s; a word without a time (a
+   number, a symbol) takes the speaker of the word before. Without the token, or without access to the
+   model, the subtitles come out without speakers, with a warning.
+6. **Cues.** A new cue at each sentence, at each change of speaker, at a pause of 0.8 s or more, and before
+   going past 8 s or 160 characters: short cues, which the subtitle parser does not need to repair. A
+   word whose speaker was not found is labelled `FALANTE_?`.
+
+The `.vtt` follows the WhisperX style the parser already reads, with the language in its header and a
+`NOTE` that says how it was made (the skill reads the last line of the `NOTE` back):
+
+```text
+WEBVTT
+Language: pt
+
+NOTE
+Legenda gerada automaticamente pela skill video-analysis (WhisperX 3.8.6, large-v3-turbo, idioma pt, falantes: 3). Se você editar este arquivo, a skill não o substitui mais.
+video-analysis: {"asr":"…","content_sha1":"…","diar":"…","diarized":true,"language":"pt","mode":"pyannote","model":"large-v3-turbo",…}
+
+00:00:01.020 --> 00:00:04.310
+SPEAKER_00: Bom dia, vamos começar pela pauta de hoje.
+```
+
+The whole video is transcribed, even with `range`, once: every later run of that video, with any range,
+reuses it. The estimate counts it (`videos[].transcript.estimate_s`) with the cost model in
+`TRANSCRIBE_DEFAULTS["cost"]`: a fixed start plus seconds of work per second of audio, per phase (speech,
+words, speakers) and device. Measured on a 4-core 2017 laptop CPU with `large-v3-turbo` (a 9-min meeting,
+25 min in all): 86 s to start (the imports, the model, the language), then 1.17 s per second of audio for
+the speech, 0.39 for the words and 1.0 for the speakers, 2.7 times the length of the video
+(`tests/data/calibration.md`, section 9). The other models on a CPU are scaled from that one, and the
+NVIDIA figures are not measured.
 
 ## How a frame becomes "unique"
 
@@ -236,9 +298,12 @@ subtitles they come from are redone):
 | new objective, `max_batches`, `parallel`, efforts, `language`, `roles` | only the agents | the whole cache |
 | `range` | the batches of the segment | frames and subtitles of the whole video |
 | `speakers`, edited subtitles | subtitles and batches | frames |
+| another `num_speakers`, on a video the skill transcribed | the speakers (on a CPU, about the length of the video), the `.vtt`, subtitles and batches | the speech and the times of its words, frames |
+| `whisper_model`, `audio_language`, on a video the skill transcribed (the one not given, and the `num_speakers`, stay as the `.vtt` was made: no new question about the speakers) | the transcription, the `.vtt`, subtitles and batches | frames |
+| the `.vtt` the skill generated, edited by the person | subtitles and batches; the skill never replaces it again (a call with `num_speakers`, `whisper_model` or `audio_language` keeps it and warns) | frames, the transcription |
 | `sensitivity`, `ignore_region`, `ignore_timeline`, a webcam timeline with spans (made, or turned `off`) | frames and batches | subtitles |
 | a webcam timeline without spans (no webcam) | nothing | the whole cache |
-| video moved, renamed or edited | everything (another cache key) | — |
+| video moved, renamed or edited | everything (another cache key); the transcription too, if its `.vtt` stayed behind | — |
 
 ## Diagnostics (manual use, by a person)
 

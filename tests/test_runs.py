@@ -120,7 +120,13 @@ def test_normalize_options_all_keys():
                     "curator_effort": "xhigh", "curation": "batches", "language": "en-US", "range": [60.0, 90.5],
                     "speakers": {"SPEAKER_01": "Ana", "SPEAKER_02": "Bruno Silva"}, "sensitivity": "high",
                     "ignore_region": [[0.8, 0.75, 0.2, 0.25], [0.0, 0.0, 0.2, 0.06]], "ignore_timeline": None,
-                    "webcam_timeline": "off"}
+                    "webcam_timeline": "off", "num_speakers": None, "whisper_model": None, "audio_language": None}
+    tx = R.normalize_options({"num_falantes": "3; v2=auto; Reunião.mp4 = 2 a 4", "modelo_whisper": "Turbo",
+                              "idioma_audio": "pt-BR"})
+    assert tx["num_speakers"] == {"all": "3", "videos": {"v2": "auto", "reunião.mp4": "2-4"}}
+    assert (tx["whisper_model"], tx["audio_language"]) == ("large-v3-turbo", "pt")
+    assert R.normalize_options({"numero_de_falantes": "4 ou mais"})["num_speakers"] == {"all": "4+", "videos": {}}
+    assert R.normalize_options({"audio_language": "auto"})["audio_language"] == "auto"
     empty = R.normalize_options({})
     assert set(empty) == set(R.OPTION_KEYS) and all(v is None for v in empty.values())
     assert R.normalize_options({"max_batches": "0"})["max_batches"] is None
@@ -168,6 +174,14 @@ def test_request_option_names():
     ("ignore_region", "0.1,0.1,0,0.2", "fractions"),
     ("webcam_timeline", "sempre", "auto, on, off"),
     ("linha_do_tempo_webcam", "yes", "webcam_timeline: 'yes' is invalid"),
+    ("num_speakers", "dois", "a number (3), a range (2-4), a minimum (4+) or auto"),
+    ("num_speakers", "0", "use 1 to 20"),
+    ("num_speakers", "5-2", "the smaller number first"),
+    ("num_speakers", "3; 4", "two values for every video"),
+    ("num_speakers", "v1=3; v1=2", "appears twice"),
+    ("num_falantes", "=3", "num_speakers: '=3' is invalid"),
+    ("whisper_model", "gigante", "use one of base, base.en"),
+    ("audio_language", "português", "use auto or a code"),
     ("roles", "   ", "empty"),
     ("max_batches", "dois", "max_batches: 'dois' is invalid"),
     ("max_lotes", "dois", "max_batches: 'dois' is invalid"),      # an old key is reported by its new name

@@ -3,7 +3,8 @@
 Conventions
 - Time: integer milliseconds internally. Public time helpers take and return SECONDS unless
   the name ends in ``_ms``. JSON stores seconds with 3 decimals (``ms_to_s``).
-- Files: UTF-8, "\\n" newlines, written atomically (temp file in the same folder + os.replace).
+- Files: UTF-8, "\\n" newlines, written atomically (temp file in the same folder + os.replace;
+  ``atomic_create_bytes`` only where no file is, never over one).
 - Paths written to JSON/MD use forward slashes (``as_posix``); callers make them absolute.
 - Nothing here touches the console or the filesystem at import time.
 """
@@ -27,6 +28,7 @@ from . import NAMES, WORKSPACE_DEFAULT_NAME, WORKSPACE_ENV
 __all__ = [
     "AmbiguousPathError",
     "as_posix",
+    "atomic_create_bytes",
     "atomic_write_bytes",
     "batch_filename",
     "batch_id",
@@ -76,18 +78,22 @@ def setup_console(*, ascii_only: bool = False) -> None:
 # --- files -----------------------------------------------------------------------------
 
 _REPLACE_DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8, 1.6)
+# Windows' os.rename refuses an existing target (FileExistsError); POSIX's replaces it, so there a hard
+# link, which refuses one too, publishes a new file (atomic_create_bytes)
+_RENAME_REPLACES = os.name != "nt"
 
 
-def _replace_with_retry(src: str, dst: Path) -> None:
-    """os.replace with a short backoff: antivirus, the indexer or an open viewer can hold
-    the target for a moment on Windows (spec section 8, item 8)."""
+def _replace_with_retry(src: str, dst: Path, move: Any = None) -> None:
+    """os.replace (or ``move``, such as os.rename) with a short backoff: antivirus, the indexer
+    or an open viewer can hold a file for a moment on Windows (spec section 8, item 8)."""
+    move = move or os.replace
     for delay in _REPLACE_DELAYS:
         try:
-            os.replace(src, dst)
+            move(src, dst)
             return
         except PermissionError:
             time.sleep(delay)
-    os.replace(src, dst)
+    move(src, dst)
 
 
 def atomic_write_bytes(path: str | os.PathLike, data: bytes) -> Path:
@@ -106,6 +112,64 @@ def atomic_write_bytes(path: str | os.PathLike, data: bytes) -> Path:
         except OSError:
             pass
         raise
+    return target
+
+
+def _unlink_quietly(path: str | os.PathLike) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def _open_new(path: str | os.PathLike) -> int:
+    """A file that must not exist yet, opened for binary writing with the mode of a plain create
+    (0o644 less the umask)."""
+    return os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0), 0o644)
+
+
+def atomic_create_bytes(path: str | os.PathLike, data: bytes) -> Path:
+    """Create ``path`` with ``data``, whole or not at all, and never over a file: FileExistsError
+    when one is there or appears meanwhile, and it is kept. The bytes go to a temp file in the
+    same folder (``.<name>.<random>.tmp``), published by a rename that refuses an existing name
+    (Windows) or by a hard link (POSIX), so a full disk, Ctrl+C or a killed process leave no
+    partial file under ``path``. A volume without hard links (exFAT, FAT, some network shares)
+    gets an exclusive create instead, which removes what it wrote when the write fails. The
+    folder must exist. Not mkstemp: its file is private (0o600), and on Windows, in a folder that
+    refuses new files, the mkstemp of an older Python keeps trying names and ends with
+    FileExistsError, which would read as a file that appeared. Returns the path."""
+    target = Path(path)
+    tmp = os.path.join(target.parent, f".{target.name[:40]}.{os.urandom(6).hex()}.tmp")
+    try:
+        fd = _open_new(tmp)
+    except FileExistsError as exc:      # 48 random bits: only a broken random source gets here
+        raise OSError(f"temporary name already taken: {tmp}") from exc
+    linked = False
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        if not _RENAME_REPLACES:
+            _replace_with_retry(tmp, target, os.rename)
+            return target
+        try:
+            os.link(tmp, target)
+            linked = True
+        except FileExistsError:
+            raise
+        except OSError:
+            pass                        # no hard links on this volume: the exclusive create below
+    except BaseException:
+        _unlink_quietly(tmp)
+        raise
+    _unlink_quietly(tmp)                # after the link, the bytes stay under ``target``
+    if not linked:
+        fd = _open_new(target)
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+        except BaseException:
+            _unlink_quietly(target)     # created just above (O_EXCL): never someone else's file
+            raise
     return target
 
 

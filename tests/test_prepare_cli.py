@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import pytest
 
 import prepare
-from va import environment, cache, contracts
+from va import environment, cache, contracts, transcript
 from va.common import as_posix, read_json, write_json
 
 NFD = lambda s: unicodedata.normalize("NFD", s)  # noqa: E731
@@ -201,6 +201,7 @@ def sb(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(user))
     monkeypatch.setenv("VIDEO_ANALYSIS_HOME", str(home))
     monkeypatch.setenv("VA_CLAUDE_HOME", str(chome))
+    monkeypatch.delenv("VA_WHISPERX_ENV", raising=False)   # no transcription environment, unless a test sets one up
     calls = tmp_path / "calls.txt"
     monkeypatch.setenv("VA_FAKE_CALLS", str(calls))
     fakes = load_fakes()
@@ -292,7 +293,7 @@ def test_request_happy_path(sb, capsys, skill_dir):
     code, env, err = run_cli(capsys, "--request", req)
     assert code == 0, env
     assert list(env) == ENVELOPE_KEYS
-    assert env["ok"] is True and env["mode"] == "prepare" and env["version"] == "1.0.0"
+    assert env["ok"] is True and env["mode"] == "prepare" and env["version"] == "1.1.0"
     run_dir = Path(env["run_dir"])
     assert env["run_id"] == run_dir.name and run_dir.is_dir() and env["run_id"].endswith("-repasse-fluxo-de-carga")
     assert err.splitlines()[0] == f"run_dir: {env['run_dir']}"
@@ -511,7 +512,7 @@ def test_webcam_timeline_without_the_environment(sb, capsys):
         code, env, _ = run_cli(capsys, "--request", req, *extra)
         assert code == 3 and env["error"]["code"] == "missing_dependency"
         assert env["error"]["detail"].startswith("webcam_timeline: on, but no DeepFace environment at ")
-        assert "/video-analysis setup (step 6" in env["error"]["detail"]
+        assert "/video-analysis setup (step 8" in env["error"]["detail"]
     assert (sb.requests / "request.error.md").exists()
 
 
@@ -1212,3 +1213,396 @@ def test_jobs_2_spawn_pool_subprocess(sb, skill_dir):
     assert "2 in parallel" in err
     assert sorted(calls(sb)) == sorted(["cues", "frames", "batches"] * 3)
     assert not list((skill_dir / "scripts").rglob("__pycache__"))
+
+
+# --- local transcription (va/transcript.py, scripts/transcribe.py) ------------------------------------------
+
+def whisperx_ok(**fields) -> dict:
+    return {"id": "transcription", "ok": True, "ready": True, "state": "ok", "problem": None, "env": "C:/whisperx-env",
+            "python": sys.executable, "nltk_data": "C:/whisperx-env/nltk_data", "device": "cpu",
+            "default_model": "large-v3-turbo", "token": True, "models": {}, "login_command": "hf auth login",
+            "detail": "whisperx 3.8.6 in C:/whisperx-env (cpu; model large-v3-turbo)", **fields}
+
+
+ASR_SEGMENTS = [
+    {"start": 1.0, "end": 3.0, "text": "Bom dia a todos.",
+     "words": [{"word": "Bom", "start": 1.0, "end": 1.3}, {"word": "dia", "start": 1.3, "end": 1.6},
+               {"word": "a", "start": 1.6, "end": 1.7}, {"word": "todos.", "start": 1.7, "end": 2.2}]},
+    {"start": 4.0, "end": 6.0, "text": "Vamos começar.",
+     "words": [{"word": "Vamos", "start": 4.0, "end": 4.5}, {"word": "começar.", "start": 4.5, "end": 5.4}]},
+]
+
+
+@pytest.fixture
+def whisperx(sb, monkeypatch):
+    """A working transcription environment and an in-process transcribe.py driven by the fake video's spec:
+    "transcribe_fail" (its exit code) and "diar" (what pyannote returns; by default two speakers)."""
+    statuses, runs_ = [], []
+
+    def driver(cmd, log_path, env=None):
+        args = cmd[3:]                                 # [python, -B, transcribe.py, video, ...]
+        opt = {a: args[i + 1] for i, a in enumerate(args) if a.startswith("--") and i + 1 < len(args)}
+        spec = json.loads(Path(args[0]).read_text(encoding="utf-8"))
+        runs_.append({"video": Path(args[0]).name, **opt, "diar": "--diar-out" in opt})
+        with open(sb.calls, "a", encoding="utf-8") as fh:
+            fh.write("transcribe x x\n")
+        Path(log_path).write_text("carregando o modelo\nModuleNotFoundError: No module named 'whisperx'\n",
+                                  encoding="utf-8")
+        if spec.get("transcribe_fail"):
+            return spec["transcribe_fail"]
+        if not Path(opt["--asr-out"]).exists():
+            write_json(opt["--asr-out"], {"schema": "va.asr/1", "complete": True, "model": opt["--model"],
+                                          "language": "pt", "language_probability": 0.98,
+                                          "language_requested": opt["--language"], "device": "cpu", "aligned": True,
+                                          "segments": ASR_SEGMENTS})
+        if "--diar-out" in opt:
+            diar = spec.get("diar") or {"diarized": True, "turns": [[0.5, 3.5, "SPEAKER_00"], [3.8, 6.5, "SPEAKER_01"]]}
+            write_json(opt["--diar-out"], {"complete": True, "key": opt["--diar-key"], "speakers": opt["--speakers"],
+                                           "mode": "pyannote", "reason": None, "created": cache.iso_now(), **diar})
+        return 0
+
+    monkeypatch.setattr(environment, "transcription_status", lambda *a, **k: statuses.append(1) or whisperx_ok())
+    monkeypatch.setitem(cache.STAGE_OVERRIDES, "run_transcribe", driver)
+    return SimpleNamespace(statuses=statuses, runs=runs_)
+
+
+def bare_video(sb, name="reunião sem legenda", folder="sem legenda", **spec) -> Path:
+    return fake_video(sb.vids / folder / f"{name}.mp4", **spec)
+
+
+def test_transcription_estimate_prepare_and_reuse(sb, capsys, whisperx):
+    """A video without subtitles: the estimate says it will be transcribed and that the speaker count is
+    wanted; the prepare transcribes it before anything else, writes the .vtt next to the video and uses it;
+    the next run takes that .vtt like any other, without checking the transcription environment."""
+    video = bare_video(sb, duration_s=600.0)
+    req = write_request(sb, [video])
+    code, est, err = run_cli(capsys, "--request", req, "--estimate")
+    assert code == 0 and whisperx.runs == [] and req.exists()
+    v = est["videos"][0]
+    t = v["transcript"]
+    assert v["vtt_path"] is None and (t["state"], t["phase"], t["model"], t["device"]) == ("pending", "asr", "large-v3-turbo", "cpu")
+    assert t["needs_speakers"] is True and t["speakers"] == "auto" and t["estimate_s"] > 0 and t["candidates"] == []
+    assert est["estimate"]["seconds"] >= t["estimate_s"] + v["estimate_s"] and "local transcription" in err
+    code, env, err = run_cli(capsys, "--request", write_request(sb, [video], options={"roles": "inline", "num_speakers": "3"}))
+    assert code == 0, env
+    assert calls(sb) == ["transcribe", "cues", "frames", "batches"]                 # the subtitles first
+    assert len(whisperx.runs) == 1 and whisperx.runs[0]["--speakers"] == "3" and whisperx.runs[0]["--min-speakers"] == "3"
+    sidecar = video.with_name("reunião sem legenda.vtt")
+    assert sidecar.is_file() and "NOTE\nLegenda gerada automaticamente" in sidecar.read_text(encoding="utf-8")
+    t = env["videos"][0]["transcript"]
+    assert (t["state"], t["language"], t["speakers_found"], t["diarized"]) == ("made", "pt", 2, True)
+    assert t["path"] == t["sidecar"] == as_posix(sidecar) and t["needs_speakers"] is False
+    rj = read_json(Path(env["run_dir"]) / "run.json")
+    rv = rj["videos"][0]
+    assert rv["vtt_path"] == as_posix(sidecar) and Path(rv["transcript"]["run_copy"]).read_bytes() == sidecar.read_bytes()
+    assert rj["options"]["num_speakers"] == "3" and rj["versions"]["transcript"] == "transcript-1.0"
+    md = (Path(env["run_dir"]) / "objective.md").read_text(encoding="utf-8")
+    assert "(transcrição automática: WhisperX large-v3-turbo · pt · 2 falantes anônimos (SPEAKER_00…))" in md
+    assert "- num_falantes: 3\n" in md and "subtitles ready (" in err
+    # the next run: the .vtt next to the video, like any other; no transcription, no status check
+    whisperx.statuses.clear(), reset_calls(sb)
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [video], objective="Outra pergunta."))
+    assert code == 0 and calls(sb) == [] and whisperx.statuses == [] and len(whisperx.runs) == 1
+    assert env["videos"][0]["transcript"]["state"] == "file" and env["videos"][0]["vtt_path"] == as_posix(sidecar)
+    assert env["videos"][0]["cache_hit"] == {"cues": True, "frames": True, "batches": True}
+
+
+def test_transcription_redo_with_other_speakers_reuses_the_asr(sb, capsys, whisperx):
+    video = bare_video(sb)
+    run_cli(capsys, "--request", write_request(sb, [video], options={"roles": "inline", "num_speakers": "3"}))
+    sidecar = video.with_name("reunião sem legenda.vtt")
+    first = sidecar.read_bytes()
+    reset_calls(sb)
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [video], options={"roles": "inline", "num_speakers": "2"}))
+    assert code == 0 and calls(sb) == ["transcribe", "cues", "batches"]          # the frames stay; the cues change
+    note = sidecar.read_text(encoding="utf-8").split("video-analysis: ", 1)[1].split("\n", 1)[0]
+    assert whisperx.runs[-1]["--speakers"] == "2" and json.loads(note)["speakers"] == "2"
+    assert sidecar.read_bytes() != first
+    # a person edits the subtitles: the skill never replaces them again
+    sidecar.write_text(sidecar.read_text(encoding="utf-8").replace("Bom dia", "Bom dia, Ana"), encoding="utf-8")
+    reset_calls(sb)
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [video], options={"roles": "inline", "num_speakers": "4"}))
+    assert code == 0 and "transcribe" not in calls(sb) and "Bom dia, Ana" in sidecar.read_text(encoding="utf-8")
+    assert env["videos"][0]["transcript"]["state"] == "file"
+
+
+def test_transcription_per_video_counts(sb, capsys, whisperx):
+    a, b = bare_video(sb, "a", folder="lote"), bare_video(sb, "b", folder="lote")
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [sb.vids / "lote"], options={
+        "roles": "inline", "num_speakers": "v1=2; b.mp4=auto"}))
+    assert code == 0, env
+    assert [(r["video"], r["--speakers"]) for r in whisperx.runs] == [("a.mp4", "2"), ("b.mp4", "auto")]
+    assert "--min-speakers" not in whisperx.runs[1]
+    assert not any("number of speakers not given" in w for w in env["videos"][1]["warnings"])   # auto was given
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [a, b], options={"roles": "inline", "num_speakers": "v3=2"}))
+    assert code == 2 and env["error"]["code"] == "invalid_option" and "v3 is not a video of this run" in env["error"]["detail"]
+
+
+def test_transcription_without_a_count_warns(sb, capsys, whisperx):
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [bare_video(sb)]))
+    assert code == 0 and whisperx.runs[0]["--speakers"] == "auto"
+    assert "number of speakers not given: pyannote estimated it (num_speakers makes it better)" in env["videos"][0]["warnings"]
+
+
+def test_teams_candidate_is_a_choice(sb, capsys, whisperx):
+    """A Teams transcript saved under the meeting's name: without a speaker count, missing_vtt as before (now
+    saying the transcription is available); with one, the video is transcribed."""
+    folder = sb.vids / "teams"
+    video = fake_video(folder / "Indicador PES-20260610_150844-Gravação de Reunião.mp4")
+    fake_vtt(folder / "Indicador PES.vtt")
+    code, est, _ = run_cli(capsys, "--request", write_request(sb, [video]), "--estimate")
+    t = est["videos"][0]["transcript"]
+    assert code == 0 and t["state"] == "choice" and t["candidates"] == [as_posix(folder / "Indicador PES.vtt")]
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [video]))
+    assert code == 2 and env["error"]["code"] == "missing_vtt" and whisperx.runs == []
+    assert "Or transcribe it here instead: give num_speakers" in env["error"]["detail"]
+    assert env["missing_vtt"][0]["transcription"]["state"] == "ok"
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [video], options={"roles": "inline", "num_speakers": "4"}))
+    assert code == 0 and len(whisperx.runs) == 1
+    assert (folder / "Indicador PES-20260610_150844-Gravação de Reunião.vtt").is_file()
+
+
+def test_transcription_failure_fails_only_that_video(sb, capsys, whisperx):
+    bad = bare_video(sb, "quebrado", transcribe_fail=3)
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [bad, sb.v2], options={"roles": "inline", "num_speakers": "2"}))
+    assert code == 4 and env["error"]["code"] == "video_failed"
+    assert [e["vid"] for e in env["errors"]] == ["v1"]
+    assert env["errors"][0]["detail"].startswith("transcription: the WhisperX environment does not load: run "
+                                                 "/video-analysis setup (step 6 repairs it)")
+    assert "No module named 'whisperx'" in env["errors"][0]["detail"]
+    assert [v["slug"] for v in env["workflow_args"]["videos"]] == ["venda-zero-clientes"]
+    assert not bad.with_suffix(".vtt").exists()
+
+
+def test_transcription_without_access_warns(sb, capsys, whisperx):
+    video = bare_video(sb, diar={"diarized": False, "reason": "no_access", "turns": []})
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [video], options={"roles": "inline", "num_speakers": "2"}))
+    assert code == 0 and env["videos"][0]["transcript"]["diarized"] is False
+    assert any(w.startswith("speakers not separated: the token has no access") for w in env["videos"][0]["warnings"])
+    assert "falantes não separados" in (Path(env["run_dir"]) / "objective.md").read_text(encoding="utf-8")
+
+
+def test_transcription_failed_diarization_is_redone_with_the_same_count(sb, capsys, whisperx, monkeypatch):
+    """pyannote failed for a passing cause (a proxy down): subtitles without speakers. A call without a count
+    uses them as they are; the same num_speakers, once the cause is fixed, redoes only the speakers."""
+    video = bare_video(sb, diar={"diarized": False, "reason": "error: ProxyError: huggingface.co", "turns": []})
+    opts = {"roles": "inline", "num_speakers": "2"}
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [video], options=opts))
+    assert code == 0 and env["videos"][0]["transcript"]["diarized"] is False
+    assert any(w.startswith("speakers not separated: the diarization failed (error: ProxyError")
+               for w in env["videos"][0]["warnings"])
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [video], objective="Outra pergunta."))
+    assert code == 0 and env["videos"][0]["transcript"]["state"] == "file" and len(whisperx.runs) == 1
+    failing = cache.STAGE_OVERRIDES["run_transcribe"]
+
+    def proxy_fixed(cmd, log_path, env=None):                  # pyannote works now
+        code = failing(cmd, log_path, env)
+        out = cmd[cmd.index("--diar-out") + 1]
+        write_json(out, {**read_json(out), "diarized": True, "reason": None,
+                         "turns": [[0.5, 3.5, "SPEAKER_00"], [3.8, 6.5, "SPEAKER_01"]]})
+        return code
+
+    monkeypatch.setitem(cache.STAGE_OVERRIDES, "run_transcribe", proxy_fixed)
+    code, est, _ = run_cli(capsys, "--request", write_request(sb, [video], options=opts), "--estimate")
+    t = est["videos"][0]["transcript"]
+    assert code == 0 and (t["state"], t["phase"]) == ("pending", "diar") and t["estimate_s"] > 0
+    reset_calls(sb)
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [video], options=opts))
+    assert code == 0 and calls(sb) == ["transcribe", "cues", "batches"] and whisperx.runs[-1]["diar"]
+    t = env["videos"][0]["transcript"]
+    assert (t["state"], t["diarized"], t["speakers_found"]) == ("made", True, 2)
+    assert not any("speakers not separated" in w for w in env["videos"][0]["warnings"])
+    sidecar = video.with_name("reunião sem legenda.vtt")
+    assert t["sidecar"] == as_posix(sidecar) and "SPEAKER_01: " in sidecar.read_text(encoding="utf-8")
+
+
+def test_transcription_environment_missing_or_broken(sb, capsys, monkeypatch):
+    video = bare_video(sb)
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [video]))       # the sandbox has none
+    assert code == 2 and env["error"]["code"] == "missing_vtt"
+    assert "/video-analysis setup (step 6 installs the local transcription)" in env["error"]["detail"]
+    assert env["missing_vtt"][0]["transcription"]["state"] == "absent"
+    monkeypatch.setattr(environment, "transcription_status", lambda *a, **k: whisperx_ok(
+        ok=False, state="broken", problem="version", detail="C:/w has whisperx 3.7.4, and the skill uses 3.8.6"))
+    for extra in (["--estimate"], []):
+        code, env, _ = run_cli(capsys, "--request", write_request(sb, [video]), *extra)
+        assert code == 3 and env["error"]["code"] == "missing_dependency" and "3.7.4" in env["error"]["detail"]
+        assert "(step 6 repairs it)" in env["error"]["detail"]
+
+
+def test_skip_missing_does_not_transcribe(sb, capsys, whisperx):
+    folder = sb.vids / "mista"
+    fake_video(folder / "a.mp4")
+    fake_vtt(folder / "a.vtt")
+    fake_video(folder / "b sem legenda.mp4")
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [folder]), "--skip-missing")
+    assert code == 0 and whisperx.runs == [] and whisperx.statuses == []
+    assert [v["slug"] for v in env["workflow_args"]["videos"]] == ["a"]
+
+
+def test_resume_uses_the_run_copy_of_transcribed_subtitles(sb, capsys, whisperx):
+    """The subtitles next to the video deleted and the cache cleaned (--gc): the resume rebuilds the cues from
+    the run's copy, which has the same bytes, so the same keys."""
+    video = bare_video(sb)
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [video], options={"roles": "inline", "num_speakers": "2"}))
+    assert code == 0
+    video.with_name("reunião sem legenda.vtt").unlink()
+    shutil.rmtree(sb.home / "cache")
+    reset_calls(sb)
+    code, res, _ = run_cli(capsys, "--resume", env["run_id"])
+    assert code == 0, res
+    assert sorted(calls(sb)) == ["batches", "cues", "frames"] and len(whisperx.runs) == 1
+
+
+def test_resume_prefers_the_run_copy_when_the_subtitles_were_replaced(sb, capsys, whisperx):
+    """Run A transcribes; run B, with another num_speakers, replaces the subtitles next to the video; the cache
+    is cleaned (--gc); --resume A rebuilds the cues from A's copy, the bytes behind A's keys, not B's file.
+    Subtitles that match neither (edited by a person) are refused instead of being cached under A's keys."""
+    video = bare_video(sb)
+    sidecar = video.with_name("reunião sem legenda.vtt")
+    code, env_a, _ = run_cli(capsys, "--request", write_request(sb, [video], options={"roles": "inline", "num_speakers": "2"}))
+    assert code == 0
+    rv = read_json(Path(env_a["run_dir"]) / "run.json")["videos"][0]
+    run_copy, cues_key_a = Path(rv["transcript"]["run_copy"]), rv["keys"]["cues"]
+    code, _, _ = run_cli(capsys, "--request", write_request(sb, [video], objective="Outra pergunta.",
+                                                            options={"roles": "inline", "num_speakers": "3"}))
+    assert code == 0 and sidecar.read_bytes() != run_copy.read_bytes()             # B replaced the subtitles
+    shutil.rmtree(sb.home / "cache")
+    reset_calls(sb)
+    code, res, _ = run_cli(capsys, "--resume", env_a["run_id"])
+    assert code == 0, res
+    assert sorted(calls(sb)) == ["batches", "cues", "frames"] and len(whisperx.runs) == 2
+    cues_dir = next((sb.home / "cache").glob(f"*/cues-{cues_key_a}"))
+    assert read_json(cues_dir / "stage.json")["inputs"]["vtt"] == as_posix(run_copy)
+    # neither file has A's bytes any more: the resume refuses rather than mixing speech under A's keys
+    run_copy.unlink()
+    shutil.rmtree(sb.home / "cache")
+    reset_calls(sb)
+    code, res, _ = run_cli(capsys, "--resume", env_a["run_id"])
+    assert code != 0 and res["error"]["code"] == "video_failed"
+    assert "the subtitles changed since the run" in res["error"]["detail"] and calls(sb) == []
+    assert not list((sb.home / "cache").glob(f"*/cues-{cues_key_a}/stage.json"))
+
+
+def test_a_run_that_reuses_generated_subtitles_keeps_its_own_copy(sb, capsys, whisperx):
+    """Run A transcribes; run B, another question with no speaker count, reuses the subtitles unchanged; run C,
+    with another num_speakers, replaces them; the cache is cleaned (--gc); --resume B rebuilds the cues from
+    B's copy (legenda.vtt), the bytes behind B's keys. Subtitles the person wrote get no copy."""
+    video = bare_video(sb)
+    sidecar = video.with_name("reunião sem legenda.vtt")
+    code, _, _ = run_cli(capsys, "--request", write_request(sb, [video], options={"roles": "inline", "num_speakers": "2"}))
+    assert code == 0
+    code, env_b, _ = run_cli(capsys, "--request", write_request(sb, [video], objective="Outra pergunta.",
+                                                                options={"roles": "inline"}))
+    assert code == 0
+    rv = read_json(Path(env_b["run_dir"]) / "run.json")["videos"][0]
+    assert rv["transcript"]["state"] == "file" and rv["transcript"]["run_copy"]
+    run_copy, cues_key_b = Path(rv["transcript"]["run_copy"]), rv["keys"]["cues"]
+    assert run_copy == Path(env_b["run_dir"]) / "v1" / "legenda.vtt" and run_copy.read_bytes() == sidecar.read_bytes()
+    assert cache.cues_key(run_copy, rv["params"]["cues"]) == cues_key_b
+    code, _, _ = run_cli(capsys, "--request", write_request(sb, [video], objective="Terceira pergunta.",
+                                                            options={"roles": "inline", "num_speakers": "3"}))
+    assert code == 0 and sidecar.read_bytes() != run_copy.read_bytes()             # C replaced the subtitles
+    shutil.rmtree(sb.home / "cache")
+    reset_calls(sb)
+    code, res, _ = run_cli(capsys, "--resume", env_b["run_id"])
+    assert code == 0, res
+    assert sorted(calls(sb)) == ["batches", "cues", "frames"] and len(whisperx.runs) == 2
+    cues_dir = next((sb.home / "cache").glob(f"*/cues-{cues_key_b}"))
+    assert read_json(cues_dir / "stage.json")["inputs"]["vtt"] == as_posix(run_copy)
+    # subtitles the person wrote (no longer the skill's: edited) are used as they are, with no copy in the run
+    sidecar.write_bytes(sidecar.read_bytes() + b"\n")
+    code, env_d, _ = run_cli(capsys, "--request", write_request(sb, [video], objective="Quarta pergunta.",
+                                                                options={"roles": "inline"}))
+    assert code == 0
+    rv = read_json(Path(env_d["run_dir"]) / "run.json")["videos"][0]
+    assert rv["transcript"]["state"] == "file" and rv["transcript"]["run_copy"] is None
+    assert not (Path(env_d["run_dir"]) / "v1" / "legenda.vtt").exists()
+
+
+def test_generated_subtitles_stay_the_skills_after_gc(sb, capsys, whisperx):
+    """--gc removes the video's cache folder (transcript-export.json with it); the subtitles next to the video
+    are still the skill's: a run that reuses them unchanged keeps its copy, and another model replaces them.
+    Edited, a call with transcription settings keeps them and says so."""
+    video = bare_video(sb)
+    sidecar = video.with_name("reunião sem legenda.vtt")
+    code, _, _ = run_cli(capsys, "--request", write_request(sb, [video], options={"roles": "inline", "num_speakers": "2"}))
+    assert code == 0
+    code, env, _ = run_cli(capsys, "--gc", "0")
+    assert code == 0 and len(env["gc"]["removed"]) == 1 and sidecar.exists()
+    code, env_b, _ = run_cli(capsys, "--request", write_request(sb, [video], objective="Outra pergunta.",
+                                                                options={"roles": "inline"}))
+    assert code == 0
+    rv = read_json(Path(env_b["run_dir"]) / "run.json")["videos"][0]
+    assert rv["transcript"]["state"] == "file" and Path(rv["transcript"]["run_copy"]).read_bytes() == sidecar.read_bytes()
+    run_cli(capsys, "--gc", "0")
+    code, env_c, _ = run_cli(capsys, "--request", write_request(sb, [video], objective="Terceira pergunta.",
+                                                                options={"roles": "inline", "whisper_model": "large-v3"}))
+    assert code == 0 and len(whisperx.runs) == 2 and whisperx.runs[1]["--model"] == "large-v3"
+    assert transcript.read_note(sidecar)["model"] == "large-v3"                    # replaced
+    sidecar.write_bytes(sidecar.read_bytes().replace("Bom dia".encode(), "Boa tarde".encode()))
+    edited = sidecar.read_bytes()
+    code, env_d, _ = run_cli(capsys, "--request", write_request(sb, [video], objective="Quarta pergunta.",
+                                                                options={"roles": "inline", "num_speakers": "3"}))
+    assert code == 0 and len(whisperx.runs) == 2 and sidecar.read_bytes() == edited
+    assert any("changed since" in w and "settings of the call are ignored" in w for w in env_d["warnings"])
+
+
+# --- the speaker count from the images (--speaker-shots; the form's "Não sei") ------------------------------
+
+@pytest.fixture
+def shots(sb, monkeypatch):
+    """A make_shots that records its calls and returns 12 paths in the video's cache (no ffmpeg)."""
+    made = []
+
+    def make(*, video, video_dir, video_key, info):
+        made.append(Path(video).name)
+        d = Path(video_dir) / "shots-abcd1234"
+        if Path(video).name.startswith("quebrado"):
+            raise RuntimeError("ffmpeg took no screenshot of the video")
+        return {"dir": as_posix(d), "paths": [as_posix(d / f"shot_{i:02d}.jpg") for i in range(1, 13)],
+                "times": [10.0 * i for i in range(12)], "size": [1568, 882], "cached": False}
+    monkeypatch.setitem(cache.STAGE_OVERRIDES, "make_shots", make)
+    return made
+
+
+def test_speaker_shots_for_the_videos_answered_dont_know(sb, capsys, whisperx, shots):
+    """--speaker-shots v2: screenshots of that video only, for the agent of reference/speaker-count.md; like
+    --estimate, the request stays, no run is made, nothing is transcribed and no frame is extracted."""
+    a, b = bare_video(sb, name="primeira call"), bare_video(sb, name="segunda call")
+    req = write_request(sb, [a, b])
+    code, env, _ = run_cli(capsys, "--request", req, "--speaker-shots", "v2")
+    assert code == 0 and env["ok"] and env["mode"] == "speaker_shots" and shots == ["segunda call.mp4"]
+    v = env["videos"]
+    assert [x["vid"] for x in v] == ["v2"] and v[0]["title"] == "segunda call" and v[0]["duration"] == "00:05:00"
+    assert len(v[0]["shots"]["paths"]) == 12 and v[0]["shots"]["paths"][0].endswith("/shots-abcd1234/shot_01.jpg")
+    assert env["run_id"] is None and env["workflow_args"] is None and env["estimate"] is None
+    assert req.exists()
+    assert not (sb.home / "runs").exists() or not any((sb.home / "runs").iterdir())
+    assert whisperx.runs == [] and calls(sb) == []
+    # without a vid list: every video of the request
+    code, env, _ = run_cli(capsys, "--request", req, "--speaker-shots")
+    assert code == 0 and [x["vid"] for x in env["videos"]] == ["v1", "v2"]
+    # the range the agent answers goes into the request, and the prepare transcribes with it
+    write_request(sb, [a, b], options={"roles": "inline", "num_speakers": "v1=3; v2=4-12"})
+    code, env, _ = run_cli(capsys, "--request", req)
+    assert code == 0 and [r.get("--speakers") for r in whisperx.runs] == ["3", "4-12"]
+    assert [r.get("--min-speakers") for r in whisperx.runs] == ["3", "4"]
+    assert [r.get("--max-speakers") for r in whisperx.runs] == ["3", "12"]
+
+
+def test_speaker_shots_refusals_and_failures(sb, capsys, whisperx, shots):
+    a = bare_video(sb, name="call")
+    req = write_request(sb, [a])
+    code, env, _ = run_cli(capsys, "--request", req, "--speaker-shots", "v3")
+    assert code == 2 and env["error"]["code"] == "invalid_option" and "v3 is not a video" in env["error"]["detail"]
+    for extra in (["--estimate"], ["--resume", "latest"]):
+        code, env, _ = run_cli(capsys, "--request", req, "--speaker-shots", *extra)
+        assert code == 2 and env["error"]["code"] == "invalid_usage"
+    assert req.exists() and shots == []                                # refused before anything: the request stays
+    broken = bare_video(sb, name="quebrado")
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [a, broken]), "--speaker-shots")
+    assert code == 4 and env["error"]["code"] == "video_failed" and [x["vid"] for x in env["videos"]] == ["v1"]
+    assert env["errors"][0]["vid"] == "v2" and "speaker shots" in env["errors"][0]["detail"]
+    code, env, _ = run_cli(capsys, "--request", write_request(sb, [broken]), "--speaker-shots")
+    assert code == 4 and env["videos"] == [] and "no screenshot" in env["error"]["detail"]

@@ -45,6 +45,9 @@ max_batches: 2
 | `curation` | `plan`, `batches` | `plan` | `--curation plan\|batches` | `curadoria` |
 | `language` | `pt-BR`, `en`, `es`… | the objective's; `pt-BR` | `--language` | `idioma` |
 | `speakers` | `SPEAKER_01=Name;SPEAKER_03=Other` | the labels in the subtitles | `--speakers` | `falantes` |
+| `num_speakers` | for a video the skill transcribes: `3`, `2-4` (a range), `4+` (a minimum), `auto`, `1` (no speaker separation); per video, `v1=3; reunião.mp4=auto` (the `vid` of the estimate, the slug or the file name; one without a key holds for the others: `3; v2=auto`). Also `2 a 4`, `4 ou mais`, `não sei`, `3 pessoas` | `auto`; the skill asks (step 4 of `SKILL.md`) | `--num-speakers` | `num_falantes` |
+| `whisper_model` | a faster-whisper model: `large-v3`, `large-v3-turbo` (`turbo`), `large-v2`, `medium`, `small`, `base`, `tiny`, the `.en` and `distil-` variants | `large-v3` on an NVIDIA GPU from Volta on (compute capability 7.0) with 8 GB or more; `large-v3-turbo` otherwise | `--whisper-model` | `modelo_whisper` |
+| `audio_language` | `auto`, or the code of the spoken language (`pt`, `en`, `es`…; `pt-BR` becomes `pt`) | `auto`: detected over the speech | `--audio-language` | `idioma_audio` |
 | `sensitivity` | `low`, `normal`, `high` | `normal` | `--sensitivity` | `sensibilidade` |
 | `ignore_region` | `x,y,w,h` in fractions of the frame (0 to 1, origin at the top left corner) | none | `--ignore-region` | `ignorar_regiao` |
 | `ignore_timeline` | path of a JSON file of regions per span of the video ([`parameters.md`](parameters.md)); one line per file, one file per video | none | `--ignore-timeline` | `ignorar_linha_do_tempo` |
@@ -67,12 +70,17 @@ given on the command line prevails over the one in the request.
 ```bash
 python "<skill>/scripts/prepare.py" --request "C:/Users/<user>/video-analysis/requests/request.md" --estimate
 python "<skill>/scripts/prepare.py" --request "C:/Users/<user>/video-analysis/requests/request.md"
+python "<skill>/scripts/prepare.py" --request "C:/Users/<user>/video-analysis/requests/request.md" --speaker-shots [v1,v3]
 python "<skill>/scripts/prepare.py" --resume <run_id|run_dir|latest> [--roles agents|inline] [--max-batches N] [--curation plan|batches]
 ```
 
-- `<skill>` is `${CLAUDE_SKILL_DIR}`. Always through the Bash tool and always `python`, never `python3`.
+- `<skill>` is `${CLAUDE_SKILL_DIR}`. Always through the Bash tool: `python` on Windows (never `python3`,
+  the Microsoft Store shortcut there), `python3` on macOS.
 - Subtitle rule: the `.vtt` has the same name as the video, in the same folder. `--vtt "<path>"` points to
-  another one (only with 1 video); `--skip-missing` skips, in a folder, the videos without subtitles.
+  another one (only with 1 video); `--skip-missing` skips, in a folder, the videos without subtitles
+  (without transcribing them). A video without subtitles is transcribed on the machine (below), except
+  when its folder has a similar `.vtt` (`transcript.state: choice`) and the call gives no `num_speakers`
+  for it: then `missing_vtt`, as before, so that the person chooses.
 - `--resume` accepts only `--roles`, `--max-batches`, `--parallel`, `--analyst-effort`,
   `--curator-effort` and `--curation`; an option not given keeps the value stored in the run (`--curation`
   of a run older than the option: `batches`). It refuses `--request` (or `--pedido`), inputs, `--estimate` and
@@ -85,12 +93,17 @@ python "<skill>/scripts/prepare.py" --resume <run_id|run_dir|latest> [--roles ag
   than 800 agents, but the Workflow refuses them anyway), `--recursive`, `--json-out FILE`, `--ascii`,
   `--quiet`, `--debug`. The request options also exist as command-line options (`--roles`, `--max-batches`,
   `--parallel`, `--analyst-effort`, `--curator-effort`, `--curation`, `--language`, `--range`,
-  `--speakers`, `--sensitivity`, `--ignore-region`, `--ignore-timeline`, `--webcam-timeline`). Full reference:
+  `--speakers`, `--num-speakers`, `--whisper-model`, `--audio-language`, `--sensitivity`, `--ignore-region`,
+  `--ignore-timeline`, `--webcam-timeline`). Full reference:
   `python prepare.py --help` and `docs/design-deterministic.md`, §2.
 - Webcam timeline: before extracting the frames, `prepare.py` runs `scripts/webcam_mask.py` with the Python of
   the DeepFace environment (`VA_DEEPFACE_ENV` or `%USERPROFILE%\deepface-env`, created by the setup), one video
   at a time, and keeps the timeline in the video's cache. The skill's command line does not change, and nothing
   else needs a permission.
+- Local transcription: before the webcam timeline and the extraction, `prepare.py` runs `scripts/transcribe.py`
+  with the Python of the transcription environment (`VA_WHISPERX_ENV` or `%USERPROFILE%\whisperx-env`, created
+  by the setup, step 6), one video at a time, and writes the `.vtt` next to the video (section 7). Without that
+  environment, a video without subtitles is `missing_vtt`; with a broken one, exit code 3.
 
 **Exit codes**, with the `error.code` of each one:
 
@@ -98,7 +111,7 @@ python "<skill>/scripts/prepare.py" --resume <run_id|run_dir|latest> [--roles ag
 |---|---|---|
 | `0` | ok (there may be `warnings`) | — |
 | `2` | input | `invalid_usage`, `invalid_request`, `missing_objective`, `invalid_option`, `video_not_found`, `missing_vtt`, `run_not_found`, `inconsistent_run`, `run_too_large` |
-| `3` | environment (`missing_dependency` also comes from `webcam_timeline: on` without the DeepFace environment) | `missing_ffmpeg`, `missing_dependency`, `workspace_not_writable`, `incomplete_install` |
+| `3` | environment (`missing_dependency` also comes from a transcription environment that does not work, when a video has no subtitles, and from `webcam_timeline: on` without the DeepFace environment) | `missing_ffmpeg`, `missing_dependency`, `workspace_not_writable`, `incomplete_install` |
 | `4` | one video failed; the others come in the JSON | `video_failed` |
 | `130` | interrupted; the completed stages stay in the cache | `interrupted` |
 | `1` | internal error (a bug in `prepare.py`; traceback in the log, or on stderr with `--debug`) | `internal_error` |
@@ -112,7 +125,7 @@ One JSON line, the last one on stdout. It is also saved to `<run_dir>/prepare.js
 stderr starts with `run_dir: …` and carries the progress; the run's `status.json` is updated every 5 s.
 
 ```json
-{"ok": true, "mode": "prepare", "version": "1.0.0", "home": "C:/Users/<user>/video-analysis",
+{"ok": true, "mode": "prepare", "version": "1.1.0", "home": "C:/Users/<user>/video-analysis",
  "run_id": "20261006-153012-venda-zero-clientes",
  "run_dir": "C:/Users/<user>/video-analysis/runs/20261006-153012-venda-zero-clientes",
  "json_path": "C:/Users/<user>/video-analysis/runs/20261006-153012-venda-zero-clientes/prepare.json",
@@ -123,6 +136,11 @@ stderr starts with `run_dir: …` and carries the progress; the run's `status.js
    "webcam_timeline": {"state": "made", "scan": "full", "spans": 3,
      "path": "C:/Users/<user>/video-analysis/cache/<slug>-<fp8>/webcam-<h8>/timeline.json",
      "seconds": 253.2, "estimate_s": null, "detail": null},
+   "transcript": {"state": "made", "phase": "asr", "model": "large-v3-turbo", "device": "cpu", "language": "pt",
+     "language_probability": 0.98, "speakers": "3", "speakers_found": 3, "diarized": true,
+     "needs_speakers": false, "candidates": [], "sidecar": "C:/Users/<user>/Downloads/venda_zero_clientes.vtt",
+     "path": "C:/Users/<user>/Downloads/venda_zero_clientes.vtt", "estimate_s": null, "seconds": 512.4,
+     "detail": null},
    "…": "other fields of summary.json"}],
  "estimate": {"batches": 2, "agents": 4, "seconds": 28},
  "env": {"permissions_ok": true, "agents_current": false, "workflow_current": true},
@@ -142,11 +160,15 @@ exception is exit code 4 with some video ready, which brings usable `videos` and
 {"ok": false, "error": {"code": "missing_vtt", "detail": "…candidates in the folder and the suggested Rename-Item…"},
  "mode": "prepare", "…": "other fields of the envelope",
  "missing_vtt": [{"video": "C:/…/Reunião-20260610_150844-Gravação de Reunião.mp4",
-   "candidates": ["C:/…/Reunião.vtt"], "suggestion": "Rename-Item -LiteralPath '…' -NewName '…'"}]}
+   "candidates": ["C:/…/Reunião.vtt"], "suggestion": "Rename-Item -LiteralPath '…' -NewName '…'",
+   "transcription": {"state": "absent", "detail": "no transcription environment at C:/Users/<user>/whisperx-env"}}]}
 ```
 
 - Extra keys per error, after `warnings`: `missing_vtt` adds
-  `missing_vtt: [{video, candidates, suggestion}]`; `video_not_found` adds `inputs: […]`, the
+  `missing_vtt: [{video, candidates, suggestion, transcription}]`. `suggestion` is a `Rename-Item` for
+  PowerShell on Windows and an `mv -n` on macOS; `transcription` is `{state, detail}` of the transcription
+  environment (`absent`, `unsupported`, or `ok` for a `choice` video without `num_speakers`), or null when
+  it was not checked. `video_not_found` adds `inputs: […]`, the
   inputs not found. In `video_failed`, `errors` (the usual key) lists `vid, slug, video, code,
   detail` per video.
 - Exit code 4 in the prepare: `run.json`, `objective.md` and a usable `workflow_args` with the videos that
@@ -156,13 +178,14 @@ exception is exit code 4 with some video ready, which brings usable `videos` and
 | field | use by the main agent |
 |---|---|
 | `ok`, `error.code`, `error.detail` | the error in one sentence |
-| `estimate.seconds` | with `--estimate`, the estimate of the extraction, webcam timelines to make included: above 400 s, the prepare runs in the background. In the prepare and the resume, the time it took |
+| `estimate.seconds` | with `--estimate`, the estimate of the extraction, local transcriptions and webcam timelines to make included: above 400 s, or with a transcription to make, the prepare runs in the background. In the prepare and the resume, the time it took |
+| `videos[].transcript` | where the video's subtitles come from (not on `--resume`). `state`: `file` (the `.vtt` of the same name; `path`, the other fields null), `pending` (only with `--estimate`: it will be transcribed; `phase` `asr`, the whole transcription, or `diar`, only the speakers; `estimate_s`), `choice` (only with `--estimate`: no `.vtt` of the same name, a similar one in `candidates`, and no `num_speakers`: the prepare stops with `missing_vtt`), `cached` (transcribed before: only rendered) or `made` (transcribed now; `seconds`). `model`, `device` (`cpu`, `cuda`), `language` (`auto` in the estimate; the detected one after), `language_probability`, `speakers` (the count asked for: `3`, `2-4`, `4+`, `auto`, `1`), `speakers_found` (null without speaker separation), `diarized`, `needs_speakers` (it will separate the speakers and no count was given: step 4 of `SKILL.md` asks), `sidecar` (the `.vtt` written next to the video by this run, or null), `path` (the subtitles used), `detail` (a limit known in advance, such as the missing Hugging Face token) |
 | `videos[].webcam_timeline` | the webcam timeline of the video (not on `--resume`): `state` is `pending` (only with `--estimate`: it will be made; `estimate_s` assumes a face, so probe and full scan), `made` (now; `seconds`), `cached`, `given` (the request has an `ignore_timeline` file for the video, even one without spans), `off`, `unavailable` (`auto` without a working DeepFace environment; `detail` says why) or `failed` (`detail`; the frames were extracted without it, with a warning). `scan`: `probe` (the probe covered the video and saw no face: an empty timeline) or `full`. `spans` counts the spans the frames use (`given`, `cached`, `made`), null otherwise; `path` is the `timeline.json` in the cache |
 | `estimate.batches`, `estimate.agents` | above 80 agents, confirm with the user |
 | `env.permissions_ok` | `false`: warn and offer the setup |
 | `env.agents_current` | the copies in `~/.claude/agents/` are identical to the skill's; if not, `roles: agents` becomes `inline`, with a warning |
 | `env.workflow_current` | `~/.claude/workflows/video-analysis.js` is identical to the skill's script (the same Claude Code folder the verifier checks: `VA_CLAUDE_HOME` or `%USERPROFILE%\.claude`): the Workflow is called by name. If not, missing or of another version: inline script and a setup suggestion (step 6 of `SKILL.md`) |
-| `warnings`, `videos[].warnings` | high density (with a suggested region to ignore), camera-like segment, short or offset subtitles |
+| `warnings`, `videos[].warnings` | high density (with a suggested region to ignore), camera-like segment, short or offset subtitles; for a transcribed video, `speakers not separated: …` (no token, no access to pyannote, or a failure), `language detected with low confidence`, `number of speakers not given`, `the video has no audio track` and the subtitles the skill could not write next to the video |
 | `workflow_args` | goes to the Workflow in `args`, as a JSON object and unedited |
 | `script_path` | the skill's script, only for the inline Workflow (step 6 of `SKILL.md`): read and passed in `script`, unedited. In `scriptPath` the tool refuses it; with `env.workflow_current: true`, the normal case is `name: "video-analysis"`, the workflow saved by the setup |
 
@@ -171,6 +194,13 @@ exception is exit code 4 with some video ready, which brings usable `videos` and
   counts 0) + 1 if there is more than one video (the CROSS, counted even with `combined_exists`).
 - With `--estimate`, the envelope is the same, with `"mode": "estimate"`: ffprobe only, so `estimate.seconds`
   is the estimate of the extraction and the batch fields may come null with a cold cache.
+- With `--speaker-shots [v1,v3]` (the form's `Não sei`, step 4 of `SKILL.md`), `"mode": "speaker_shots"`: like
+  `--estimate`, it does not consume the request and creates no run; it only takes 12 screenshots spread over
+  each video (or over the vids given; another vid is `invalid_option`), in seconds. `videos[]` has `vid`,
+  `slug`, `title`, `video_path`, `duration_s`, `duration` (`hh:mm:ss`) and `shots`: `{dir, paths, times,
+  size, cached}`, the JPEGs at 1568 px on the longer side, for the agent of
+  [`speaker-count.md`](speaker-count.md); `estimate` and `workflow_args` are null. A video whose screenshots
+  failed goes to `errors` (exit code 4).
 
 ## 4. `workflow_args` v1
 
@@ -398,14 +428,18 @@ const S_FINAL = { type: 'object', required: ['status', 'report_path', 'answered'
 
 ```
 %USERPROFILE%\video-analysis\          (or the folder in VIDEO_ANALYSIS_HOME, or --home)
-  cache\<slug>-<fp8>\                   source.json, probe.json, last_used, .lock
+  cache\<slug>-<fp8>\                   source.json, probe.json, last_used, .lock, .transcript.lock, transcript-export.json
     cues-<h8>\                          cues.json, stage.json
     frames-<h8>\                        F0001_hhmmss.jpg…, frames.json, samples.csv, ffmpeg_a.log, ffmpeg_b.log, stage.json
     batches-<h8>\                       batch_NNN.md/.json, sheet_NNN.jpg, overview.jpg, transcript.md,
                                         summary.json, timeline.json, batches.json, stage.json
     webcam-<h8>\                        timeline.json (webcam_mask.py --timeline), webcam_mask.log, stage.json
+    transcript-<a8>\                    asr.json, stage.json, transcribe.log, partial\ (language.json, chunk_NNN.json),
+                                        diar-<d8>.json, <d8>-r1.vtt
+    shots-<h8>\                         shot_NN_hhmmss.jpg (12, for the speaker count of --speaker-shots), stage.json
   runs\<YYYYMMDD-HHMMSS>-<slug>\        request.md, objective.md, run.json, prepare.json, status.json, relatorio.md (combined)
-    v<N>\                               ledger.md, relatorio.md, prompts\batch_NNN.md, reports\batch_NNN.md
+    v<N>\                               ledger.md, relatorio.md, prompts\batch_NNN.md, reports\batch_NNN.md,
+                                        legenda.vtt (a copy of the subtitles the skill transcribed, made or reused by this run)
   requests\                             request.md (temporary), request.error.md
   roles\                                copy of the roles for inline mode
   logs\  debug\  tmp\
@@ -427,4 +461,41 @@ const S_FINAL = { type: 'object', required: ['status', 'report_path', 'answered'
   the video, `"complete": true` in its `probe`, and saw no face: empty) or `"full"`; `on` makes a `probe` one
   again with the full scan, and a `probe` one without `complete` is not used. Its spans go into the frames
   key, like an `ignore_timeline` file.
+- `transcript-<a8>`: the local transcription. `a8` comes from the video's `<slug>-<fp8>`, the Whisper model,
+  the requested language (`auto` or the code) and the whisperx version: the speakers are not in it, so
+  another `num_speakers` redoes only `diar-<d8>.json` (`d8` = the count, the mode, `pyannote`, `single` or
+  `none`, and the pyannote model), not the speech (on a CPU, the speakers take about 40% of the whole).
+  When it replaces the `.vtt` the skill wrote, the model and the language the call does not give come from
+  that `.vtt`'s `NOTE`, so another count (or a token added later) keeps the same `a8`.
+  `partial\` keeps the blocks of ~10 min
+  of an interrupted transcription, which the next run resumes; `stage.json` is written last. A
+  `diar-<d8>.json` that failed for lack of a token or of access does not count as done: a later run tries it
+  again. One that failed for another reason (the network, a proxy, out of memory) is tried again when the
+  call gives `num_speakers`; a call without it keeps the subtitles without speakers, with no new pass of
+  pyannote. `<d8>-r1.vtt` is the rendered subtitles (WhisperX style: a `Language:` header, a `NOTE` saying how
+  they were made, and `SPEAKER_xx: text` cues).
+- The subtitles next to the video, `<name of the video>.vtt`, are created only when absent, and whole: the
+  bytes go to a temporary file in the same folder (`.<name of the video>.vtt.<random>.tmp`), which takes the
+  name only once complete and never over a file, so a full disk or an interrupted run leaves no cut `.vtt`
+  that later runs would take for the person's. On a Mac, a drive without hard links (exFAT, FAT, some
+  network shares) gets the file written in place instead, removed when the write fails or is stopped with
+  Ctrl+C.
+  Their `NOTE` carries `content_sha1`, the SHA-1 of the whole file with that line written without it, and
+  `transcript-export.json` their path and SHA-1 (it goes with the folder on `--gc`; the `NOTE`'s hash
+  alone decides, so the subtitles stay the skill's after `--gc`): subtitles the skill wrote and nobody edited are
+  replaced when a call asks for other transcription settings, when they came out without speakers for
+  lack of a token and the token is there now, or when they came out without speakers and a call with a token
+  gives `num_speakers` again; any other file is never touched (subtitles the skill made and the person
+  edited are kept, and a call with transcription settings for them warns that it ignores them). A folder that refuses the
+  write, or a full disk, is a warning, and the subtitles in the cache are used (the next run writes them next
+  to the video). `.transcript.lock` keeps two `prepare.py`
+  from transcribing the same video (the second waits up to 6 h). A transcription refreshes `last_used`, and
+  `--gc` skips a folder whose `.lock` or `.transcript.lock` had a heartbeat in the last 10 min: a
+  transcription, a webcam timeline or an extraction under way.
+- `legenda.vtt` in the run: every run on subtitles the skill transcribed keeps one, the run that made them
+  and the runs that reuse them unchanged (kept only when its bytes match the run's cues key); subtitles the
+  person wrote get none. `--resume` uses it when the subtitles next to the video, or in the cache, are
+  gone or no longer have the run's bytes (replaced by a later run with other settings): the same bytes, the
+  same cache key. A rebuild of the cues on resume checks the subtitles against the run's key and fails the
+  video (`video_failed`, "the subtitles changed since the run") rather than cache other speech under it.
 - The agents only read the cache; they write only in `runs\`.

@@ -170,13 +170,15 @@ def read_request(path: str | os.PathLike) -> dict:
 
 # the keys of the request's '# options', also the command-line options (--max-batches -> max_batches)
 OPTION_KEYS = ("roles", "max_batches", "parallel", "analyst_effort", "curator_effort", "curation", "language",
-               "range", "speakers", "sensitivity", "ignore_region", "ignore_timeline", "webcam_timeline")
+               "range", "speakers", "sensitivity", "ignore_region", "ignore_timeline", "webcam_timeline",
+               "num_speakers", "whisper_model", "audio_language")
 # the Portuguese keys (of before the rename; also the old command-line options: --max-lotes) -> the keys
 OPTION_NAMES = {"papeis": "roles", "max_lotes": "max_batches", "paralelo": "parallel",
                 "esforco_analista": "analyst_effort", "esforco_curador": "curator_effort", "curadoria": "curation",
                 "idioma": "language", "trecho": "range", "falantes": "speakers", "sensibilidade": "sensitivity",
                 "ignorar_regiao": "ignore_region", "ignorar_linha_do_tempo": "ignore_timeline",
-                "linha_do_tempo_webcam": "webcam_timeline"}
+                "linha_do_tempo_webcam": "webcam_timeline", "num_falantes": "num_speakers",
+                "modelo_whisper": "whisper_model", "idioma_audio": "audio_language"}
 _OPTION_ALIASES = {
     **OPTION_NAMES,
     "papel": "roles", "roles_mode": "roles", "modo": "roles",
@@ -185,6 +187,10 @@ _OPTION_ALIASES = {
     "esforco_do_analista": "analyst_effort", "esforco_do_curador": "curator_effort",
     "lingua": "language", "speaker_names": "speakers",
     "ignore_regions": "ignore_region", "ignorar_regioes": "ignore_region",
+    "numero_de_falantes": "num_speakers", "quantidade_de_falantes": "num_speakers", "speaker_count": "num_speakers",
+    "n_speakers": "num_speakers", "speakers_count": "num_speakers",
+    "modelo_do_whisper": "whisper_model", "model": "whisper_model",
+    "idioma_da_fala": "audio_language", "idioma_do_audio": "audio_language", "speech_language": "audio_language",
 }
 
 
@@ -399,6 +405,14 @@ def normalize_options(raw: dict) -> dict:
             if mode not in WEBCAM_MODES:
                 raise _bad(key, value, "use " + ", ".join(WEBCAM_MODES))
             opts[key] = mode
+        elif key in ("num_speakers", "whisper_model", "audio_language"):
+            from . import transcript   # lazy: the transcription is needed only for videos without subtitles
+            parse = {"num_speakers": transcript.parse_num_speakers, "whisper_model": transcript.canon_model,
+                     "audio_language": transcript.canon_language}[key]
+            try:
+                opts[key] = parse(value)
+            except ValueError as exc:
+                raise _bad(key, value, str(exc)) from None
     return opts
 
 

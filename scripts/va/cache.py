@@ -8,6 +8,7 @@ Layout (``<home>/cache/<video_key>/``)::
     batches-<h8>/  batch_001.md/.json  sheet_001.jpg ...  batches.json  timeline.json
                    transcript.md  summary.json  overview.jpg  stage.json
     webcam-<h8>/   timeline.json  webcam_mask.log  stage.json   (the webcam timeline: va/webcam.py)
+    transcript-<h8>/  asr.json  diar-<h8>.json  *.vtt  stage.json  partial/   (local transcription: va/transcript.py)
 
 Keys
 - ``video_key`` = slug + "-" + fp8, fp8 = sha1(NFC.casefold(abs path) | size | mtime_ns)[:8].
@@ -54,9 +55,10 @@ from . import ALGO_VERSION, RENDER_VERSION, VERSION, VTT_VERSION
 from .common import as_posix, nfc_casefold, read_json, slugify, write_json, write_text
 
 __all__ = [
-    "LOCK_HEARTBEAT_S", "LOCK_POLL_S", "LOCK_STALE_S", "LOCK_WAIT_S", "STAGES", "STAGE_OVERRIDES",
-    "LockTimeout", "StageUnavailable", "VideoLock",
-    "canonical_json", "child_init", "dir_size", "fresh_dir", "expand_force", "file_sha1", "gc_cache", "h8", "info_get", "iso_now",
+    "LOCK_FILES", "LOCK_HEARTBEAT_S", "LOCK_POLL_S", "LOCK_STALE_S", "LOCK_WAIT_S", "STAGES", "STAGE_OVERRIDES",
+    "TRANSCRIPT_LOCK", "LockTimeout", "StageUnavailable", "VideoLock",
+    "canonical_json", "child_init", "dir_size", "fresh_dir", "expand_force", "file_sha1", "frames_key", "gc_cache", "h8",
+    "info_get", "iso_now",
     "plain", "prepare_video", "read_stage", "rmtree_robust", "stage_dir", "stage_fn", "stage_hits", "stage_keys",
     "stage_valid", "cached_probe", "touch_last_used", "video_fingerprint", "video_key", "write_stage_json",
 ]
@@ -68,6 +70,8 @@ LOCK_HEARTBEAT_S = 30.0
 LOCK_STALE_S = 600.0
 LOCK_WAIT_S = 1800.0
 LOCK_POLL_S = 2.0
+TRANSCRIPT_LOCK = ".transcript.lock"      # the local transcription's own lock (va/transcript.py), held for hours
+LOCK_FILES = (".lock", TRANSCRIPT_LOCK)   # the locks of a video's folder: a live one keeps the GC away
 
 
 # --- helpers ------------------------------------------------------------------------------------
@@ -217,6 +221,8 @@ _STAGE_HOME = {   # name -> (module, attribute)
     "effective_batch_params": ("va.batching", "effective_batch_params"),
     "run_batches_stage": ("va.render", "run_batches_stage"),
     "run_webcam_mask": ("va.webcam", "run_process"),   # the webcam_mask.py subprocess (webcam-<h8>)
+    "run_transcribe": ("va.webcam", "run_process"),    # the transcribe.py subprocess (transcript-<h8>), same runner
+    "make_shots": ("va.shots", "make_shots"),          # screenshots for the speaker-count agent (shots-<h8>)
 }
 EXEC_ONLY_FRAME_KEYS = ("sequential",)   # execution choices with identical output: not in the frames key
 _shim_cache: dict[str, Any] = {}
@@ -272,15 +278,26 @@ def video_key(path: str | os.PathLike) -> str:
     return f"{slugify(Path(path).stem)}-{video_fingerprint(path)}"
 
 
+def frames_key(vkey: str, frame_params: dict) -> str:
+    """The frames key alone: it does not depend on the subtitles, so a video whose subtitles are still to be
+    transcribed already knows whether its frames are in the cache."""
+    params = {k: v for k, v in dict(frame_params).items() if k not in EXEC_ONLY_FRAME_KEYS}
+    return h8({"stage": "frames", "version": ALGO_VERSION, "video_key": vkey, "params": params})
+
+
+def cues_key(vtt_path: str | os.PathLike, cue_params: dict) -> str:
+    """h8 key of the cues stage: the subtitles' bytes and the effective cue params."""
+    return h8({"stage": "cues", "version": VTT_VERSION, "vtt_sha1": file_sha1(vtt_path), "params": cue_params})
+
+
 def stage_keys(vkey: str, vtt_path: str | os.PathLike, params: dict, meta: dict | None = None) -> dict:
     """``{"cues", "frames", "batches"}`` h8 keys from the effective params of each stage.
 
     ``params`` = ``{"cues": {...}, "frames": {...}, "batches": {...}}`` (effective, JSON data).
     ``meta``: values rendered into the batch outputs (title, video_path, vtt_path).
     """
-    cues = h8({"stage": "cues", "version": VTT_VERSION, "vtt_sha1": file_sha1(vtt_path), "params": params["cues"]})
-    frame_params = {k: v for k, v in dict(params["frames"]).items() if k not in EXEC_ONLY_FRAME_KEYS}
-    frames = h8({"stage": "frames", "version": ALGO_VERSION, "video_key": vkey, "params": frame_params})
+    cues = cues_key(vtt_path, params["cues"])
+    frames = frames_key(vkey, params["frames"])
     batches = h8({"stage": "batches", "version": RENDER_VERSION, "cues": cues, "frames": frames,
                   "params": params["batches"], "meta": meta or {}})
     return {"cues": cues, "frames": frames, "batches": batches}
@@ -528,10 +545,19 @@ class VideoLock:
 
 # --- GC -------------------------------------------------------------------------------------------
 
+def _live_lock(path: Path, now: float, stale_s: float) -> bool:
+    try:
+        return now - path.stat().st_mtime < stale_s
+    except OSError:
+        return False
+
+
 def gc_cache(cache_dir: str | os.PathLike, days: float, *, now: float | None = None,
              stale_s: float = LOCK_STALE_S) -> dict:
     """Delete whole ``<video_key>`` folders whose ``last_used`` is older than ``days``. Folders
-    with a live lock are skipped. Returns counts and the space freed."""
+    with a live lock (any of ``LOCK_FILES`` with a heartbeat within ``stale_s``: a prepare, a webcam
+    timeline, or a transcription, which holds only ``.transcript.lock`` for hours) are skipped.
+    Returns counts and the space freed."""
     now = time.time() if now is None else now
     cutoff = now - float(days) * 86400.0
     removed, skipped, failed = [], [], []
@@ -546,13 +572,9 @@ def gc_cache(cache_dir: str | os.PathLike, days: float, *, now: float | None = N
         if last >= cutoff:
             kept += 1
             continue
-        lock = entry / ".lock"
-        try:
-            if now - lock.stat().st_mtime < stale_s:
-                skipped.append({"key": entry.name, "reason": "in use (active lock)"})
-                continue
-        except OSError:
-            pass
+        if any(_live_lock(entry / name, now, stale_s) for name in LOCK_FILES):
+            skipped.append({"key": entry.name, "reason": "in use (active lock)"})
+            continue
         size = dir_size(entry)
         item = {"key": entry.name, "bytes": size, "last_used": iso_now(last)}
         (removed if rmtree_robust(entry) else failed).append(item)
@@ -749,10 +771,13 @@ def prepare_video(job: dict) -> dict:
 
                 if "cues" in rebuild:
                     stage_now = "legenda"
-                    sdir = fresh_dir(dirs["cues"])
-                    duration = info_get(need_info(), "duration_s", "duration")
                     if not os.path.isfile(vtt_path):
                         raise FileNotFoundError(f"subtitles missing: {vtt_path}")
+                    # --resume: keys stored by the run; other bytes would be cached under them (as for the video)
+                    if job.get("verify_vtt") and cues_key(vtt_path, params["cues"]) != keys["cues"]:
+                        raise RuntimeError(f"the subtitles changed since the run: {vtt_path}")
+                    sdir = fresh_dir(dirs["cues"])
+                    duration = info_get(need_info(), "duration_s", "duration")
                     log.state("cues", "processing")
                     t0 = time.perf_counter()
                     cues_doc = stage_fn("run_cues_stage")(Path(vtt_path), params["cues"], sdir, duration)

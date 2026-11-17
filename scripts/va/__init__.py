@@ -11,7 +11,7 @@ Usage notes for the stage modules:
 - Times are seconds in these dicts; stage code works in integer milliseconds internally.
 """
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 # Bumped whenever the output of a stage changes for the same inputs (part of the cache keys).
 ALGO_VERSION = "dedup-1.1"      # frames stage: dedup + extraction (frames-<h8>); 1.1 = calibrated defaults
@@ -20,6 +20,8 @@ VTT_VERSION = PARSER_VERSION    # alias: spec section 7 calls it VTT_VERSION
 RENDER_VERSION = "render-1.1"   # alignment, batching, batch_NNN.md/json, transcript, sheets (batches-<h8>)
                                 # 1.1 = the " (revisita de Fxxxx)" path marker is the same in every language
 WEBCAM_VERSION = "webcam-1.1"   # webcam timeline of scripts/webcam_mask.py with DeepFace (webcam-<h8>)
+TRANSCRIBE_VERSION = "transcript-1.0"   # local transcription of scripts/transcribe.py with WhisperX (transcript-<h8>)
+SHOTS_VERSION = "shots-1.0"     # screenshots for the speaker-count agent of the form's "Não sei" (shots-<h8>)
 
 SCHEMA_VERSION = 1              # workflow_args["schema_version"]
 
@@ -228,6 +230,93 @@ WEBCAM_DEFAULTS = {
     "decode_s_per_mpx": 0.0008,     # the full scan decodes every frame: 0.1 s per second of 1080p60
     "probe_seek_s": 0.35,           # one seek and read in the probe (0.13 to 0.40 s measured)
     "lock_wait_s": 4 * 3600.0,      # another prepare.py making the same timeline: wait up to this
+}
+
+# --- local transcription (scripts/transcribe.py, in the WhisperX environment) ----------------
+
+# faster-whisper's model names and their CTranslate2 repositories on the Hugging Face Hub (faster_whisper.utils
+# _MODELS): the accepted values of whisper_model, and where the setup and the status look for the weights
+WHISPER_MODELS = {
+    "tiny.en": "Systran/faster-whisper-tiny.en", "tiny": "Systran/faster-whisper-tiny",
+    "base.en": "Systran/faster-whisper-base.en", "base": "Systran/faster-whisper-base",
+    "small.en": "Systran/faster-whisper-small.en", "small": "Systran/faster-whisper-small",
+    "medium.en": "Systran/faster-whisper-medium.en", "medium": "Systran/faster-whisper-medium",
+    "large-v1": "Systran/faster-whisper-large-v1", "large-v2": "Systran/faster-whisper-large-v2",
+    "large-v3": "Systran/faster-whisper-large-v3",
+    "distil-large-v2": "Systran/faster-distil-whisper-large-v2",
+    "distil-medium.en": "Systran/faster-distil-whisper-medium.en",
+    "distil-small.en": "Systran/faster-distil-whisper-small.en",
+    "distil-large-v3": "Systran/faster-distil-whisper-large-v3",
+    "distil-large-v3.5": "distil-whisper/distil-large-v3.5-ct2",
+    "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+}
+WHISPER_ALIASES = {"large": "large-v3", "turbo": "large-v3-turbo"}
+
+TRANSCRIBE_DEFAULTS = {
+    "env_name": "whisperx-env",     # %USERPROFILE%\<this> (~/<this> on macOS), or the folder in VA_WHISPERX_ENV
+    "python": "3.12",               # the environment's Python, which uv downloads when missing (whisperx needs < 3.14)
+    "whisperx_version": "3.8.6",    # the only version prepare.py runs: it is in the transcript's cache key
+    # what whisperx 3.8.6 pins; installed explicitly so that --torch-backend routes them to the PyTorch index
+    "torch_packages": ["torch==2.8.0", "torchaudio==2.8.0", "torchvision==0.23.0"],
+    # NVIDIA driver -> PyTorch index (the first whose minimum driver the machine meets); below them, cpu
+    "cuda_backends": [[570, "cu128"], [528, "cu126"]],
+    # below this compute capability (Maxwell, Pascal: GTX 9xx/10xx) the GPU is not used: PyTorch 2.8's cu128
+    # build has no kernels for sm_50-sm_61 and CTranslate2's float16 needs 7.0; keep transcribe.py's in step
+    "gpu_min_compute_cap": 7.0,
+    "model_gpu": "large-v3",        # CUDA with at least gpu_min_vram_mb of memory
+    "model_cpu": "large-v3-turbo",  # CPU (every Mac) and small GPUs
+    "gpu_min_vram_mb": 7500,
+    "diarize_model": "pyannote/speaker-diarization-community-1",   # gated: a token and its conditions accepted
+    "diarize_files": ["config.yaml", "embedding/pytorch_model.bin", "segmentation/pytorch_model.bin"],
+    # alignment models the setup downloads ahead (whisperx's DEFAULT_ALIGN_MODELS_HF); others come at first use
+    "align_models": {"pt": "jonatasgrosman/wav2vec2-large-xlsr-53-portuguese"},
+    "align_files": ["config.json", "pytorch_model.bin"],
+    "whisper_files": ["model.bin"],
+    "setup_languages": ["pt"],
+    # NLTK's sentence tokenizer, which the alignment uses: downloaded straight from NLTK's repository (its own
+    # downloader refuses to run behind some proxies), checked per language
+    "punkt_url": "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/tokenizers/punkt_tab.zip",
+    "punkt_languages": ["portuguese", "english"],
+    "punkt_files": ["collocations.tab", "sent_starters.txt", "abbrev_types.txt", "ortho_context.tab"],
+    "batch_size": {"cuda": 16, "cpu": 8},
+    "chunk_s": 600.0,               # ASR in blocks of ~10 min, each one a checkpoint...
+    "chunk_search_s": 30.0,         # ...cut at the quietest point within 30 s of the boundary
+    "detect_window_s": 900.0,       # language detection: speech windows in the first 15 min...
+    "detect_segments": 6,           # ...up to 6 windows of 30 s (faster-whisper's detect_language)
+    "low_language_probability": 0.6,
+    # cues of the rendered VTT: a new cue at each sentence (whisperx's alignment splits them), at a speaker
+    # change, at a pause, and past the length limits
+    "render_version": "r1",
+    "cue_max_s": 8.0,
+    "cue_max_chars": 160,
+    "cue_pause_s": 0.8,
+    "cue_min_s": 0.2,
+    # rough cost model: "startup_s" (imports, the model load, the language detection) plus seconds of work per
+    # second of audio. CPU measured on a 4-core 2017 laptop (i7-7700HQ, int8, 4 threads), a 9-min meeting:
+    # 86 s + 1.17 + 0.39 + 1.0 per second (tests/data/calibration.md, section 9); the other CPU models scaled
+    # from large-v3-turbo's; CUDA not measured
+    "cost": {
+        "cpu": {"startup_s": 90.0, "asr": {"large-v3-turbo": 1.17, "large-v3": 2.9, "large-v2": 2.9, "medium": 1.4,
+                                           "small": 0.6, "base": 0.26, "tiny": 0.16},
+                "asr_other": 2.0, "align": 0.39, "diarize": 1.0},
+        "cuda": {"startup_s": 40.0, "asr": {"large-v3-turbo": 0.03, "large-v3": 0.06, "large-v2": 0.06},
+                 "asr_other": 0.05, "align": 0.02, "diarize": 0.03},
+    },
+    "lock_wait_s": 6 * 3600.0,      # another prepare.py transcribing the same video: wait up to this
+    "check_timeout_s": 3600.0,      # the setup's proof, which downloads the models
+    "install_timeout_s": 3600.0,    # uv pip install (the CUDA build of torch is ~3 GB)
+}
+
+# Screenshots for the agent that counts who speaks when the person does not know (the form's "Não sei";
+# prepare.py --speaker-shots, va/shots.py, reference/speaker-count.md): a few instants spread over the video, at
+# the size the analyst reads. On a 9-min meeting, 12 shots gave the same range as the 41 unique frames (4-12;
+# pyannote found 6) in 13 s and about 90k agent tokens, against 60 s and 150k (tests/data/calibration.md, §9).
+SHOTS_DEFAULTS = {
+    "n": 12,                        # screenshots per video, at the middle of 12 equal parts
+    "max_edge": 1568,               # the longer side, as the frames (OUTPUT_DEFAULTS)
+    "jpeg_q": 3,
+    "scale_flags": "lanczos",
+    "timeout_s": 120.0,             # one ffmpeg seek
 }
 
 # --- agentic layer (plan, unified contract) ---------------------------------------------

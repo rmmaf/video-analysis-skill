@@ -17,6 +17,13 @@ DL-13; plan, "Permissions and setup").
   numpy, and the YuNet weights, checked by their SHA-256. ``install_deepface`` creates it (venv),
   installs ``deepface==0.0.104``, downloads the weights and proves it all with a detection, reinstalling
   deepface when the detection fails; the setup runs it only after the person's "yes".
+- Transcription (videos without subtitles): another environment, ``VA_WHISPERX_ENV`` or
+  ``%USERPROFILE%\\whisperx-env``, made with uv and its own Python 3.12, with whisperx (the version the setup
+  installs), the PyTorch build of the machine (CUDA by the NVIDIA driver, else CPU) and NLTK's punkt.
+  ``transcription_status`` checks it offline in about a second; ``diarization_status`` checks the Hugging
+  Face token and its access to the gated pyannote model (the person saves the token: it never goes through
+  Claude); ``install_transcription`` creates or repairs it and proves it with scripts/transcribe.py --check,
+  which downloads the models.
 
 The Claude home is ``--claude-home`` / env ``VA_CLAUDE_HOME`` / ``%USERPROFILE%\\.claude``: tests must
 always point it somewhere else, so the real settings are never touched.
@@ -28,6 +35,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -36,7 +44,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from . import WEBCAM_DEFAULTS, WORKSPACE_DIRS
+from . import TRANSCRIBE_DEFAULTS, WEBCAM_DEFAULTS, WHISPER_MODELS, WORKSPACE_DIRS
 from .common import as_posix, atomic_write_bytes
 
 __all__ = [
@@ -46,6 +54,9 @@ __all__ = [
     "module_status", "permissions_status", "python_status", "role_files", "runtime_problems",
     "tool_status", "user_home", "workflow_source", "workflow_status", "workspace_rules",
     "workspace_status", "yunet_weights",
+    "TORCH_BACKEND_ENV", "WHISPERX_ENV", "diarization_status", "find_uv", "install_transcription", "login_command",
+    "nltk_dir", "nvidia_info", "platform_supported", "prepare_punkt", "punkt_complete", "torch_backend",
+    "transcription_status", "whisperx_env_dir", "whisperx_python",
 ]
 
 CLAUDE_HOME_ENV = "VA_CLAUDE_HOME"
@@ -577,10 +588,10 @@ def deepface_status(env_dir: str | os.PathLike | None = None, python: str | os.P
     return out
 
 
-def _run_step(cmd: list[str], timeout: float) -> tuple[int, str]:
+def _run_step(cmd: list[str], timeout: float, env: dict | None = None) -> tuple[int, str]:
     r = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8",
                        errors="replace", timeout=timeout, creationflags=_NO_WINDOW,
-                       env={**os.environ, "PYTHONIOENCODING": "utf-8"})   # DeepFace logs emojis
+                       env=env or {**os.environ, "PYTHONIOENCODING": "utf-8"})   # DeepFace logs emojis
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
@@ -631,3 +642,511 @@ def install_deepface(env_dir: str | os.PathLike | None = None, base_python: str 
              f"reinstall deepface {version}, since DeepFace did not run a detection ({_last_line(output)})")
         step(check, "run a detection with DeepFace after the reinstall")
     return {"env": as_posix(d), "done": done, "status": deepface_status(d)}
+
+
+# --- the transcription environment (WhisperX: videos without subtitles) ------------------------------------
+
+WHISPERX_ENV = "VA_WHISPERX_ENV"         # another folder for the transcription environment (tests, another disk)
+TORCH_BACKEND_ENV = "VA_TORCH_BACKEND"   # forces the PyTorch build of the setup: cpu, cu126, cu128...
+TRANSCRIBE_SCRIPT = Path(__file__).resolve().parent.parent / "transcribe.py"
+DIARIZE_PAGE = "https://huggingface.co/" + TRANSCRIBE_DEFAULTS["diarize_model"]
+# run by the environment's Python, offline: the versions, the modules that are missing, whether a Hugging Face
+# token is saved (never the token itself) and which models are already in the cache (argv[1]: repo -> files)
+_WHISPERX_PROBE = r'''
+import importlib.metadata as m, importlib.util as u, json, sys
+out = {"python": "%d.%d.%d" % sys.version_info[:3], "versions": {}, "missing": [], "token": False, "cached": {}}
+for d in ("whisperx", "torch", "ctranslate2", "faster-whisper", "pyannote.audio", "huggingface-hub", "nltk"):
+    try:
+        out["versions"][d] = m.version(d)
+    except m.PackageNotFoundError:
+        out["versions"][d] = None
+for n in ("whisperx", "torch", "faster_whisper", "pyannote.audio", "nltk", "huggingface_hub"):
+    try:
+        if u.find_spec(n) is None:
+            out["missing"].append(n)
+    except (ImportError, ValueError):
+        out["missing"].append(n)
+try:
+    import huggingface_hub as h
+    out["token"] = h.get_token() is not None
+    for repo, files in json.loads(sys.argv[1]).items():
+        hits = []
+        for f in files:
+            try:
+                r = h.try_to_load_from_cache(repo, f)
+            except Exception:
+                r = None
+            hits.append(isinstance(r, str))
+        out["cached"][repo] = all(hits)
+except Exception as exc:
+    out["hub_error"] = "%s: %s" % (type(exc).__name__, exc)
+print(json.dumps(out))
+'''
+# run by the environment's Python, online: may this token download the gated diarization model?
+# (an HTTP 401/403, from the response or as a code in the text, not those digits inside a number; "gated" as a
+# word: the same reading as classify_failure in scripts/transcribe.py)
+_ACCESS_PROBE = r'''
+import re
+import sys
+try:
+    from huggingface_hub import auth_check
+    auth_check(sys.argv[1])
+    print("ok")
+except Exception as exc:
+    name = type(exc).__name__
+    text = str(exc).lower()
+    try:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    except Exception:
+        status = None
+    if (name in ("GatedRepoError", "RepositoryNotFoundError") or status in (401, 403)
+            or re.search(r"(?<![\w.])40[13](?![\w.])|\bgated\b", text)):
+        print("no_access")
+    else:
+        print("offline: %s: %s" % (name, " ".join(str(exc).split())[:200]))
+'''
+
+
+def whisperx_env_dir(override: str | os.PathLike | None = None) -> Path:
+    """``override`` > env VA_WHISPERX_ENV > %USERPROFILE%\\whisperx-env (~/whisperx-env on macOS)."""
+    for value in (os.fspath(override) if override is not None else "", os.environ.get(WHISPERX_ENV, "")):
+        value = value.strip().strip('"').strip()
+        if value:
+            return Path(os.path.abspath(os.path.expanduser(value)))
+    return user_home() / TRANSCRIBE_DEFAULTS["env_name"]
+
+
+def _env_bin(env_dir: Path, name: str) -> Path:
+    return env_dir / "Scripts" / f"{name}.exe" if os.name == "nt" else env_dir / "bin" / name
+
+
+def whisperx_python(env_dir: str | os.PathLike | None = None) -> Path:
+    return _env_bin(whisperx_env_dir(env_dir), "python")
+
+
+def nltk_dir(env_dir: str | os.PathLike | None = None) -> Path:
+    """Where the setup puts NLTK's sentence tokenizer (transcribe.py gets it through NLTK_DATA)."""
+    return whisperx_env_dir(env_dir) / "nltk_data"
+
+
+def login_command(env_dir: str | os.PathLike | None = None) -> str:
+    """The command the person runs in their own terminal to save the Hugging Face token (setup.md, step 7):
+    the token never goes through Claude."""
+    hf = _env_bin(whisperx_env_dir(env_dir), "hf")
+    return f'& "{hf}" auth login' if os.name == "nt" else f'"{hf}" auth login'
+
+
+def platform_supported() -> tuple[bool, str]:
+    """WhisperX 3.8.6 needs PyTorch 2.8, built for Windows and Linux x86-64 and for Apple silicon only."""
+    if sys.platform == "darwin":
+        machine = platform.machine().lower()
+        if machine not in ("arm64", "aarch64"):
+            try:
+                arm = subprocess.run(["sysctl", "-n", "hw.optional.arm64"], capture_output=True, text=True,
+                                     timeout=5).stdout.strip() == "1"
+            except (OSError, subprocess.SubprocessError):
+                arm = False
+            if not arm:
+                return False, ("this Mac has an Intel processor: PyTorch 2.8, which WhisperX 3.8.6 needs, has no "
+                               "build for it, so every video needs its .vtt")
+    elif sys.platform not in ("win32", "linux"):
+        return False, f"local transcription is not supported on {sys.platform}"
+    return True, ""
+
+
+def nvidia_info(timeout: float = 15.0) -> dict | None:
+    """The first NVIDIA GPU by nvidia-smi: ``{"name", "driver", "driver_major", "vram_mb", "compute_cap"}``,
+    or None without one (or without the driver)."""
+    exe = shutil.which("nvidia-smi")
+    if not exe and os.name == "nt":
+        for cand in (Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "nvidia-smi.exe",
+                     Path(r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe")):
+            if cand.is_file():
+                exe = str(cand)
+                break
+    if not exe:
+        return None
+    for fields in ("name,driver_version,memory.total,compute_cap", "name,driver_version,memory.total"):
+        try:
+            r = subprocess.run([exe, f"--query-gpu={fields}", "--format=csv,noheader,nounits"],
+                               stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=timeout, creationflags=_NO_WINDOW)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        line = (r.stdout or "").strip().splitlines()[:1]
+        if r.returncode == 0 and line:
+            parts = [p.strip() for p in line[0].split(",")]
+            try:
+                major = int(parts[1].split(".")[0])
+                vram = int(float(parts[2]))
+            except (IndexError, ValueError):
+                return None
+            cc = None
+            if len(parts) > 3:
+                try:
+                    cc = float(parts[3])
+                except ValueError:
+                    cc = None
+            return {"name": parts[0], "driver": parts[1], "driver_major": major, "vram_mb": vram, "compute_cap": cc}
+    return None
+
+
+def gpu_usable(info: dict | None) -> bool:
+    """Whether nvidia_info()'s GPU can transcribe: one older than Volta (compute capability below
+    TRANSCRIBE_DEFAULTS["gpu_min_compute_cap"]) cannot; an unknown capability (an old nvidia-smi) counts."""
+    if not info:
+        return False
+    cc = info.get("compute_cap")
+    return cc is None or cc >= TRANSCRIBE_DEFAULTS["gpu_min_compute_cap"]
+
+
+def torch_backend(gpu: dict | None | bool = False) -> str | None:
+    """The PyTorch build to install: VA_TORCH_BACKEND when set; None on macOS (PyPI's build, CPU and Metal);
+    else ``cu128``/``cu126`` by the NVIDIA driver (TRANSCRIBE_DEFAULTS["cuda_backends"]), or ``cpu`` (also for
+    a GPU older than Volta, see gpu_usable). ``gpu``: nvidia_info()'s answer (None: no GPU); left out,
+    nvidia-smi is asked."""
+    forced = os.environ.get(TORCH_BACKEND_ENV, "").strip()
+    if forced:
+        return forced
+    if sys.platform == "darwin":
+        return None
+    info = nvidia_info() if gpu is False else gpu
+    if not gpu_usable(info):
+        return "cpu"
+    for min_driver, backend in TRANSCRIBE_DEFAULTS["cuda_backends"]:
+        if info["driver_major"] >= min_driver:
+            return backend
+    return "cpu"
+
+
+def _torch_build(version: str | None) -> str | None:
+    """"2.8.0+cu128" -> "cu128"; "2.8.0+cpu" -> "cpu"; "2.8.0" (PyPI: macOS, or Linux CUDA) -> None."""
+    if not version or "+" not in version:
+        return None
+    return version.split("+", 1)[1]
+
+
+def find_uv() -> list[str] | None:
+    """The uv command: the one on PATH, else ``python -m uv`` (pip's), else the installers' usual places."""
+    exe = shutil.which("uv")
+    if exe:
+        return [exe]
+    try:
+        if importlib.util.find_spec("uv") is not None:
+            return [sys.executable, "-m", "uv"]
+    except (ImportError, ValueError):
+        pass
+    home = Path(os.path.expanduser("~"))
+    names = ["uv.exe"] if os.name == "nt" else ["uv"]
+    folders = [home / ".local" / "bin", home / ".cargo" / "bin"]
+    if os.name == "nt":
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            folders.append(Path(local) / "Microsoft" / "WinGet" / "Links")
+    else:
+        folders += [Path("/opt/homebrew/bin"), Path("/usr/local/bin")]
+    for folder in folders:
+        for name in names:
+            if (folder / name).is_file():
+                return [str(folder / name)]
+    return None
+
+
+def _model_files(model: str) -> dict[str, list[str]]:
+    d = TRANSCRIBE_DEFAULTS
+    out = {WHISPER_MODELS[model]: list(d["whisper_files"])} if model in WHISPER_MODELS else {}
+    for repo in d["align_models"].values():
+        out[repo] = list(d["align_files"])
+    out[d["diarize_model"]] = list(d["diarize_files"])
+    return out
+
+
+def punkt_complete(root: str | os.PathLike, languages: list[str] | None = None) -> bool:
+    """The four files NLTK reads for each language (nltk/tokenize/punkt.py) are in ``root/<language>/``: a
+    folder cut short by an interrupted extraction does not count."""
+    root = Path(root)
+    langs = languages or TRANSCRIBE_DEFAULTS["punkt_languages"]
+    return all((root / lang / f).is_file() for lang in langs for f in TRANSCRIBE_DEFAULTS["punkt_files"])
+
+
+def transcription_status(env_dir: str | os.PathLike | None = None, python: str | os.PathLike | None = None,
+                         timeout: float = 90.0, gpu: dict | None | bool = False) -> dict:
+    """The transcription environment, in about a second and offline. ``ok``: its Python runs and has whisperx
+    in the version the setup installs, the modules it needs and NLTK's punkt; ``ready``: also the default
+    Whisper model and the Portuguese alignment model in the Hugging Face cache (the setup downloads them, so
+    the first analysis does not). ``state``: ok, absent, unsupported (an Intel Mac) or broken (``problem``:
+    python, modules, version or punkt). ``device`` (cuda or cpu), ``default_model`` (large-v3 on a GPU with
+    enough memory, large-v3-turbo otherwise), ``token`` (a Hugging Face token is saved: needed to separate
+    the speakers) and ``models`` (repo -> in the cache). ``python`` replaces the environment's (tests);
+    ``gpu`` replaces nvidia-smi's answer (tests)."""
+    d = whisperx_env_dir(env_dir)
+    py = Path(python) if python is not None else whisperx_python(d)
+    expected = TRANSCRIBE_DEFAULTS["whisperx_version"]
+    out = {"id": "transcription", "ok": False, "ready": False, "state": "absent", "problem": "absent",
+           "env": as_posix(d), "python": as_posix(py), "python_version": None, "version": None, "expected": expected,
+           "torch": None, "backend": None, "device": "cpu", "gpu": None, "default_model": TRANSCRIBE_DEFAULTS["model_cpu"],
+           "token": False, "models": {}, "punkt": False, "nltk_data": as_posix(nltk_dir(d)),
+           "login_command": login_command(d), "detail": f"no transcription environment at {as_posix(d)}"}
+
+    def broken(problem: str, detail: str) -> dict:
+        out.update(state="broken", problem=problem, detail=detail)
+        return out
+
+    supported, why = platform_supported()
+    if not supported:
+        out.update(state="unsupported", problem="platform", detail=why)
+        return out
+    if not py.is_file():
+        return out
+    files = _model_files(TRANSCRIBE_DEFAULTS["model_gpu"])
+    files.update(_model_files(TRANSCRIBE_DEFAULTS["model_cpu"]))
+    try:
+        r = subprocess.run([str(py), "-B", "-c", _WHISPERX_PROBE, json.dumps(files)], stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                           creationflags=_NO_WINDOW, env={**os.environ, "PYTHONIOENCODING": "utf-8", "HF_HUB_OFFLINE": "1"})
+    except (OSError, subprocess.SubprocessError) as exc:
+        return broken("python", f"the Python of {as_posix(d)} did not run: {exc}")
+    try:
+        probe = json.loads((r.stdout or "").strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        tail = _last_line(r.stderr or r.stdout)
+        return broken("python", f"the Python of {as_posix(d)} exited with {r.returncode}: {tail}".rstrip(": "))
+    versions = probe.get("versions") or {}
+    out.update(python_version=probe.get("python"), version=versions.get("whisperx"), torch=versions.get("torch"),
+               token=bool(probe.get("token")), models=probe.get("cached") or {})
+    out["backend"] = _torch_build(out["torch"])
+    if probe.get("missing"):
+        return broken("modules", f"{as_posix(d)} lacks {', '.join(probe['missing'])}")
+    if out["version"] != expected:
+        return broken("version", f"{as_posix(d)} has whisperx {out['version'] or 'of an unknown version'}, "
+                                 f"and the skill uses {expected}")
+    if out["backend"] and out["backend"].startswith("cu"):
+        info = nvidia_info() if gpu is False else gpu
+        if gpu_usable(info):
+            out["device"], out["gpu"] = "cuda", info
+            if info["vram_mb"] >= TRANSCRIBE_DEFAULTS["gpu_min_vram_mb"]:
+                out["default_model"] = TRANSCRIBE_DEFAULTS["model_gpu"]
+    out["punkt"] = punkt_complete(nltk_dir(d) / "tokenizers" / "punkt_tab")
+    if not out["punkt"]:
+        return broken("punkt", f"NLTK's sentence tokenizer is missing in {as_posix(nltk_dir(d))}")
+    want = [WHISPER_MODELS[out["default_model"]], *TRANSCRIBE_DEFAULTS["align_models"].values()]
+    out["ready"] = all(out["models"].get(repo) for repo in want)
+    where = f"{out['device']}, {out['gpu']['name']}" if out["gpu"] else out["device"]
+    out.update(ok=True, state="ok", problem=None,
+               detail=f"whisperx {out['version']} in {as_posix(d)} ({where}; model {out['default_model']})")
+    return out
+
+
+def diarization_status(status: dict | None = None, online: bool = True, timeout: float = 30.0) -> dict:
+    """Separating the speakers: a token saved, access to the gated pyannote model (online, when it can be
+    checked) and the model in the cache. ``state``: ok, unavailable (no transcription environment),
+    no_token, no_access or download (access, but the model is not downloaded yet). Offline, a model in the
+    cache counts as ok."""
+    st = status if status is not None else transcription_status()
+    repo = TRANSCRIBE_DEFAULTS["diarize_model"]
+    out = {"id": "speakers", "ok": False, "state": "unavailable", "model": repo, "page": DIARIZE_PAGE,
+           "login_command": st.get("login_command"), "cached": bool((st.get("models") or {}).get(repo)),
+           "access": None, "detail": "the transcription environment comes first (setup.md, step 6)"}
+    if not st.get("ok"):
+        return out
+    if not st.get("token"):
+        out.update(state="no_token", detail="no Hugging Face token saved: the subtitles will not separate the speakers")
+        return out
+    access = None
+    if online:
+        try:
+            r = subprocess.run([st["python"], "-B", "-c", _ACCESS_PROBE, repo], stdin=subprocess.DEVNULL,
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                               creationflags=_NO_WINDOW, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+            access = (r.stdout or "").strip().splitlines()[-1] if (r.stdout or "").strip() else f"offline: exit {r.returncode}"
+        except (OSError, subprocess.SubprocessError) as exc:
+            access = f"offline: {exc}"
+    out["access"] = access
+    if access == "no_access":
+        out.update(state="no_access", detail=f"the saved token has no access to {repo}: accept its conditions at "
+                                             f"{DIARIZE_PAGE}, signed in with the same account")
+        return out
+    if not out["cached"]:
+        if access == "ok":
+            out.update(state="download", detail=f"token with access to {repo}, but the model is not downloaded yet")
+        else:
+            out.update(state="download", detail=f"token saved; access to {repo} not confirmed ({access or 'not checked'}) "
+                                                 "and the model is not in the cache")
+        return out
+    note = "access confirmed" if access == "ok" else "the model is in the cache (access not checked online)"
+    out.update(ok=True, state="ok", detail=f"token saved, {note}: the subtitles separate the speakers")
+    return out
+
+
+def _fetch(url: str, opener=None, attempts: int = 6, pause_s: float = 2.0, timeout: float = 180.0) -> bytes:
+    fetch = opener or (lambda u, t: urllib.request.urlopen(u, timeout=t))
+    last = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            with fetch(url, timeout) as r:
+                return r.read()
+        except Exception as exc:   # the network or the server: try again, with a growing pause
+            last = f"{type(exc).__name__}: {exc}"
+            if attempt < attempts:
+                time.sleep(min(pause_s * attempt, 10.0))
+    raise SetupError(f"could not download {url} ({attempts} attempts): {last}")
+
+
+def prepare_punkt(nltk_data: str | os.PathLike, languages: list[str] | None = None, opener=None,
+                  force: bool = False) -> str:
+    """NLTK's punkt_tab in ``<nltk_data>/tokenizers/punkt_tab``, whole for each language (the notebook's
+    preparar_punkt). NLTK's own downloader refuses to run behind some proxies, so the package comes straight
+    from NLTK's repository. The rule is the languages being whole, not the folder existing: an extraction
+    cut short stops in alphabetical order. Published by a rename, so the folder is never half there. Returns
+    what it did; raises SetupError."""
+    import io
+    import zipfile
+    tokenizers = Path(nltk_data) / "tokenizers"
+    punkt = tokenizers / "punkt_tab"
+    mark = punkt / ".complete"
+    tmp = tokenizers / "punkt_tab.downloading"
+    langs = languages or TRANSCRIBE_DEFAULTS["punkt_languages"]
+    has_mark = mark.exists()
+    if not force:
+        if has_mark and punkt_complete(punkt, langs):
+            return "already in place"
+        if not has_mark and punkt_complete(punkt, langs):
+            mark.touch()
+            return "manual installation adopted"
+    if has_mark:
+        mark.unlink()
+    url = TRANSCRIBE_DEFAULTS["punkt_url"]
+    shutil.rmtree(tmp, ignore_errors=True)
+    tokenizers.mkdir(parents=True, exist_ok=True)
+    try:
+        data = _fetch(url, opener)
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            names = z.namelist()
+            if any(n.startswith(("/", "\\")) or ".." in Path(n).parts or ":" in n for n in names):
+                raise SetupError("the package has paths outside its folder")
+            z.extractall(tmp)
+        missing = [n for n in names if not (tmp / n).exists()]
+        root = tmp / "punkt_tab"
+        if missing:
+            raise SetupError(f"{len(missing)} file(s) did not extract (e.g. {missing[0]})")
+        if not root.is_dir():
+            raise SetupError("the package has no punkt_tab/ folder")
+        if not punkt_complete(root, langs):
+            raise SetupError(f"the package lacks {', '.join(langs)} whole")
+        (root / ".complete").touch()
+        shutil.rmtree(punkt, ignore_errors=True)
+        os.replace(root, punkt)
+    except SetupError as exc:
+        raise SetupError(f"could not prepare NLTK's punkt ({exc}); download {url} by hand and extract it in "
+                         f"{as_posix(tokenizers)}") from None
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise SetupError(f"could not prepare NLTK's punkt ({type(exc).__name__}: {exc}); download {url} by hand "
+                         f"and extract it in {as_posix(tokenizers)}") from None
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return "downloaded"
+
+
+def _uv_hint() -> str:
+    if sys.platform == "darwin":
+        return "install uv with Homebrew (brew install uv) and run it again"
+    return "install uv (winget install --id=astral-sh.uv -e, or python -m pip install --user uv) and run it again"
+
+
+def install_transcription(env_dir: str | os.PathLike | None = None, runner=None, opener=None, uv: list[str] | None = None,
+                          backend: str | None | bool = False, base_python: str | None = None) -> dict:
+    """Create or repair the transcription environment, skipping what is already done: uv (pip's, when it is
+    missing), ``uv venv --python 3.12`` (uv downloads that Python when the machine lacks it: WhisperX needs
+    one older than 3.14), ``uv pip install`` of whisperx and the PyTorch build of this machine
+    (``torch_backend``), NLTK's punkt, and then the proof: transcribe.py --check loads the default Whisper
+    model, the alignment models of the setup's languages and, with a token, pyannote, downloading them on the
+    way. A proof that cannot import whisperx reinstalls it once. ``runner(cmd, timeout) -> (code, output)``,
+    ``opener``, ``uv`` and ``backend`` replace the subprocess, the download, uv and the GPU detection (tests).
+    Returns ``{"env", "done", "status", "check"}``; raises SetupError with the end of the failing step's output."""
+    supported, why = platform_supported()
+    if not supported:
+        raise SetupError(why)
+    d = whisperx_env_dir(env_dir)
+    py = whisperx_python(d)
+    done: list[str] = []
+    timeouts = TRANSCRIBE_DEFAULTS
+
+    def attempt(cmd: list, timeout: float, env: dict | None = None) -> tuple[int, str]:
+        try:
+            if runner is not None:
+                return runner([str(c) for c in cmd], timeout)
+            return _run_step([str(c) for c in cmd], timeout, env)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return -1, f"{type(exc).__name__}: {exc}"
+
+    def step(cmd: list, what: str, timeout: float, env: dict | None = None, hint: str = "") -> str:
+        code, output = attempt(cmd, timeout, env)
+        if code != 0:
+            tail = " | ".join([line.strip() for line in output.splitlines() if line.strip()][-3:])
+            raise SetupError(f"could not {what} (exit {code}): {tail}" + (f"; {hint}" if hint else ""))
+        done.append(what)
+        return output
+
+    uvc = uv if uv is not None else find_uv()
+    if uvc is None:
+        step([base_python or sys.executable, "-m", "pip", "install", "--user", "--disable-pip-version-check", "uv"],
+             "install uv (python -m pip install --user uv)", 900.0, hint=_uv_hint())
+        uvc = [base_python or sys.executable, "-m", "uv"]
+    st = transcription_status(d) if py.is_file() else None
+    if st is not None and st["problem"] == "python":       # a folder whose Python does not run: start over
+        if not (d / "pyvenv.cfg").is_file():
+            raise SetupError(f"{as_posix(d)} is not a Python environment: move it away, or point VA_WHISPERX_ENV elsewhere")
+        shutil.rmtree(d, ignore_errors=True)
+        done.append(f"remove the environment {as_posix(d)}, whose Python did not run")
+        st = None
+    if not py.is_file():
+        if d.exists() and any(d.iterdir()) and not (d / "pyvenv.cfg").is_file():
+            raise SetupError(f"{as_posix(d)} exists and is not a Python environment: move it away, or point "
+                             "VA_WHISPERX_ENV elsewhere")
+        step(uvc + ["venv", "--python", TRANSCRIBE_DEFAULTS["python"], str(d)],
+             f"create the environment {as_posix(d)} (Python {TRANSCRIBE_DEFAULTS['python']})", 1800.0)
+        st = None
+    want = torch_backend() if backend is False else backend
+    if st is None:
+        st = transcription_status(d)
+    pkgs = [f"whisperx=={TRANSCRIBE_DEFAULTS['whisperx_version']}", *TRANSCRIBE_DEFAULTS["torch_packages"]]
+    install = uvc + ["pip", "install", "--python", str(py)] + (["--torch-backend", want] if want else [])
+    wrong_build = bool(want) and st.get("torch") is not None and _torch_build(st.get("torch")) != want
+    if st["problem"] in ("absent", "modules", "version") or wrong_build:
+        what = f"install whisperx {TRANSCRIBE_DEFAULTS['whisperx_version']} with the {want or 'default'} PyTorch build"
+        step(install + (["--reinstall-package", "torch"] if wrong_build else []) + pkgs, what,
+             timeouts["install_timeout_s"])
+    result = prepare_punkt(nltk_dir(d), opener=opener)
+    if result != "already in place":
+        done.append(f"NLTK punkt: {result}")
+    st = transcription_status(d)
+    if not st["ok"]:
+        raise SetupError(f"{st['detail']} after the installation")
+    check = [str(py), "-B", str(TRANSCRIBE_SCRIPT), "--check", "--model", st["default_model"], "--diarize"]
+    for lang in TRANSCRIBE_DEFAULTS["setup_languages"]:
+        check += ["--align", lang]
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1", "HF_HUB_DISABLE_TELEMETRY": "1",
+           "NLTK_DATA": str(nltk_dir(d)), "PYTHONWARNINGS": "ignore"}
+    env.pop("PYTHONPATH", None)
+    code, output = attempt(check, timeouts["check_timeout_s"], env)
+    if code == 3:                         # whisperx does not import: reinstall it, once
+        step(install + ["--reinstall"] + pkgs, "reinstall whisperx, which did not load "
+             f"({_last_line(output)})", timeouts["install_timeout_s"])
+        code, output = attempt(check, timeouts["check_timeout_s"], env)
+    proof = None
+    for line in reversed(output.splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                proof = json.loads(line)
+            except ValueError:
+                proof = None
+            break
+    if code != 0 or not isinstance(proof, dict):
+        detail = (proof or {}).get("error") or "; ".join(
+            f"{k}: {v}" for k, v in ((proof or {}).get("align") or {}).items() if v != "ok") or _last_line(output)
+        raise SetupError(f"the proof of the environment failed (exit {code}): {detail}. A download that failed "
+                         "resumes when you run it again")
+    done.append(f"downloaded and loaded {st['default_model']} and the alignment of "
+                f"{', '.join(TRANSCRIBE_DEFAULTS['setup_languages'])} on {proof.get('device')}")
+    return {"env": as_posix(d), "done": done, "status": transcription_status(d), "check": proof}

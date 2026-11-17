@@ -9,7 +9,7 @@
 - ``vtt_candidates`` / ``rename_suggestion``: what to show when the rule fails: stems that are a
   prefix of the video stem (the Teams "<name>-YYYYMMDD_HHMMSS-Gravação de Reunião" pattern),
   stems that start with the video stem ("<video>.pt-BR.vtt"), and difflib ratio >= 0.6; plus a
-  ``Rename-Item -LiteralPath '<path>' -NewName '<name>'`` line for PowerShell.
+  ``Rename-Item -LiteralPath '<path>' -NewName '<name>'`` line for PowerShell (``mv -n`` on macOS).
 
 Pure functions: no printing, no exceptions for missing inputs (callers decide the error).
 """
@@ -23,7 +23,7 @@ from .common import AmbiguousPathError, nfc_casefold, resolve_unicode_paths
 
 __all__ = [
     "VIDEO_EXTS", "VTT_EXT", "expand_inputs", "find_vtt", "vtt_candidates", "rename_suggestion",
-    "ps_quote", "match_vtts", "missing_vtt_detail", "is_video_name",
+    "ps_quote", "sh_quote", "match_vtts", "missing_vtt_detail", "is_video_name",
 ]
 
 VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".webm", ".m4v", ".avi", ".wmv", ".mpg", ".mpeg", ".ts", ".m2ts", ".flv")
@@ -188,11 +188,20 @@ def ps_quote(text: str) -> str:
     return f"'{s}'"
 
 
-def rename_suggestion(vtt: Path, video: Path) -> str:
-    """``Rename-Item -LiteralPath '<vtt>' -NewName '<video stem>.vtt'`` (Windows separators;
-    the names exactly as stored on disk, so -LiteralPath matches NFD names too)."""
-    src = os.path.normpath(str(vtt))
+def sh_quote(text: str) -> str:
+    """A POSIX shell single-quoted literal: nothing is special inside, and a ' becomes '\\''."""
+    return "'" + str(text).replace("'", "'\\''") + "'"
+
+
+def rename_suggestion(vtt: Path, video: Path, posix: bool | None = None) -> str:
+    """The command that gives the subtitles the video's name, in the person's shell. On Windows,
+    ``Rename-Item -LiteralPath '<vtt>' -NewName '<video stem>.vtt'`` (PowerShell; Windows separators and
+    the names exactly as stored on disk, so -LiteralPath matches NFD names too); elsewhere (macOS),
+    ``mv -n '<vtt>' '<folder>/<video stem>.vtt'`` (-n never overwrites). ``posix`` forces one (tests)."""
     new = Path(video).stem + VTT_EXT
+    if posix if posix is not None else os.name != "nt":
+        return f"mv -n {sh_quote(str(vtt))} {sh_quote(str(Path(video).with_name(new)))}"
+    src = os.path.normpath(str(vtt))
     return f"Rename-Item -LiteralPath {ps_quote(src)} -NewName {ps_quote(new)}"
 
 
@@ -227,7 +236,7 @@ def match_vtts(videos: list[Path], explicit_vtt: Path | None = None,
 
 def missing_vtt_detail(missing: list[dict], allow_vtt_flag: bool) -> str:
     """The English ``error.detail`` for ``missing_vtt``: per video, the candidates in its folder and
-    the suggested ``Rename-Item`` (the user decides; nothing is renamed automatically)."""
+    the suggested rename (``rename_suggestion``; the user decides; nothing is renamed automatically)."""
     n = len(missing)
     lines = [f"No .vtt subtitles with the same name for {n} video{'s' if n > 1 else ''} "
              "(strict rule: the same name as the video, with the .vtt extension, in the same folder):"]
@@ -236,7 +245,8 @@ def missing_vtt_detail(missing: list[dict], allow_vtt_flag: bool) -> str:
         cands = m["candidates"]
         if cands:
             lines.append("  candidates in the folder: " + "; ".join(f"{c['name']} ({_REASON_TEXT[c['reason']]})" for c in cands))
-            lines.append(f"  suggestion (PowerShell): {m['suggestion']}")
+            shell = "PowerShell" if str(m["suggestion"]).startswith("Rename-Item") else "Terminal"
+            lines.append(f"  suggestion ({shell}): {m['suggestion']}")
         else:
             lines.append("  no similar .vtt in the folder")
     alt = ["--skip-missing skips the videos without subtitles"]

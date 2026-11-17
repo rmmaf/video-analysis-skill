@@ -145,3 +145,59 @@ One manual run of the 5 fixtures, `--jobs 2`, real CLI, default workspace (cache
 - Determinism: `--jobs 1` and `--jobs 2`, both `--force all`, into two workspaces (venda_zero and
   the .mov): 125 files byte-identical after replacing the workspace prefix (16 JSON, 8 MD, 2 CSV,
   99 JPEG including sheets and overview).
+
+## 9. Local transcription (WhisperX 3.8.6, 2026-11-11)
+
+A copy of the Repasse da_1608 recording without its `.vtt` (9 min 04 s, Teams, 12 participants), through the
+real flow: the request without a speaker count, the estimate (`pending`, `needs_speakers`), the count, then
+the prepare in the background. Machine: a 2017 laptop, Intel i7-7700HQ (4 cores, 8 threads), Windows 11,
+no NVIDIA GPU. `large-v3-turbo`, CPU, `int8`, 4 threads, batch 8; `num_speakers: 4-12`.
+
+**Installation** (`--install-transcription`, from nothing): 9 min. On disk: the environment 3.7 GB (uv
+reused the machine's Python 3.12), `large-v3-turbo` 1.6 GB, the Portuguese aligner 1.2 GB, pyannote's
+community-1 32 MB. transformers 4.57 also fetched, in a background thread, the Hub bot's safetensors copy
+of the aligner (another 1.2 GB, never loaded): `transcribe.py` now sets `DISABLE_SAFETENSORS_CONVERSION`.
+
+**Time** (`transcribe.log`; 544.5 s of audio):
+
+| phase | seconds | per second of audio |
+|---|---|---|
+| imports and audio | 10 | — |
+| model load | 55 | — |
+| language detection (6 speech windows; pt, probability 1.00) | 21 | — |
+| speech (1 block: up to 15 min is one block) | 639 | 1.17 |
+| times of the words (wav2vec2 aligner) | 211 | 0.39 |
+| speakers (pyannote community-1, its batches of 32) | 544 | 1.00 |
+| total | 1480 | 2.72 |
+
+The first cost model (0.9 + 0.12 + 0.12 per second, 45 s to start) said 666 s; the calibrated one
+(`TRANSCRIBE_DEFAULTS["cost"]["cpu"]`: 90 s, 1.17 + 0.39 + 1.0) says 1484 s. Only `large-v3-turbo` was
+measured: the other CPU models are scaled from it, and the CUDA figures are not measured. On a CPU the speakers
+are about 40% of the whole, so another `num_speakers` on a transcribed video costs about the length of the
+video, not minutes.
+
+**Quality against the notebook's subtitles** of the same meeting (WhisperX on Colab;
+`compare_vtt`-style metrics, the skill's own parser on both sides, no text compared by eye):
+
+| | notebook | local |
+|---|---|---|
+| speakers | 6, plus 1 `FALANTE_?` cue | 6, none unknown |
+| words | 1350 | 1336 |
+| timing lines (after the parser's repairs) | 155 (156: 1 rolling merge, 1 long split, 6 fast) | 178 (177: 1 rolling merge, 5 fast) |
+| share of the video under a cue | 81.5% | 78.9% |
+
+Word error rate of the local subtitles against the notebook's 7.8% (difflib similarity 0.946); they are two
+Whisper runs, so this is disagreement, not error. Speakers: after the best one-to-one mapping of the labels,
+the same speaker at 98.7% of 849 instants sampled every 0.5 s where both have a cue.
+
+**The speaker count from the images.** Asked how many people speak, the user had an agent (Sonnet) read the
+41 unique frames instead: 4 people with the speaking indicator in some frame, 12 in Teams' people counter,
+so `4-12`; pyannote found 6. It read every frame: 60 s, about 150k tokens. That became the form's `Não sei`:
+`prepare.py --speaker-shots` took 12 screenshots spread over the video in 4.5 s (`SHOTS_DEFAULTS`), and the
+agent of `reference/speaker-count.md`, reading only those, answered the same `SPEAKERS: 4-12` in 13 s and about
+90k tokens (the counter showed in 2 of the 12; the speaking indicator, on 4 different people).
+
+**A hang found on the way:** the first run sat for 53 min at 0 s of CPU. `--watch-stdin` had a thread
+blocked in `os.read(0)` on prepare.py's pipe, which on Windows holds the C runtime's lock on fd 0, and
+`import numpy` waited on it forever (`test_transcribe_script.py` reproduces it). The watcher now polls the
+pipe with `PeekNamedPipe` on Windows.

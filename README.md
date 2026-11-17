@@ -5,7 +5,8 @@ meetings (Teams, Zoom) and lectures with slides. You give an objective, such as 
 who is responsible" or "what is on the screen when they talk about the error?", and you get a report per
 video in which each finding points to the frame and the time that support it.
 
-**Version 1.0.0** · Windows · Python 3.10+ · ffmpeg · Claude Code with the Workflow tool
+**Version 1.1.0** · Windows (the local transcription also on macOS with Apple silicon) · Python 3.10+ ·
+ffmpeg · Claude Code with the Workflow tool
 
 The command-line options, the request file (`request.md`), the `resume` keyword and the file names of the
 skill are in English. The Portuguese names of the earlier version still work (`--max-lotes`, `--papeis`,
@@ -19,6 +20,10 @@ and the templates of the reports stay in Portuguese. Reports are written in the 
   screen that comes back is reused instead of becoming a new frame.
 - Reads the `.vtt` subtitles of the same name (WhisperX, Teams or plain) and links each frame to the speech
   in the interval it represents.
+- Without subtitles, transcribes the video on the machine with WhisperX, after asking how many people
+  speak: the speech, the time of each word and, with a free Hugging Face token, who speaks. The `.vtt`
+  stays next to the video, so the next analysis asks nothing. No Docker: a Python environment of its own,
+  on Windows and on Macs with Apple silicon.
 - Splits each video into batches of up to 20 frames. A curator (Opus) plans the batches and an analyst
   (Sonnet) examines each one, in series.
 - Delivers a `relatorio.md` per video and, with two or more videos, a combined report.
@@ -30,8 +35,12 @@ and the templates of the reports stay in Portuguese. Reports are written in the 
 
 The skill has two layers.
 
-1. **Deterministic** (`scripts/`, Python). `prepare.py` decodes the video once with ffmpeg, at 2 frames
-   per second, and compares each sample, in grayscale and 360 px high, with the last frame kept. Only
+1. **Deterministic** (`scripts/`, Python). A video without subtitles is transcribed first by
+   `scripts/transcribe.py`, which runs WhisperX in its own Python environment (`whisperx-env`, made by the
+   setup): Whisper in blocks of about 10 minutes, each one a checkpoint, then the time of each word and
+   the speakers (pyannote); `prepare.py` writes the result as a `.vtt` next to the video. Then
+   `prepare.py` decodes the video once with ffmpeg, at 2 frames per second, and compares each sample, in
+   grayscale and 360 px high, with the last frame kept. Only
    what really changed stays, each frame with the time interval it represents and a JPEG whose longer
    side is 1568 px. Then it reads the subtitles, fixes and merges the cues, aligns the cues to the frames
    and writes the batches: the timeline of each batch (`batch_NNN.md`), a contact sheet of thumbnails and
@@ -47,6 +56,8 @@ The skill has two layers.
 ```mermaid
 flowchart TD
     A["Call to /video-analysis"] --> B["request.md<br/>videos, objective and options"]
+    B -->|"no .vtt"| T["transcribe.py<br/>WhisperX on the machine, .vtt next to the video"]
+    T --> C
     B --> C["prepare.py<br/>unique frames, subtitles, alignment and batches"]
     C --> D[("cache per video")]
     C --> E["Workflow"]
@@ -77,11 +88,14 @@ above 800, it refuses the run.
 
 | item | version | what for |
 |---|---|---|
-| Windows | developed on Windows 11 | the skill's paths, permissions and messages are for Windows |
+| Windows | developed on Windows 11 | the skill's paths, permissions and messages are for Windows; the local transcription also runs on macOS with Apple silicon |
 | Claude Code | with skills and the Workflow tool | without Workflow, the skill runs the same loop with the Agent tool ([`reference/without-workflow.md`](reference/without-workflow.md)) |
 | Python | 3.10 or newer (tested on 3.14) | deterministic layer |
 | ffmpeg and ffprobe | on the PATH (tested on 8.1) | probing and frame extraction |
 | numpy and Pillow | any recent version | frame comparison and images; the skill itself does not use OpenCV |
+| WhisperX | 3.8.6 with PyTorch 2.8, in its own Python 3.12 environment (about 6.5 GB with the models, without NVIDIA) | the transcription of a video without subtitles; the setup creates it with uv |
+| uv | any recent version | creates that environment and brings its Python; the setup installs it when missing |
+| Hugging Face token (optional) | a free Read token, with the conditions of `pyannote/speaker-diarization-community-1` accepted | separating the speakers in the transcription |
 | DeepFace (optional) | 0.0.104, in its own Python environment (about 350 MB) | the webcam timeline; the setup creates it if you want it |
 | Node.js | 24 | only for the workflow tests |
 | pytest | any recent version | only for the tests |
@@ -101,15 +115,20 @@ above 800, it refuses the run.
    ```
 
    The setup runs `check_environment.py` and handles one item at a time: Python, ffmpeg, numpy and
-   Pillow, the central folder, the agents and the workflow, the permission rules and, if you want it, the
-   DeepFace environment of the webcam timeline. Nothing is installed or written without your confirmation.
-   Outside the central folder, it writes to these places (the last row only if you accept DeepFace):
+   Pillow, the central folder, the agents and the workflow, the permission rules, the transcription
+   environment and, if you want them, the Hugging Face token that separates the speakers and the DeepFace
+   environment of the webcam timeline. Nothing is installed or written without your confirmation, and the
+   token you save yourself, in your own terminal. Outside the central folder, it writes to these places:
 
    | what | where | how to undo |
    |---|---|---|
    | the curator and analyst roles | `%USERPROFILE%\.claude\agents\video-analysis-*.md` | delete the two files |
    | the saved workflow | `%USERPROFILE%\.claude\workflows\video-analysis.js` | delete the file |
    | the permission rules for the central folder | `%USERPROFILE%\.claude\settings.json` | restore the `settings.json.bak-<date>` |
+   | the transcription environment | `%USERPROFILE%\whisperx-env\` | delete the folder |
+   | uv, its Python 3.12 and its package cache | `pip install --user uv`; `uv python dir`; `uv cache dir` | `uv python uninstall 3.12`, `uv cache clean`, `python -m pip uninstall uv` |
+   | the Whisper, alignment and pyannote models | `%USERPROFILE%\.cache\huggingface\hub\` | delete their `models--*` folders |
+   | the Hugging Face token (you save it) | `%USERPROFILE%\.cache\huggingface\token` | `hf auth logout` |
    | the DeepFace environment and the YuNet weights | `%USERPROFILE%\deepface-env\` and `%USERPROFILE%\.deepface\weights\face_detection_yunet_2023mar.onnx` | delete the folder and the file |
 
 3. Close and reopen Claude Code, so that it loads the agents and the workflow. Start with a short
@@ -133,17 +152,23 @@ In the Claude Code conversation:
 /video-analysis resume
 ```
 
-- Each video needs a `.vtt` subtitle file with the same name, in the same folder: `reuniao.mp4` uses
-  `reuniao.vtt`.
+- A video with a `.vtt` subtitle file of the same name, in the same folder, uses it: `reuniao.mp4` uses
+  `reuniao.vtt`. Without one, the skill asks how many people speak and transcribes the video on the
+  machine, saving `reuniao.vtt` next to it. Say the number in the call (`são 3 pessoas`, or
+  `--num-speakers 3`) and nobody is asked; answer `Não sei` and an agent counts the people in 12
+  screenshots of the video (who is seen speaking, how many are in the meeting) and gives pyannote that
+  range.
 - Accepted formats: `.mp4`, `.mkv`, `.mov`, `.webm`, `.m4v`, `.avi`, `.wmv`, `.mpg`, `.mpeg`, `.ts`,
   `.m2ts` and `.flv`.
 - Put the path in quotes. That way the skill recognizes folders and names with spaces.
 
 What happens after the call:
 
-1. The skill writes the request and estimates the extraction time.
-2. `prepare.py` extracts frames, subtitles and batches, or reuses them from the cache, and computes how
-   many agents the run will use. With more than 80, the skill asks before launching the Workflow.
+1. The skill writes the request and estimates the extraction time. A video without subtitles gets a
+   question: how many people speak in it?
+2. `prepare.py` transcribes the videos without subtitles (on a CPU, slowly: 25 min for a 9-min meeting on
+   a 2017 laptop; once per video), extracts frames, subtitles and batches, or reuses them from the cache, and computes how many
+   agents the run will use. With more than 80, the skill asks before launching the Workflow.
 3. The Workflow runs in the background, at about 4 minutes per batch, and lets you know when it finishes.
 4. The skill shows the summary of each video and the path of the reports.
 
@@ -163,6 +188,9 @@ from where it stopped.
 | `--roles agents\|inline` | automatic | `agents` uses the installed agents; `inline` passes the roles in the prompt and costs a little more |
 | `--language xx` | the objective's | language of the reports |
 | `--speakers "SPEAKER_01=Name;…"` | — | real names of the speakers in the subtitles |
+| `--num-speakers N` | asked | how many people speak, for a video the skill transcribes: `3`, `2-4`, `4+`, `auto`, or `1` (no speaker separation); per video, `v1=3; v2=auto` |
+| `--whisper-model NAME` | by hardware | Whisper model of the transcription: `large-v3-turbo` on a CPU and on a Mac, `large-v3` on an NVIDIA GPU (GTX 9xx/10xx use the CPU) |
+| `--audio-language xx` | `auto` | language spoken in the video, for the transcription; detected over the speech by default |
 | `--sensitivity low\|normal\|high` | `normal` | `high` catches smaller changes and produces more frames |
 | `--ignore-region x,y,w,h` | — | region of the frame, in fractions, left out of the comparison: webcam, clock |
 | `--ignore-timeline FILE.json` | — | regions left out only during spans of the video: a webcam that comes and goes with the layout (`scripts/webcam_mask.py --timeline`); it prevails over the automatic timeline of that video, even without spans |
@@ -174,7 +202,7 @@ When to change each one and what it costs: [`reference/parameters.md`](reference
 
 ```text
 %USERPROFILE%\video-analysis\
-├── cache\<slug>-<fp8>\              subtitles, frames, batches and webcam timeline of each video, reused across runs
+├── cache\<slug>-<fp8>\              subtitles, frames, batches, webcam timeline and transcription of each video, reused across runs
 ├── runs\<YYYYMMDD-HHMMSS>-<slug>\
 │   ├── relatorio.md                 combined report, with 2+ videos
 │   └── v1\                          the video's relatorio.md, ledger.md, prompts\ and reports\
@@ -184,7 +212,9 @@ When to change each one and what it costs: [`reference/parameters.md`](reference
 ```
 
 The agents only read the cache and only write to `runs\`. Moving, renaming or editing a video causes it
-to be extracted again; changing the objective does not.
+to be extracted again (and transcribed again, if its `.vtt` stays behind); changing the objective does
+not. The `.vtt` that the skill generates goes next to the video, with a copy in the run (`v1\legenda.vtt`),
+and is never written over a file of yours.
 
 ## Command-line tools
 
@@ -195,6 +225,7 @@ python scripts/prepare.py "C:\Videos\reuniao.mp4"                      # only wa
 python scripts/prepare.py --gc 30                                       # deletes from the cache the videos unused for 30 days
 python scripts/explain.py --frames-json <frames.json> --frame F0042     # why this frame was kept
 python scripts/calibrate.py "C:\Videos\reuniao.mp4" --grid "sensitivity=normal,high"   # compares parameters
+python scripts/prepare.py "C:\Videos\reuniao.mp4" --num-speakers 3     # transcribes it when there is no .vtt, then warms up the cache
 python check_environment.py                                            # checks the environment, without changing anything
 %USERPROFILE%\deepface-env\Scripts\python scripts/webcam_mask.py "C:\Videos\reuniao.mp4" --timeline webcam.json   # webcam over time by hand (prepare.py already runs it)
 ```
@@ -331,6 +362,9 @@ python tests/check_run.py <run_dir>     # checks a finished run
   `--curation batches`, the ledger must be integrated up to the second-to-last or the last batch analysed,
   and each batch needs its own prompt. A run without `options.curation` predates the option, had the NEXT
   and is checked as `batches`.
+- The transcription tests (`test_transcript.py`, `test_transcription_env.py`, `test_transcribe_script.py`
+  and the transcription part of `test_prepare_cli.py`) need neither WhisperX nor a network: a fake
+  `transcribe.py`, fake environments and an in-memory punkt stand in for them.
 - `tests/test_vtt.py` and `tests/test_data_files.py` read real subtitle excerpts that are kept out of git
   (see [Data and privacy](#data-and-privacy)). In a fresh clone, these tests fail because the files are
   missing.
@@ -342,8 +376,8 @@ python tests/check_run.py <run_dir>     # checks a finished run
 | exit code | meaning |
 |---|---|
 | `0` | ok, sometimes with warnings |
-| `2` | input: video or subtitles not found, invalid request or option, run too large |
-| `3` | environment: ffmpeg, ffprobe, Python, numpy or Pillow missing; run `/video-analysis setup` |
+| `2` | input: video not found, subtitles not found without the transcription environment, invalid request or option, run too large |
+| `3` | environment: ffmpeg, ffprobe, Python, numpy or Pillow missing, or a transcription environment that does not work; run `/video-analysis setup` |
 | `4` | a video failed; the others go on |
 | `130` | interrupted; what was completed stays in the cache |
 | `1` | internal error; the traceback goes to `logs\` |
@@ -353,9 +387,18 @@ Symptoms, causes and fixes, including permissions, agents and Workflow:
 
 ## Data and privacy
 
-- The skill uses no secrets and no login: it works with local files, ffmpeg and Python. The optional
-  DeepFace environment comes from PyPI, and the setup also downloads the YuNet weights (about 230 KB, from
-  OpenCV's model repository on GitHub, checked by their SHA-256), so that an analysis does not have to.
+- The skill works with local files, ffmpeg and Python. The transcription runs on the machine: the audio
+  never leaves it. The setup downloads WhisperX and PyTorch (PyPI and the PyTorch index) and the models
+  (Hugging Face: Whisper, the alignment and pyannote); an alignment model for another language comes at
+  its first use.
+- One secret, optional: the Hugging Face token that separates the speakers. You save it in your own
+  terminal (`hf auth login`, in `~/.cache/huggingface/token`); Claude never sees it. Without it, the
+  subtitles do not say who speaks.
+- The optional DeepFace environment comes from PyPI, and the setup also downloads the YuNet weights (about
+  230 KB, from OpenCV's model repository on GitHub, checked by their SHA-256), so that an analysis does
+  not have to.
+- The `.vtt` the skill generates says so in a `NOTE` at its top. The skill writes it only where there was
+  none and replaces it only while nobody has edited it.
 - The agents do not copy sensitive values that appear on the screen or in the speech, such as a password,
   token, key, connection string, CPF, phone number or personal e-mail. They record only that the data
   appeared, in which frame and at what time.
@@ -367,18 +410,25 @@ Symptoms, causes and fixes, including permissions, agents and Workflow:
 
 ## Known limitations
 
-- **Windows only.** The setup and the paths assume Windows, but any Windows user can install the
+- **Windows first.** The setup and the paths assume Windows, but any Windows user can install the
   skill: the docs name paths as `%USERPROFILE%\...`, the scripts find the folders through
   `%USERPROFILE%`, `VIDEO_ANALYSIS_HOME` (central folder) and `VA_CLAUDE_HOME` (Claude Code folder),
-  and `check_environment.py` prints the concrete paths.
+  and `check_environment.py` prints the concrete paths. The local transcription was written for Windows
+  and for macOS on Apple silicon (CPU only; Intel Macs have no PyTorch 2.8), but was tested only on a
+  Windows CPU; the rest of the skill on a Mac, and the NVIDIA GPU path, have not been tried on hardware.
 - **A change of color alone does not become a frame.** The comparison is in grayscale: a new color with
   the same brightness goes unnoticed.
 - **Tiny changes can be mistaken for the cursor.** A digit or a few letters may not become a frame;
   `--sensitivity high` reduces this.
 - **Long videos are expensive and slow.** A 55-minute meeting yields about 50 batches, and the batches of
   a video run in series. Use `--range` or `--max-batches`.
-- **No subtitles, no analysis.** Without the `.vtt` of the same name, `prepare.py` stops, shows the
-  candidate files and suggests the command to rename.
+- **Local transcription is slow on a CPU.** 2.7 times the length of the video on the 4-core 2017 laptop
+  where it was measured, once per video (the whole video, even with `--range`); a newer CPU is faster.
+  Blocks of about 10 minutes are checkpoints: an interrupted transcription resumes.
+- **Anonymous speakers.** The transcription labels them `SPEAKER_00`, `SPEAKER_01`…; `--speakers` gives
+  the names. Without a Hugging Face token, the subtitles do not separate the speakers at all.
+- **A similar `.vtt` is not used on its own.** When the folder has a `.vtt` with another name (a Teams
+  transcript under the meeting's name), the skill asks whether to use it, renamed, or to transcribe.
 
 ## Next steps
 
@@ -395,11 +445,13 @@ Out of scope for version 1, according to the [plan](docs/plan.md):
 
 | component | version | constant in `scripts/va/__init__.py` |
 |---|---|---|
-| skill | `1.0.0` | `VERSION` |
+| skill | `1.1.0` | `VERSION` |
 | frame extraction and deduplication | `dedup-1.1` | `ALGO_VERSION` |
 | subtitle parser | `vtt-1.0` | `PARSER_VERSION` |
 | alignment, batches and rendering | `render-1.1` | `RENDER_VERSION` |
 | webcam timeline | `webcam-1.1` | `WEBCAM_VERSION` |
+| local transcription (WhisperX 3.8.6) | `transcript-1.0` | `TRANSCRIBE_VERSION` |
+| screenshots for the speaker count (`--speaker-shots`) | `shots-1.0` | `SHOTS_VERSION` |
 | `workflow_args` contract | `1` | `SCHEMA_VERSION` |
 
 The stage versions go into the cache keys: changing one of them redoes only the affected stage and the
@@ -415,6 +467,7 @@ following ones.
 | [`reference/parameters.md`](reference/parameters.md) | what each parameter does and when to change it |
 | [`reference/troubleshooting.md`](reference/troubleshooting.md) | symptom, cause and what to do |
 | [`reference/without-workflow.md`](reference/without-workflow.md) | the same loop with the Agent tool, without Workflow |
+| [`reference/speaker-count.md`](reference/speaker-count.md) | the prompt of the agent that counts who speaks from screenshots, when the answer is `Não sei` |
 | [`docs/plan.md`](docs/plan.md) | plan, architecture and implementation errata |
 | [`docs/design-deterministic.md`](docs/design-deterministic.md) | specification of the deterministic layer |
 | [`docs/design-agentic.md`](docs/design-agentic.md) | specification of the agentic layer |
@@ -426,17 +479,19 @@ following ones.
 video-analysis/
 ├── SKILL.md                 the skill's instructions for Claude Code
 ├── setup.md                 setup procedure
-├── check_environment.py    checks Python, ffmpeg, agents, workflow, permissions and the optional DeepFace
+├── check_environment.py    checks Python, ffmpeg, agents, workflow, permissions, the transcription and the optional DeepFace
 ├── agents/                  roles of the curator (Opus) and the analyst (Sonnet)
 ├── workflow/                video-analysis.js, the Workflow script
 ├── scripts/
 │   ├── prepare.py           command line of the deterministic layer
 │   ├── calibrate.py         parameter sweep of the frame engine
 │   ├── explain.py           panel showing why a frame was kept or ignored
+│   ├── transcribe.py        WhisperX transcription of a video without subtitles, in its own environment;
+│   │                        prepare.py runs it before the extraction
 │   ├── webcam_mask.py       webcam regions (fixed or over time) with DeepFace, in a separate environment;
 │   │                        prepare.py runs it before the extraction
 │   └── va/                  extraction, deduplication, subtitles, alignment, batches, cache and runs
-├── reference/               contracts, parameters, troubleshooting and the procedure without Workflow
+├── reference/               contracts, parameters, troubleshooting, the procedure without Workflow and the speaker-count prompt
 ├── docs/                    plan, specifications and the earlier prototype (prior-art)
 └── tests/                   pytest, synthetic videos, workflow harness and test data
 ```

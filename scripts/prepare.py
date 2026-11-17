@@ -13,6 +13,10 @@ Manual use:
 
 stdout: exactly one JSON line (the last one), also written to <run_dir>/prepare.json and to logs/.
 stderr: first "run_dir: …", then the progress; <run_dir>/status.json is updated every 5 s.
+Subtitles: the .vtt of the same name; without one, the video is transcribed here with WhisperX, in the
+transcription environment of the setup (scripts/transcribe.py; scripts/va/transcript.py), one video at a
+time, before anything else, and the subtitles go next to the video (--num-speakers, --whisper-model,
+--audio-language). Without that environment, a video without subtitles stops the run (missing_vtt).
 Webcam timeline: with the DeepFace environment of the setup, before extracting the frames, prepare.py runs
 scripts/webcam_mask.py in it (a probe, then the full scan if a face shows up) and keeps the timeline in the
 video's cache (--webcam-timeline auto|on|off; scripts/va/webcam.py).
@@ -41,11 +45,14 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 import va  # noqa: E402
 from va import WEBCAM_DEFAULTS, WORKFLOW_DEFAULTS, WORKSPACE_DIRS, environment, cache, contracts, discover, runs, webcam  # noqa: E402
+from va import transcript  # noqa: E402
 from va.common import (as_posix, fmt_hms, parse_time, read_json, resolve_unicode_paths, setup_console,  # noqa: E402
                        video_title, workspace_home, write_json, write_text)
 
 SCRIPT_PATH = as_posix(SKILL_DIR / "workflow" / "video-analysis.js")
 WEBCAM_SCRIPT = SCRIPTS_DIR / "webcam_mask.py"   # run with the Python of the DeepFace environment
+TRANSCRIBE_SCRIPT = SCRIPTS_DIR / "transcribe.py"   # run with the Python of the transcription environment
+RUN_VTT = "legenda.vtt"   # <run_dir>/v<N>/: a copy of transcribed subtitles, for a resume after --gc
 STATUS_INTERVAL_S = 5.0
 LONG_PATH = 240
 DEFAULT_LANGUAGE = "pt-BR"
@@ -85,6 +92,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="request.md with # videos, # objective and # options (the skill's input; --pedido is the old name)")
     m.add_argument("--estimate", "--estimar", dest="estimate", action="store_true",
                    help="ffprobe and cache only: estimates the time; does not consume the request or create a run")
+    m.add_argument("--speaker-shots", dest="speaker_shots", nargs="?", const="all", metavar="VIDS",
+                   help="screenshots spread over each video (or only the vids given: v1,v3), for the agent that "
+                        "counts who speaks when the person does not know (SKILL.md, step 4); like --estimate, it "
+                        "does not consume the request or create a run")
     m.add_argument("--resume", "--retomar", dest="resume", metavar="RUN", help="run_id, run folder or latest")
     m.add_argument("--gc", nargs="?", const=30.0, type=float, metavar="DAYS",
                    help="deletes from the cache the videos unused for more than DAYS (default 30)")
@@ -123,9 +134,17 @@ def build_parser() -> argparse.ArgumentParser:
                    metavar="FILE.json", help="regions ignored only during spans of the video (scripts/webcam_mask.py "
                                              "--timeline writes it); one file per video, each naming its video")
     a.add_argument("--webcam-timeline", "--linha-do-tempo-webcam", dest="webcam_timeline", metavar="auto|on|off",
-                   help="the webcam timeline made with DeepFace, when its environment exists (setup.md, step 6): "
+                   help="the webcam timeline made with DeepFace, when its environment exists (setup.md, step 8): "
                         "auto (default) probes the video and runs the full scan only if a face shows up; "
                         "on always runs the full scan (without the environment: exit 3); off never runs it")
+    a.add_argument("--num-speakers", "--num-falantes", dest="num_speakers", metavar="N|N-M|N+|auto",
+                   help="how many people speak, for the videos transcribed here: 3, 2-4, 4+ or auto; per video, "
+                        "v1=3; v2=auto (the vid of the estimate, the slug or the file name). 1 = no diarization")
+    a.add_argument("--whisper-model", "--modelo-whisper", dest="whisper_model", metavar="MODEL",
+                   help="the Whisper model of the transcription (default: large-v3 on an NVIDIA GPU, "
+                        "large-v3-turbo otherwise)")
+    a.add_argument("--audio-language", "--idioma-audio", dest="audio_language", metavar="xx|auto",
+                   help="the language spoken in the videos transcribed here (default: auto, detected over speech)")
     d = p.add_argument_group("extraction and batches (manual use; design §2)")
     d.add_argument("--start", metavar="T", help="start of the extracted range ([HH:]MM:SS[.mmm] or seconds)")
     d.add_argument("--end", metavar="T", help="end of the extracted range")
@@ -296,7 +315,7 @@ class Status:
 def gather(ctx: Ctx, args) -> tuple[list[str], str | None, dict]:
     if args.request:
         ctx.request = Path(os.path.abspath(args.request))
-        ctx.consume = not args.estimate  # any later failure renames it to request.error.md
+        ctx.consume = not (args.estimate or args.speaker_shots)  # any later failure renames it to request.error.md
         if args.inputs:
             raise Fail("invalid_usage", "use --request or direct inputs (INPUT…), not both")
         if args.objective or args.objective_file:
@@ -449,7 +468,7 @@ def webcam_environment(ctx: Ctx, mode: str, known: list[dict]) -> str | None:
         return st["python"]
     if mode == "on":
         raise Fail("missing_dependency", f"webcam_timeline: on, but {st['detail']}: run /video-analysis setup "
-                   "(step 6 creates the DeepFace environment)")
+                   "(step 8 creates the DeepFace environment)")
     if st["state"] != "absent":
         ctx.warnings.append(f"webcam timeline skipped: {st['detail']} (run /video-analysis setup)")
     for k in pending:
@@ -505,7 +524,11 @@ def make_webcam_timeline(ctx: Ctx, it: dict, python: str, overrides: dict, param
     it.update(params=vparams, keys=keys, hits=cache.stage_hits(vdir, keys, force))
 
 
-def discover_pairs(ctx: Ctx, args, entries: list[str]) -> list[tuple[Path, Path]]:
+def discover_pairs(ctx: Ctx, args, entries: list[str]) -> list[dict]:
+    """The videos of the run, in the order of the inputs (the ``vid`` is the position):
+    ``{"video", "vtt", "missing"}``. ``vtt`` is None for a video without subtitles of the same name, which
+    prepare.py transcribes when it can (``transcription_gate``); ``missing`` then holds its candidates and the
+    rename suggestion, for missing_vtt. --skip-missing skips those videos instead (no transcription)."""
     videos, problems = discover.expand_inputs(entries, recursive=args.recursive)
     if problems:
         detail = "; ".join(f"{p['input']} ({_REASONS.get(p['reason'], p['reason'])})" for p in problems)
@@ -522,19 +545,123 @@ def discover_pairs(ctx: Ctx, args, entries: list[str]) -> list[tuple[Path, Path]
             raise Fail("missing_vtt", f"--vtt points to a file that does not exist: {args.vtt}")
         explicit = hits[0]
     pairs, skipped, missing = discover.match_vtts(videos, explicit, skip_missing=args.skip_missing)
-    if missing:
-        raise Fail("missing_vtt", discover.missing_vtt_detail(missing, allow_vtt_flag=len(videos) == 1),
-                   missing_vtt=[{"video": as_posix(m["video"]), "candidates": [as_posix(c["path"]) for c in m["candidates"]],
-                                 "suggestion": m["suggestion"]} for m in missing])
     if skipped:
         ctx.warnings.append("no subtitles with the same name, skipped by --skip-missing: " + "; ".join(p.name for p in skipped))
-    if not pairs:
+    found = {str(v): vtt for v, vtt in pairs}
+    absent = {str(m["video"]): m for m in missing}
+    out = [{"video": v, "vtt": found.get(str(v)), "missing": absent.get(str(v))} for v in videos
+           if str(v) in found or str(v) in absent]
+    if not out:
         raise Fail("missing_vtt", "no video with a .vtt subtitle file of the same name (all skipped by --skip-missing): "
                    + "; ".join(p.name for p in skipped))
-    for video, _ in pairs:
-        if len(str(video)) > LONG_PATH:
-            ctx.warnings.append(f"path longer than {LONG_PATH} characters (close to the Windows limit): {video.name}")
-    return pairs
+    for x in out:
+        if len(str(x["video"])) > LONG_PATH:
+            ctx.warnings.append(f"path longer than {LONG_PATH} characters (close to the Windows limit): {x['video'].name}")
+    return out
+
+
+def _missing_payload(missing: list[dict], st: dict | None) -> list[dict]:
+    tx = {"state": st["state"], "detail": st["detail"]} if st else None
+    return [{"video": as_posix(m["video"]), "candidates": [as_posix(c["path"]) for c in m["candidates"]],
+             "suggestion": m["suggestion"], "transcription": tx} for m in missing]
+
+
+def transcription_gate(ctx: Ctx, inputs: list[dict]) -> dict | None:
+    """Videos without subtitles are transcribed when the transcription environment works (its status, which
+    plans them, is returned). Without it (absent, or a machine without a PyTorch build): missing_vtt, as before,
+    pointing to the setup as well; broken: exit 3. No video without subtitles: None, and nothing is checked."""
+    missing = [x["missing"] for x in inputs if x["vtt"] is None]
+    if not missing:
+        return None
+    st = environment.transcription_status()
+    if st["ok"]:
+        return st
+    if st["state"] in ("absent", "unsupported"):
+        hint = ("Or let the skill transcribe them here: /video-analysis setup (step 6 installs the local transcription)."
+                if st["state"] == "absent" else f"Local transcription is not possible on this machine: {st['detail']}.")
+        raise Fail("missing_vtt", discover.missing_vtt_detail(missing, allow_vtt_flag=len(inputs) == 1) + "\n" + hint,
+                   missing_vtt=_missing_payload(missing, st))
+    raise Fail("missing_dependency", f"the transcription environment does not work ({st['detail']}): run "
+               "/video-analysis setup (step 6 repairs it)")
+
+
+def transcript_note(tp: dict) -> str:
+    """The end of the video's line in objective.md, for subtitles transcribed here."""
+    if not tp or tp.get("state") in (None, "file"):
+        return ""
+    mode, found = tp.get("mode"), tp.get("speakers_found")
+    if mode == "single":
+        who = "1 falante (SPEAKER_00)"
+    elif mode == "pyannote" and tp.get("diarized"):
+        who = f"{found} falantes anônimos (SPEAKER_00…)" if found else "falantes anônimos (SPEAKER_00…)"
+    else:
+        who = "falantes não separados"
+    return f" (transcrição automática: WhisperX {tp.get('model')} · {tp.get('language') or '?'} · {who})"
+
+
+def make_transcript(ctx: Ctx, it: dict, st: dict, errors: list[dict]) -> bool:
+    """Transcribe one video (or render the transcript already in the cache) and point the video at its
+    subtitles: next to the video when written there, else the cache's, with a copy in the run folder. A failure
+    is that video's (``errors``); returns False."""
+    tp = it["transcript"]
+    if tp["state"] == "pending":
+        est = transcript.estimate_seconds(it["duration"], tp["device"], tp["model"], tp["phase"], tp["mode"])
+        what = "only the speakers" if tp["phase"] == "diar" else f"{tp['model']} on {tp['device']}"
+        ctx.log(f"{it['slug']}: local transcription with WhisperX ({what}; up to ~{max(1, round(est / 60))} min)")
+    if ctx.status is not None:
+        with contextlib.suppress(OSError, ValueError):
+            write_json(ctx.status.progress_path(it["vid"]), {"vid": it["vid"], "stage": "transcript", "state": "processing",
+                                                             "updated": cache.iso_now(), "info": None})
+    try:
+        res = transcript.make(p=tp, python=st["python"], script=TRANSCRIBE_SCRIPT, video=it["video"], video_dir=it["vdir"],
+                              duration_s=it["duration"], has_audio=bool(cache.info_get(it["info"], "has_audio", default=True)),
+                              nltk_data=st.get("nltk_data"), vid=it["vid"],
+                              progress_path=ctx.status.progress_path(it["vid"]) if ctx.status else None,
+                              log=lambda m: ctx.log(f"{it['slug']}: {m}"))
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:
+        if isinstance(exc, transcript.TranscriptError):
+            detail = str(exc)
+        elif isinstance(exc, cache.LockTimeout):
+            detail = f"{exc}: another prepare.py is transcribing this video; wait for it to finish"
+        else:
+            detail = f"{type(exc).__name__}: {exc}"
+        errors.append({"vid": it["vid"], "slug": it["slug"], "video": as_posix(it["video"]), "code": "video_failed",
+                       "detail": f"transcription: {detail}"})
+        ctx.log(f"{it['slug']}: transcription failed: {detail}")
+        return False
+    if ctx.run_dir is not None:
+        dst = ctx.run_dir / it["vid"] / RUN_VTT
+        with contextlib.suppress(OSError):
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(Path(res["vtt"]).read_bytes())
+            res["run_copy"] = as_posix(dst)
+    it["transcript"] = res
+    it["vtt"] = Path(res["vtt"])
+    it["meta"]["vtt_path"] = as_posix(res["vtt"])
+    it["warn"].extend(res.get("warnings") or [])
+    spk = res.get("speakers_found")
+    took = f"{res['seconds']:.0f} s" if res["state"] == "made" else "from the cache"
+    ctx.log(f"{it['slug']}: subtitles ready ({res.get('n_cues')} cues, {res.get('language') or '?'}"
+            + (f", {spk} speaker(s)" if spk else "") + f"; {took}) -> {as_posix(res['vtt'])}")
+    return True
+
+
+def snapshot_subtitles(ctx: Ctx, it: dict) -> None:
+    """A run that uses, unchanged, subtitles the skill made keeps a copy of them too (``legenda.vtt``): a later
+    run with other settings may replace them, and a resume after --gc rebuilds the cues from the copy. The copy
+    is kept only when its bytes are the ones behind the run's cues key."""
+    if ctx.run_dir is None or it["keys"] is None:
+        return
+    dst = ctx.run_dir / it["vid"] / RUN_VTT
+    with contextlib.suppress(OSError):
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(Path(it["vtt"]).read_bytes())
+        if cache.cues_key(dst, it["params"]["cues"]) == it["keys"]["cues"]:
+            it["transcript"]["run_copy"] = as_posix(dst)
+        else:   # replaced since its keys were computed (another prepare.py): no copy rather than a wrong one
+            dst.unlink()
 
 
 def runtime_check(ctx: Ctx, need: tuple[str, ...]) -> str | None:
@@ -714,6 +841,13 @@ def option_lines(opts: dict, wopts: dict, roles_mode: str, language: str) -> lis
         lines.append(f"ignorar_linha_do_tempo: {t['file']} ({len(t['spans'])} trecho(s){target})")
     if opts.get("webcam_timeline"):
         lines.append(f"linha_do_tempo_webcam: {opts['webcam_timeline']}")
+    ns = transcript.format_num_speakers(opts.get("num_speakers"))
+    if ns:
+        lines.append(f"num_falantes: {ns}")
+    if opts.get("whisper_model"):
+        lines.append(f"modelo_whisper: {opts['whisper_model']}")
+    if opts.get("audio_language"):
+        lines.append(f"idioma_audio: {opts['audio_language']}")
     return lines
 
 
@@ -743,13 +877,18 @@ def run_gc(ctx: Ctx, args) -> int:
 
 def run_prepare(ctx: Ctx, args) -> int:
     estimate = bool(args.estimate)
-    ctx.mode = "estimate" if estimate else "prepare"
+    shots_mode = args.speaker_shots is not None
+    if estimate and shots_mode:
+        raise Fail("invalid_usage", "use --estimate or --speaker-shots, not both")
+    ctx.mode = "estimate" if estimate else "speaker_shots" if shots_mode else "prepare"
     entries, objective, raw = gather(ctx, args)
     try:
         opts = runs.normalize_options(raw)
     except runs.RunError as exc:
         raise Fail(exc.code, exc.detail) from None
-    make_run = not estimate and (ctx.request is not None or objective is not None or args.run is not None)
+    if shots_mode and args.run is not None:
+        raise Fail("invalid_usage", "--speaker-shots creates no run: drop --run")
+    make_run = not (estimate or shots_mode) and (ctx.request is not None or objective is not None or args.run is not None)
     if args.run is not None and objective is None and not estimate:
         raise Fail("missing_objective", "--run needs --objective-file or --objective")
     ensure_home(ctx)
@@ -757,11 +896,12 @@ def run_prepare(ctx: Ctx, args) -> int:
     open_log(ctx, f"{ctx.mode}-{stamp}")
     ctx.log(f"prepare.py {va.VERSION} · mode {ctx.mode} · home {as_posix(ctx.home)} · argv {sys.argv[1:]}", echo=False)
 
-    pairs = discover_pairs(ctx, args, entries)
+    inputs = discover_pairs(ctx, args, entries)
+    videos = [x["video"] for x in inputs]
     overrides = stage_overrides(args, opts)
     params = effective_params(overrides, opts.get("range"))
     try:
-        spans = runs.timeline_spans(opts.get("ignore_timeline"), [v for v, _ in pairs])
+        spans = runs.timeline_spans(opts.get("ignore_timeline"), videos)
     except runs.RunError as exc:
         raise Fail(exc.code, exc.detail) from None
     force = cache.expand_force(args.force)
@@ -769,40 +909,83 @@ def run_prepare(ctx: Ctx, args) -> int:
     language = opts.get("language") or DEFAULT_LANGUAGE
     segment = opts.get("range")
     wmode = opts.get("webcam_timeline") or WEBCAM_DEFAULTS["mode"]
+    slugs = runs.unique_slugs([v.stem for v in videos])
+    unknown = transcript.unknown_speaker_keys(opts.get("num_speakers"),
+                                              [(f"v{i + 1}", v, s) for i, (v, s) in enumerate(zip(videos, slugs))])
+    if unknown:
+        raise Fail("invalid_option", f"num_speakers: {', '.join(unknown)} is not a video of this run (use the vid of "
+                   "the estimate, v1, v2…, the slug or the file name)")
+    tx_status = {"st": transcription_gate(ctx, inputs)}   # checked only when a video has no subtitles
+
+    def tx() -> dict:
+        if tx_status["st"] is None:
+            tx_status["st"] = environment.transcription_status()
+        return tx_status["st"]
 
     # keys and cache state first: stat calls and small JSON reads, no subprocess and no frame
     # engine import, so a fully cached run needs neither ffprobe nor ffmpeg (design §9: warm
     # cache <= 2 s per video)
     errors: list[dict] = []
     known = []
-    slugs = runs.unique_slugs([v.stem for v, _ in pairs])
 
     def unreadable(k: dict, exc: OSError) -> None:
         errors.append({"vid": k["vid"], "slug": k["slug"], "video": as_posix(k["video"]), "code": "video_failed",
                        "detail": f"read: {type(exc).__name__}: {exc}"})
         ctx.log(f"{k['slug']}: could not read the video or the subtitles: {exc}", echo=False)
 
-    for i, ((video, vtt), slug) in enumerate(zip(pairs, slugs)):
+    for i, (x, slug) in enumerate(zip(inputs, slugs)):
+        video, vtt = x["video"], x["vtt"]
         vid, title = f"v{i + 1}", video_title(video)
-        k = {"vid": vid, "slug": slug, "title": title, "video": video, "vtt": vtt,
-             "meta": {"title": title, "video_path": as_posix(video), "vtt_path": as_posix(vtt)}}
+        k = {"vid": vid, "slug": slug, "title": title, "video": video, "vtt": vtt, "missing": x["missing"],
+             "meta": {"title": title, "video_path": as_posix(video), "vtt_path": as_posix(vtt) if vtt else None}}
         try:
             vkey = cache.video_key(video)
         except OSError as exc:
             unreadable(k, exc)
             continue
         vdir = ctx.home / WORKSPACE_DIRS["cache"] / vkey
-        known.append({**k, "video_key": vkey, "vdir": vdir, "webcam": webcam_plan(wmode, spans[i], vdir, vkey)})
+        own = transcript.own_sidecar(vtt, vdir) if vtt is not None else None
+        given = transcript.speakers_for(opts.get("num_speakers"), vid, video, slug)
+        need_st = vtt is None or transcript.needs_status(own, given, opts.get("whisper_model"), opts.get("audio_language"))
+        st = tx() if need_st else None
+        cands = [c["path"] for c in (x["missing"] or {}).get("candidates") or []]
+        tp = transcript.plan(video=video, video_dir=vdir, video_key=vkey, vid=vid, slug=slug, opts=opts,
+                             status=st if (vtt is None or (st and st["ok"])) else None, vtt=vtt, candidates=cands,
+                             own=own if (st and st["ok"]) else None)
+        if (vtt is not None and own is None and transcript.read_note(vtt) is not None
+                and (given is not None or opts.get("whisper_model") or opts.get("audio_language"))):
+            ctx.warnings.append(f"{slug}: {Path(vtt).name} was made by the skill but changed since: kept as it is, "
+                                "and the transcription settings of the call are ignored (delete or rename it to "
+                                "transcribe again)")
+        if vtt is not None and own is not None and need_st and not (st and st["ok"]):
+            ctx.warnings.append(f"{slug}: the subtitles the skill made are kept as they are: the transcription "
+                                f"environment does not work ({st['detail'] if st else 'not checked'})")
+        known.append({**k, "video_key": vkey, "vdir": vdir, "webcam": webcam_plan(wmode, spans[i], vdir, vkey),
+                      "transcript": tp, "own": own is not None})
+    choice = [k for k in known if k["transcript"]["state"] == "choice"]
+    if choice and not (estimate or shots_mode):
+        # similar subtitles in the folder (a Teams transcript under the meeting's name) and no speaker count:
+        # the person chooses (the skill asks); nothing is transcribed by default
+        missing = [k["missing"] for k in choice]
+        raise Fail("missing_vtt", discover.missing_vtt_detail(missing, allow_vtt_flag=len(inputs) == 1) + "\n"
+                   "Or transcribe it here instead: give num_speakers for it (the skill asks how many people speak).",
+                   missing_vtt=_missing_payload(missing, tx()))
     deepface = webcam_environment(ctx, wmode, known)
     for k in list(known):
         vparams = video_params(params, overrides, segment, k["webcam"]["spans"])
-        try:
-            keys = cache.stage_keys(k["video_key"], k["vtt"], vparams, k["meta"])
-        except OSError as exc:
-            unreadable(k, exc)
-            known.remove(k)
-            continue
-        hits = cache.stage_hits(k["vdir"], keys, force)
+        if k["transcript"]["state"] == "file":
+            try:
+                keys = cache.stage_keys(k["video_key"], k["vtt"], vparams, k["meta"])
+            except OSError as exc:
+                unreadable(k, exc)
+                known.remove(k)
+                continue
+            hits = cache.stage_hits(k["vdir"], keys, force)
+        else:   # subtitles still to transcribe (or to render): the frames know already; cues and batches after
+            keys = None
+            fkey = cache.frames_key(k["video_key"], vparams["frames"])
+            frames_ok = "frames" not in force and cache.stage_valid(cache.stage_dir(k["vdir"], "frames", fkey), "frames", fkey)
+            hits = {"cues": False, "frames": frames_ok, "batches": False}
         if k["webcam"]["state"] == "pending":   # the timeline will change the frames key (worst case)
             hits = {**hits, "frames": False, "batches": False}
         info = cache.cached_probe(k["vdir"], k["video"]) if hits["cues"] and hits["frames"] else None
@@ -810,8 +993,8 @@ def run_prepare(ctx: Ctx, args) -> int:
     need = ["numpy", "pillow"]  # find_spec only: cheap
     if any(k["info"] is None for k in known):
         need.insert(0, "ffprobe")
-    if any(not k["hits"]["frames"] for k in known):
-        need.insert(0, "ffmpeg")  # --estimar checks it too: the prepare that follows will need it
+    if shots_mode or any(not k["hits"]["frames"] or k["transcript"]["state"] in ("pending", "choice") for k in known):
+        need.insert(0, "ffmpeg")  # --estimar checks it too: the prepare that follows will need it (and the transcription)
     ffmpeg_version = runtime_check(ctx, tuple(need))
 
     # ffprobe for what the cache does not answer (fast; before the run folder exists)
@@ -840,15 +1023,39 @@ def run_prepare(ctx: Ctx, args) -> int:
 
     if estimate:
         return finish_estimate(ctx, args, items, errors, wopts)
+    if shots_mode:
+        return finish_shots(ctx, args, items, errors)
 
     if make_run:
-        ctx.run_id, ctx.run_dir = runs.new_run(ctx.home / WORKSPACE_DIRS["runs"], args.run or (pairs[0][0].stem))
+        ctx.run_id, ctx.run_dir = runs.new_run(ctx.home / WORKSPACE_DIRS["runs"], args.run or videos[0].stem)
         rename_log(ctx, f"prepare-{ctx.run_id}")
         print(f"run_dir: {as_posix(ctx.run_dir)}", file=sys.stderr, flush=True)
         ctx.status = Status(ctx, items)
         ctx.status.start()
     ctx.stderr_on = True
     ctx.log(f"{len(items)} video(s); log at {as_posix(ctx.log_path)}")
+    # the subtitles first, one video at a time (the transcription takes the whole CPU or GPU): the keys of the
+    # cues and the batches, and the webcam timeline's, need them
+    for it in list(items):
+        tp = it["transcript"]
+        if tp["state"] == "file":
+            if it["own"]:
+                snapshot_subtitles(ctx, it)
+            continue
+        if tp.get("needs_speakers"):
+            it["warn"].append("number of speakers not given: pyannote estimated it (num_speakers makes it better)")
+        if not make_transcript(ctx, it, tx(), errors):
+            items.remove(it)
+    if not items:
+        raise Fail("video_failed", "no video was prepared: " + "; ".join(f"{e['slug']}: {e['detail']}" for e in errors),
+                   errors=errors)
+    for it in items:
+        if it["keys"] is None:
+            try:
+                keys = cache.stage_keys(it["video_key"], it["vtt"], it["params"], it["meta"])
+            except OSError as exc:
+                raise Fail("video_failed", f"{it['slug']}: the subtitles just made are unreadable ({exc})") from None
+            it.update(keys=keys, hits=cache.stage_hits(it["vdir"], keys, force))
     for it in items:   # one at a time: DeepFace already uses every core
         if it["webcam"]["state"] == "pending":
             make_webcam_timeline(ctx, it, deepface, overrides, params, segment, force)
@@ -891,7 +1098,7 @@ def run_prepare(ctx: Ctx, args) -> int:
                  "remaining": remaining}
         states.append(state)
         videos_out.append({**video_entry(it["vid"], it["slug"], it["title"], res, it["warn"]),
-                           "webcam_timeline": webcam_view(it["webcam"])})
+                           "webcam_timeline": webcam_view(it["webcam"]), "transcript": transcript.view(it["transcript"])})
         wvideos.append({"slug": it["slug"], "title": it["title"], "n_frames": n_frames, "batch_images": images,
                         "duration_s": span(res.get("summary") or {}, it["duration"], segment),
                         "batches_dir": res["dirs"]["batches"],
@@ -920,7 +1127,7 @@ def run_prepare(ctx: Ctx, args) -> int:
     for v in wvideos:
         it = v["_it"]
         line = (f"{v['slug']}: {it['title']} · {fmt_hms(v['duration_s'], 0)} · {len(v['batch_images'])} lotes · "
-                f"vídeo {as_posix(it['video'])} · legenda {as_posix(it['vtt'])}")
+                f"vídeo {as_posix(it['video'])} · legenda {as_posix(it['vtt'])}{transcript_note(it['transcript'])}")
         if segment:
             line += f" · trecho {fmt_hms(segment[0], 0)}-{fmt_hms(min(segment[1], it['duration']), 0)}"
         vlines.append(line)
@@ -935,16 +1142,20 @@ def run_prepare(ctx: Ctx, args) -> int:
         "request": as_posix(ctx.run_dir / runs.REQUEST_MD) if ctx.request else None,
         "objective_md": as_posix(ctx.run_dir / "objective.md"), "objective": objective, "language": language,
         "options": {**wopts, "roles_mode_requested": requested, "roles_mode": roles_mode, "range": segment,
-                    "webcam_timeline": wmode},
+                    "webcam_timeline": wmode, "num_speakers": transcript.format_num_speakers(opts.get("num_speakers")),
+                    "whisper_model": opts.get("whisper_model"), "audio_language": opts.get("audio_language")},
         "overrides": overrides, "params": params,
-        "versions": {"algo": va.ALGO_VERSION, "vtt": va.VTT_VERSION, "render": va.RENDER_VERSION},
+        "versions": {"algo": va.ALGO_VERSION, "vtt": va.VTT_VERSION, "render": va.RENDER_VERSION,
+                     "transcript": va.TRANSCRIBE_VERSION},
         "videos": [{"vid": v["_it"]["vid"], "slug": v["slug"], "title": v["title"],
                     "video_path": as_posix(v["_it"]["video"]), "vtt_path": as_posix(v["_it"]["vtt"]),
                     "video_key": v["_it"]["video_key"], "out_dir": as_posix(v["out_dir"]),
                     "keys": v["_it"]["keys"], "params": v["_it"]["params"], "meta": v["_it"]["meta"],
                     "stages": v["_res"]["dirs"], "duration_s": v["_it"]["duration"], "probe": v["_res"].get("info"),
                     "n_frames": v["n_frames"], "n_batches": len(v["batch_images"]), "batch_images": v["batch_images"],
-                    "webcam_timeline": webcam_view(v["_it"]["webcam"])}
+                    "webcam_timeline": webcam_view(v["_it"]["webcam"]),
+                    "transcript": {**transcript.view(v["_it"]["transcript"]),
+                                   "run_copy": v["_it"]["transcript"].get("run_copy")}}
                    for v in wvideos],
         "workflow_args": wargs, "resumes": [],
     }
@@ -983,6 +1194,7 @@ def finish_estimate(ctx: Ctx, args, items: list[dict], errors: list[dict], wopts
     videos_out, states, secs = [], [], []
     known = True
     web = 0.0   # the webcam timelines run one at a time, before the extraction
+    tx = 0.0    # so do the transcriptions, before the webcam timelines
     for it in items:
         vdir = ctx.home / WORKSPACE_DIRS["cache"] / it["video_key"]
         hits = dict(it["hits"])  # cache.stage_hits: valid and not forced
@@ -992,6 +1204,10 @@ def finish_estimate(ctx: Ctx, args, items: list[dict], errors: list[dict], wopts
         if w["state"] == "pending":
             w["estimate_s"] = round(webcam.estimate_seconds(it["info"], w["scan"]), 1)
             web += w["estimate_s"]
+        tp = it["transcript"]
+        if tp["state"] in ("pending", "choice"):
+            tp["estimate_s"] = transcript.estimate_seconds(it["duration"], tp["device"], tp["model"], tp["phase"], tp["mode"])
+            tx += tp["estimate_s"]
         n_batches = n_frames = None
         if hits["batches"]:
             res = (cache.read_stage(cache.stage_dir(vdir, "batches", it["keys"]["batches"])) or {}).get("result") or {}
@@ -1001,11 +1217,12 @@ def finish_estimate(ctx: Ctx, args, items: list[dict], errors: list[dict], wopts
         else:
             known = False
         videos_out.append({"vid": it["vid"], "slug": it["slug"], "title": it["title"], "video_path": as_posix(it["video"]),
-                           "vtt_path": as_posix(it["vtt"]), "video_key": it["video_key"], "duration_s": round(it["duration"], 3),
+                           "vtt_path": as_posix(it["vtt"]) if it["vtt"] else None, "video_key": it["video_key"],
+                           "duration_s": round(it["duration"], 3),
                            "resolution": [cache.info_get(it["info"], "width"), cache.info_get(it["info"], "height")],
                            "fps_avg": cache.info_get(it["info"], "fps_avg", "fps"), "n_frames": n_frames,
                            "n_batches": n_batches, "cache_hit": hits, "estimate_s": round(s, 1), "warnings": it["warn"],
-                           "webcam_timeline": webcam_view(w)})
+                           "webcam_timeline": webcam_view(w), "transcript": transcript.view(tp)})
     jobs = max(1, min(args.jobs or 1, len(secs) or 1))
     if jobs > 1:
         # decoding is CPU-bound: measured on this machine, 2 Teams 1080p16 videos in parallel took
@@ -1013,7 +1230,7 @@ def finish_estimate(ctx: Ctx, args, items: list[dict], errors: list[dict], wopts
         total = max(max(secs) * 1.3, sum(secs) * 0.75)
     else:
         total = sum(secs)
-    total += web
+    total += web + tx
     agents = runs.estimate_agents(states, wopts["curation"]) if known and states else None
     estimate = {"batches": sum(s["remaining"] for s in states) if known and states else None, "agents": agents,
                 "seconds": int(-(-total // 1))}
@@ -1021,11 +1238,49 @@ def finish_estimate(ctx: Ctx, args, items: list[dict], errors: list[dict], wopts
     if agents is not None:
         guard(ctx, agents, args.ignore_agent_limit, videos=videos_out, estimate=estimate, env=env_info, errors=errors)
     ctx.log(f"estimate: ~{estimate['seconds']} s for {len(items)} video(s)"
+            + (f", ~{round(tx)} s of them for the local transcription (the whole video, also with a range)" if tx else "")
             + (f", up to ~{round(web)} s of them for the webcam timeline (DeepFace)" if web else ""))
     if errors and not items:
         raise Fail("video_failed", "; ".join(f"{e['slug']}: {e['detail']}" for e in errors), errors=errors)
     env = envelope(ctx, not errors, error=_partial_error(errors, len(items) + len(errors)) if errors else None,
                    videos=videos_out, estimate=estimate, env=env_info, errors=errors)
+    return emit(ctx, env, 0 if not errors else EXIT["video_failed"])
+
+
+def finish_shots(ctx: Ctx, args, items: list[dict], errors: list[dict]) -> int:
+    """--speaker-shots: a few screenshots of each video (or of the vids asked: v1,v3), in its cache, for the agent
+    that counts who speaks when the person does not know (SKILL.md, step 4; reference/speaker-count.md). Seconds per
+    video; nothing else is made, the request stays where it is and no run is created."""
+    asked = str(args.speaker_shots or "all").strip()
+    want = None if asked.casefold() in ("all", "") else [s.strip().casefold() for s in asked.split(",") if s.strip()]
+    present = {it["vid"] for it in items} | {e["vid"] for e in errors}
+    unknown = [v for v in want or [] if v not in present]
+    if unknown:
+        raise Fail("invalid_option", f"--speaker-shots: {', '.join(unknown)} is not a video of this request "
+                   f"(use the vid of the estimate: {', '.join(sorted(present)) or 'none'})")
+    ctx.stderr_on = True
+    out = []
+    for it in items:
+        if want is not None and it["vid"] not in want:
+            continue
+        try:
+            res = cache.stage_fn("make_shots")(video=it["video"], video_dir=it["vdir"], video_key=it["video_key"],
+                                               info=it["info"])
+        except KeyboardInterrupt:
+            raise
+        except Exception as exc:
+            errors.append({"vid": it["vid"], "slug": it["slug"], "video": as_posix(it["video"]), "code": "video_failed",
+                           "detail": f"speaker shots: {type(exc).__name__}: {exc}"})
+            ctx.log(f"{it['slug']}: speaker shots failed: {exc}")
+            continue
+        ctx.log(f"{it['slug']}: {len(res['paths'])} screenshot(s) for the speaker count"
+                + (" (from the cache)" if res.get("cached") else ""))
+        out.append({"vid": it["vid"], "slug": it["slug"], "title": it["title"], "video_path": as_posix(it["video"]),
+                    "duration_s": round(it["duration"], 3), "duration": fmt_hms(it["duration"], 0), "shots": res})
+    if errors and not out:
+        raise Fail("video_failed", "; ".join(f"{e['slug']}: {e['detail']}" for e in errors), errors=errors)
+    env = envelope(ctx, not errors, error=_partial_error(errors, len(out) + len(errors)) if errors else None,
+                   videos=out, errors=errors)
     return emit(ctx, env, 0 if not errors else EXIT["video_failed"])
 
 
@@ -1081,9 +1336,17 @@ def run_resume(ctx: Ctx, args) -> int:
         keys = v["keys"]
         vdir = ctx.home / WORKSPACE_DIRS["cache"] / v["video_key"]
         valid = all(cache.stage_valid(cache.stage_dir(vdir, s, keys[s]), s, keys[s]) for s in cache.STAGES)
+        params = v.get("params") or rj.get("params")
+        vtt_path = v["vtt_path"]
+        run_copy = (v.get("transcript") or {}).get("run_copy")
+        if not valid and run_copy and os.path.isfile(run_copy) and (
+                not os.path.isfile(vtt_path) or cache.cues_key(vtt_path, params["cues"]) != keys["cues"]):
+            # transcribed subtitles gone (deleted, the cache's after --gc) or replaced by a later run with other
+            # settings: the run's copy, the bytes behind its keys (prepare_video checks them: verify_vtt)
+            vtt_path = run_copy
         job = {"vid": v.get("vid") or f"v{i + 1}", "slug": v["slug"], "title": v["title"], "video_path": v["video_path"],
-               "vtt_path": v["vtt_path"], "video_key": v["video_key"], "video_dir": str(vdir), "keys": keys,
-               "params": v.get("params") or rj.get("params"), "info": None, "force": [], "meta": v.get("meta") or {},
+               "vtt_path": vtt_path, "video_key": v["video_key"], "video_dir": str(vdir), "keys": keys,
+               "params": params, "info": None, "force": [], "meta": v.get("meta") or {}, "verify_vtt": True,
                "expected_fp": v["video_key"].rsplit("-", 1)[-1], "log_path": str(ctx.log_path), "quiet": ctx.quiet}
         if valid:
             results[i] = cache.prepare_video(job)  # all hits: reads the summary, refreshes last_used
@@ -1174,7 +1437,8 @@ def main(argv: list[str] | None = None) -> int:
         args = build_parser().parse_args(argv)
         ctx.ascii, ctx.quiet, ctx.debug, ctx.json_out = args.ascii, args.quiet, args.debug, args.json_out
         ctx.home = workspace_home(args.home)
-        modes = [m for m, on in (("--resume", args.resume is not None), ("--gc", args.gc is not None)) if on]
+        modes = [m for m, on in (("--resume", args.resume is not None), ("--gc", args.gc is not None),
+                                 ("--speaker-shots", args.speaker_shots is not None)) if on]
         if len(modes) > 1:
             raise Fail("invalid_usage", f"use only one mode: {' or '.join(modes)}")
         if args.gc is not None:

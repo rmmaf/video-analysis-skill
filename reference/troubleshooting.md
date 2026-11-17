@@ -13,8 +13,11 @@ are those of `SKILL.md`, with the same pre-approved prefix.
 ### `.vtt` subtitles not found (exit code 2)
 
 - **Cause:** the rule is strict: the subtitles have **the same name as the video**, only with the `.vtt`
-  extension, in the same folder. The `detail` lists the candidates in the folder (names that are a prefix
-  of the video name or similar to it) and suggests a `Rename-Item`. Nothing is renamed on its own.
+  extension, in the same folder. Without them, the skill transcribes the video on the machine; it stops
+  with `missing_vtt` only when it cannot (no transcription environment, or a machine without support) or
+  when a similar `.vtt` is in the folder and nobody chose yet ("Local transcription", below). The `detail`
+  lists the candidates in the folder (names that are a prefix of the video name or similar to it) and
+  suggests a `Rename-Item` (an `mv -n` on macOS). Nothing is renamed on its own.
 - **Teams pattern:** the recording comes out as `<Meeting>-YYYYMMDD_HHMMSS-Gravação de Reunião.mp4` (or
   `…-Meeting Recording.mp4`), and the downloaded transcript as `<Meeting>.vtt`. Example:
 
@@ -22,8 +25,9 @@ are those of `SKILL.md`, with the same pre-approved prefix.
   Rename-Item -LiteralPath 'C:\…\Indicador PES.vtt' -NewName 'Indicador PES-20260610_150844-Gravação de Reunião.vtt'
   ```
 
-- **What to do:** show the candidates and the suggested command (also in `missing_vtt`). Run it, in
-  PowerShell, only after the user's "yes", or let the user run it. Then repeat: if the error came from
+- **What to do:** show the candidates and the suggested command (also in `missing_vtt`). Rename only after
+  the user's "yes" (the answer `Usar a legenda existente` of the form in step 4 of `SKILL.md` is one), or let
+  the user run it. Then repeat: if the error came from
   the prepare, write the request again (the previous one became `request.error.md`); if it came from
   `--estimate`, `request.md` is still there.
   - Rename the `.vtt`, not the video: a renamed video gets another cache key and is extracted again.
@@ -55,12 +59,15 @@ are those of `SKILL.md`, with the same pre-approved prefix.
   a reopened Claude Code. `workspace_not_writable` is the central folder without write access (step 3 of
   the setup); `incomplete_install` is the skill folder without the whole of `scripts\va`: reinstall the
   skill. `missing_dependency` starting with `webcam_timeline: on` is the DeepFace environment, which only
-  `on` requires: step 6 of the setup creates it, or run without the option (`auto` goes on without it).
+  `on` requires: step 8 of the setup creates it, or run without the option (`auto` goes on without it).
+  `missing_dependency` starting with `the transcription environment does not work` is the WhisperX
+  environment, needed by a video without subtitles: step 6 of the setup repairs it.
 
 ### A video failed (exit code 4)
 
 - **Cause:** a corrupted file, one without a video track, or one still being downloaded or recorded. The
-  reason is in `errors` and in the log.
+  reason is in `errors` and in the log. A `detail` that starts with `transcription:` is the local
+  transcription of that video ("Local transcription", below).
 - **What to do:** say which video and why, in one sentence, and ask whether to go on with the others.
   Their run is ready: `run.json` written and `workflow_args` in the JSON (step 6 of `SKILL.md`, with that
   JSON). The request became `request.error.md`, with a copy in the run folder.
@@ -76,7 +83,8 @@ are those of `SKILL.md`, with the same pre-approved prefix.
 - **Cause:** Ctrl+C, Claude Code closed, or a long extraction running in the foreground.
 - **What to do:** run it again, in the background (`run_in_background`). Completed stages stay in the
   cache; an interrupted frame extraction starts over from scratch, because there is no resume point in
-  the middle of it. At 1080p60, count on ~0.15× the duration of the video; for Teams at 1080p, ~0.06×.
+  the middle of it. At 1080p60, count on ~0.15× the duration of the video; for Teams at 1080p, ~0.06×. An
+  interrupted transcription resumes at its first missing block of ~10 min.
 
 ### The last line of stdout did not come through whole
 
@@ -91,11 +99,12 @@ are those of `SKILL.md`, with the same pre-approved prefix.
 ### The prepare seems stuck right at the start
 
 - **Cause:** another `prepare.py` is using the same video (cache lock). It waits up to 30 min (4 h for
-  the webcam timeline); a lock with no sign of life for 10 min is discarded, like the one a `prepare.py`
-  killed in the task manager leaves (the `webcam_mask.py` it ran stops with it). Or the webcam timeline is
-  being made: with the DeepFace environment, a video without one in the cache gets it before the
-  extraction (the log says `webcam timeline with DeepFace`), up to about 24 min per hour of 1080p video
-  when a face shows up.
+  the webcam timeline, 6 h for the transcription); a lock with no sign of life for 10 min is discarded,
+  like the one a `prepare.py` killed in the task manager leaves (the `webcam_mask.py` or `transcribe.py`
+  it ran stops with it). Or a video is being transcribed (the log says `local transcription with
+  WhisperX`), on a CPU for 2 to 3 times the length of the video. Or the webcam timeline is being made: with the
+  DeepFace environment, a video without one in the cache gets it before the extraction (the log says
+  `webcam timeline with DeepFace`), up to about 24 min per hour of 1080p video when a face shows up.
 - **What to do:** wait, or check whether there is another run of the same video in progress. The
   estimate already counts the timeline (`videos[].webcam_timeline.estimate_s`); `--webcam-timeline off`
   skips it in a call.
@@ -104,7 +113,8 @@ are those of `SKILL.md`, with the same pre-approved prefix.
 
 - **Cause:** a command run through PowerShell, which re-decodes the output as cp1252, or with `python3`,
   which on Windows is the Store shortcut.
-- **What to do:** always the Bash tool and always `python`, exactly as in `SKILL.md`.
+- **What to do:** always the Bash tool, with `python` on Windows (`python3` on macOS, where `python` may
+  not exist), exactly as in `SKILL.md`.
 
 ### More than 80 agents, or "run too large" (more than 800)
 
@@ -130,7 +140,7 @@ are those of `SKILL.md`, with the same pre-approved prefix.
   `--sensitivity low`. The subtitles come from the cache; the frames are extracted again. Details in
   [`parameters.md`](parameters.md).
 - **Webcam in only part of the call** (camera alone at the start, a screen share later): a fixed region
-  also hides the shared content in that area. With the DeepFace environment (step 6 of the setup), the
+  also hides the shared content in that area. With the DeepFace environment (step 8 of the setup), the
   skill already masks each webcam only while it is on screen (`webcam_timeline`); without it, use
   `ignore_timeline` with the file of `scripts/webcam_mask.py --timeline` (region over time, in
   [`parameters.md`](parameters.md)). A webcam that shows up only briefly can escape the probe:
@@ -144,7 +154,7 @@ are those of `SKILL.md`, with the same pre-approved prefix.
   not the setup's: a package missing, a broken Python, another deepface version, or the YuNet weights
   missing or damaged.
 - **What to do:** nothing for this run: the frames were extracted without the timeline, as before the
-  option. `/video-analysis setup` checks the environment with a detection, and its step 6
+  option. `/video-analysis setup` checks the environment with a detection, and its step 8
   (`--install-deepface`) repairs it: it installs what is missing, downloads damaged weights again and,
   when the detection fails, reinstalls deepface. The same goes for a `failed` whose report points to
   DeepFace or its libraries (an `ImportError`, a DLL that does not load). A failed timeline is not kept:
@@ -177,6 +187,101 @@ are those of `SKILL.md`, with the same pre-approved prefix.
 - **Cause:** subtitles of another video, or a Teams transcript that started after the recording.
 - **What to do:** check that it is the right `.vtt`. To shift all the cues: `--vtt-offset SEC` on the
   prepare command line (manual use).
+
+## Local transcription
+
+### A video without subtitles stops with `missing_vtt` instead of being transcribed
+
+- **Cause:** by `missing_vtt[].transcription.state`: `absent`, the transcription environment was never
+  installed; `unsupported`, the machine cannot run it (an Intel Mac, which has no PyTorch 2.8); `ok`, the
+  folder has a similar `.vtt` (a Teams transcript under the meeting's name) and the call gave no
+  `num_speakers` for that video, so the person chooses.
+- **What to do:** `absent` → `/video-analysis setup`, step 6; `ok` → the form of step 4 of `SKILL.md`: use
+  the similar `.vtt`, renamed, or give `num_speakers` to transcribe; `unsupported` → the `.vtt` of each
+  video, as in the earlier version (previous section).
+
+### `speakers not separated` warning
+
+- **Cause:** the text after the colon says which: `no Hugging Face token` (step 7 of the setup was not
+  done), `the token has no access to pyannote/speaker-diarization-community-1` (a token is saved, but its
+  account did not accept the model's conditions) or `the diarization failed (…)`.
+- **What to do:** for the first two, step 7 of the setup, which ends with `--install-transcription` again.
+  Then call the analysis again with `num_speakers`: the speech comes from the cache, and only the speakers
+  are redone (on a CPU, about the length of the video). A video transcribed without a token is also redone at its next
+  analysis, once the token is there (the skill asks how many people speak). For a failure, the warning
+  brings the end of the error, and `transcribe.log` (in `cache\<slug>-<fp8>\transcript-<a8>\`) the whole
+  of it: fix its cause (the network or the proxy, such as `HTTPS_PROXY` or `REQUESTS_CA_BUNDLE`; the memory,
+  closing what holds it; an `ImportError`, step 6 of the setup), then call the analysis again with the same
+  `num_speakers`, and only the speakers are redone. A call without `num_speakers` keeps the subtitles without
+  speakers and does not try again.
+
+### The transcription takes too long
+
+- **Cause:** on a CPU, the transcription takes 2 to 3 times the length of the video (measured on a 4-core 2017
+  laptop: 2.7; the speech 1.2×, the times of the words 0.4×, the speakers 1.0×), more on a machine busy with
+  other work, and the whole video is transcribed, even with `--range`. With an NVIDIA GPU, the environment may have the CPU
+  build of PyTorch: the `device` of the `transcription` item says `cpu`.
+- **What to do:** let it run in the background: it happens once per video, and the blocks of ~10 min are
+  checkpoints, so an interruption loses at most one block. For a quicker and rougher pass,
+  `whisper_model: small`. With an NVIDIA GPU and `device: cpu`, run `--install-transcription` again: it
+  installs the build that matches the driver (a driver older than 528 has none: update it).
+
+### Out of memory (`out of memory even with the smallest batch`, exit code 4)
+
+- **Cause:** the GPU has less free memory than the model needs, even with batch 1 and `int8_float16`;
+  another program (a game, another model) may be holding it.
+- **What to do:** close what uses the GPU, or `whisper_model: large-v3-turbo` (or `medium`).
+
+### `the WhisperX environment does not load` (exit code 3 or 4)
+
+- **Cause:** the environment was changed by hand, a package went missing, or an update broke a DLL.
+- **What to do:** `/video-analysis setup`: step 6 repairs it, reinstalling whisperx when its import fails.
+
+### The setup's download stalls or fails (proxy, SSL)
+
+- **A download stuck at the same point** (the Hugging Face models): `HF_HUB_DISABLE_XET=1` in the
+  environment of Claude Code, then `--install-transcription` again; a download resumes where it stopped.
+- **An SSL error from uv** (`invalid peer certificate`, a corporate proxy that inspects TLS):
+  `UV_NATIVE_TLS=1`, so that uv uses the system's certificates. For Hugging Face behind such a proxy,
+  `REQUESTS_CA_BUNDLE` pointing to the proxy's certificate, and `HTTPS_PROXY` when the proxy is not
+  automatic.
+- **NLTK's punkt:** the error gives the address of the zip and the folder: the person downloads it in a
+  browser and extracts it there, then the setup runs again.
+
+### The transcription runs on the CPU although the machine has an NVIDIA GPU
+
+- **Cause:** the GPU is older than Volta (compute capability below 7.0: GTX 9xx, GTX 10xx, Quadro P). The
+  PyTorch 2.8 CUDA 12.8 build has no code for it and Whisper's `float16` needs 7.0, so the setup installs the
+  CPU build and the transcription uses `large-v3-turbo` on the CPU. The driver being too old (below 528) has
+  the same effect.
+- **What to do:** nothing; it works, only slower. Forcing a CUDA build (`VA_TORCH_BACKEND=cu126`) does not
+  make these cards transcribe. An environment installed on such a card before this check is reinstalled
+  with the CPU build by `/video-analysis setup` (step 6).
+
+### The first transcription on a recent NVIDIA GPU spends minutes before starting
+
+- **Cause:** the GPU code is compiled once for a card newer than the build (JIT).
+- **What to do:** wait. The skill keeps a 4 GB compilation cache (`CUDA_CACHE_MAXSIZE`), so the next
+  transcriptions start quickly.
+
+### `torchcodec` warning in `transcribe.log`
+
+- **What to do:** nothing. pyannote imports torchcodec, which looks for FFmpeg's DLLs; the skill passes the
+  audio in memory and never uses it.
+
+### The transcribed subtitles came out in the wrong language
+
+- **Cause:** a call that starts in another language, or little speech; the warning `language detected with
+  low confidence` comes with it when the probability was below 0.6.
+- **What to do:** a new run with `audio_language: pt` (or the right code): the video is transcribed again.
+
+### To transcribe a video again from scratch
+
+- Delete the `.vtt` next to the video, only if the skill made it (its `NOTE` starts with `Legenda gerada
+  automaticamente pela skill video-analysis`), and the folders `cache\<slug>-<fp8>\transcript-*`: the
+  next analysis transcribes it again. Another `whisper_model` or `audio_language` does the same without
+  deleting anything. A `.vtt` the person wrote or edited is never replaced: on one the skill made, the
+  warning `… was made by the skill but changed since: kept as it is` says so; delete or rename it.
 
 ## Workflow and agents
 
@@ -311,3 +416,11 @@ are those of `SKILL.md`, with the same pre-approved prefix.
   failed before writing `run.json`, or `run.json`/`objective.md` are missing from the run folder.
 - **What to do:** check the id with the user (the runs are in `<home>\runs\`); a
   run without `run.json` cannot be resumed: run the analysis again, and the cache is reused.
+
+### `resume` fails with "the subtitles changed since the run" (`video_failed`)
+
+- **Cause:** the cache was deleted (`--gc`) and the `.vtt` next to the video is no longer the one the run
+  used (edited, or replaced by a later run with another `num_speakers`, model or language), with no
+  `legenda.vtt` of the run holding the old bytes. Rebuilding would mix the reports already written with
+  other speech or speakers.
+- **What to do:** a new run with the subtitles as they are now; the frames come from the cache.

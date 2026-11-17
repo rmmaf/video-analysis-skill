@@ -285,6 +285,27 @@ def test_gc_cache(tmp_path):
     assert K.gc_cache(tmp_path / "nao-existe", 30)["removed"] == []
 
 
+def test_gc_cache_skips_a_video_being_transcribed(tmp_path):
+    # a transcription holds only .transcript.lock, for hours: its folder stays, even with --gc 0, until that lock
+    # has had no heartbeat for stale_s (its process died)
+    cache_dir = tmp_path / "cache"
+    now = time.time()
+    entry = cache_dir / "reuniao-55555555"
+    chunk = entry / "transcript-k" / "partial" / "chunk_000.json"
+    chunk.parent.mkdir(parents=True)
+    chunk.write_text("{}", encoding="utf-8")
+    K.touch_last_used(entry)
+    old = now - 40 * 86400
+    os.utime(entry / "last_used", (old, old))
+    (entry / ".transcript.lock").write_text("{}", encoding="utf-8")
+    for days in (30, 0):
+        res = K.gc_cache(cache_dir, days, now=now)
+        assert res["removed"] == [] and res["skipped"] == [{"key": entry.name, "reason": "in use (active lock)"}]
+    assert chunk.is_file()
+    os.utime(entry / ".transcript.lock", (old, old))
+    assert [r["key"] for r in K.gc_cache(cache_dir, 30, now=now)["removed"]] == [entry.name]
+
+
 # --- worker ---------------------------------------------------------------------------------------------
 
 def _job(tmp_path, fakes, **over):

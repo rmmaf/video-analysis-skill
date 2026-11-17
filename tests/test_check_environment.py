@@ -71,9 +71,35 @@ def never_real_claude_home(monkeypatch):
     monkeypatch.setattr(environment, "merge_permissions", safe_merge)
     monkeypatch.setattr(environment, "install_agents", safe_install)
     monkeypatch.setattr(environment, "install_workflow", safe_install_wf)
-    # pip must never run in the tests: a test of --install-deepface replaces it
+    # pip and uv must never run in the tests: a test of --install-deepface / --install-transcription replaces them
     monkeypatch.setattr(environment, "install_deepface",
                         lambda *a, **k: pytest.fail("install_deepface must be replaced in the tests"))
+    monkeypatch.setattr(environment, "install_transcription",
+                        lambda *a, **k: pytest.fail("install_transcription must be replaced in the tests"))
+
+
+def _transcription(user, **fields) -> dict:
+    env = (user / "whisperx-env").as_posix()
+    st = {"id": "transcription", "ok": True, "ready": True, "state": "ok", "problem": None, "env": env,
+          "python": env + "/Scripts/python.exe", "python_version": "3.12.11", "version": "3.8.6", "expected": "3.8.6",
+          "torch": "2.8.0+cpu", "backend": "cpu", "device": "cpu", "gpu": None, "default_model": "large-v3-turbo",
+          "token": True, "models": {"pyannote/speaker-diarization-community-1": True}, "punkt": True,
+          "nltk_data": env + "/nltk_data", "login_command": f'& "{env}/Scripts/hf.exe" auth login',
+          "detail": f"whisperx 3.8.6 in {env} (cpu; model large-v3-turbo)"}
+    return {**st, **fields}
+
+
+@pytest.fixture(autouse=True)
+def transcription_ready(monkeypatch, tmp_path):
+    """The transcription environment ready and the speakers separated, unless a test says otherwise: the other
+    tests are about the other items (the real check would look for a WhisperX environment in the sandbox)."""
+    user = tmp_path / "user"
+    monkeypatch.delenv("VA_WHISPERX_ENV", raising=False)
+    monkeypatch.setattr(environment, "transcription_status", lambda *a, **k: _transcription(user))
+    monkeypatch.setattr(environment, "diarization_status", lambda st=None, **k: {
+        "id": "speakers", "ok": True, "state": "ok", "model": "pyannote/speaker-diarization-community-1",
+        "page": environment.DIARIZE_PAGE, "login_command": "hf auth login", "cached": True, "access": "ok",
+        "detail": "token saved, access confirmed: the subtitles separate the speakers"})
 
 
 @pytest.fixture
@@ -84,6 +110,7 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(user))
     monkeypatch.setenv("VA_CLAUDE_HOME", str(chome))
     monkeypatch.setenv("VIDEO_ANALYSIS_HOME", str(home))
+    monkeypatch.delenv("VA_WHISPERX_ENV", raising=False)
     return user, chome, home
 
 
@@ -217,15 +244,19 @@ def test_json_output(sandbox, tools_ok, capsys):
     assert data["claude_home"] == chome.as_posix() and data["home"] == home.as_posix()
     ids = [i["id"] for i in data["items"]]
     assert ids == ["python", "ffmpeg", "ffprobe", "numpy", "pillow", "central-folder", "permissions", "agents", "workflow",
-                   "deepface"]
+                   "transcription", "speakers", "deepface"]
     perm = data["items"][6]
     assert perm["state"] == "missing" and perm["step"] == "5-permissions" and perm["rules"] == environment.workspace_rules(home)
     assert data["items"][7]["state"] == "warn"
     wf = data["items"][8]
     assert wf["state"] == "warn" and wf["step"] == "4-agents" and wf["copy"] == "missing"
     assert wf["path"] == (chome / "workflows" / "video-analysis.js").as_posix()
-    df = data["items"][9]
-    assert df["state"] == "warn" and df["step"] == "6-webcam timeline" and df["version"] is None
+    tx = data["items"][9]
+    assert tx["state"] == "ok" and tx["step"] == "6-transcription" and tx["default_model"] == "large-v3-turbo"
+    assert tx["env"] == (user / "whisperx-env").as_posix() and tx["expected"] == "3.8.6"
+    assert data["items"][10]["state"] == "ok" and data["items"][10]["step"] == "7-speakers"
+    df = data["items"][11]
+    assert df["state"] == "warn" and df["step"] == "8-webcam timeline" and df["version"] is None
     assert df["env"] == (user / "deepface-env").as_posix() and df["expected"] == "0.0.104"
     assert df["weights_path"] == environment.yunet_weights().as_posix()     # where setup.md says the weights go
 
@@ -234,7 +265,8 @@ def test_paths_only_resolves_the_folders(sandbox, capsys, monkeypatch, tmp_path)
     """--paths, which SKILL.md step 3 runs to find <home>: the two folders and nothing else. No check runs
     (the DeepFace detection can take minutes) and nothing is created."""
     user, chome, home = sandbox
-    for name in ("checks", "action_install", "action_permissions", "action_install_deepface"):
+    for name in ("checks", "action_install", "action_permissions", "action_install_deepface",
+                 "action_install_transcription"):
         monkeypatch.setattr(CLI, name, lambda *a, **k: pytest.fail("--paths must not check or act"))
     code, out = run(capsys, "--paths")
     assert code == 0 and json.loads(out) == {"home": home.as_posix(), "claude_home": chome.as_posix()}
@@ -278,8 +310,9 @@ def test_subprocess_with_env_override(sandbox, tmp_path):
     items = {i["id"]: i["state"] for i in data["items"]}
     assert items["permissions"] == "ok" and items["agents"] == "ok" and items["central-folder"] == "ok"
     assert items["workflow"] == "ok"
-    tools_ready = all(items[k] == "ok" for k in ("python", "ffmpeg", "ffprobe", "numpy", "pillow"))
-    assert (r.returncode == 0) == tools_ready and data["ready"] == tools_ready
+    # the real check, in a process: the sandbox's USERPROFILE has no WhisperX environment
+    assert items["transcription"] == "missing" and items["speakers"] == "warn"
+    assert data["ready"] is False and r.returncode == 1
     assert (chome / "settings.json").is_file() and (chome / "agents").is_dir()
     assert (chome / "workflows" / "video-analysis.js").read_bytes() == WORKFLOW_SRC.read_bytes()
 
@@ -323,7 +356,7 @@ def _deepface(user, **fields) -> dict:
      "warn", "ImportError: DLL load failed; until it is repaired"),
 ])
 def test_deepface_is_optional(sandbox, tools_ok, capsys, monkeypatch, fields, state, needle):
-    """The DeepFace environment never makes the check fail: [OK], or [WARN] pointing to step 6. The check
+    """The DeepFace environment never makes the check fail: [OK], or [WARN] pointing to step 8. The check
     is the deep one: [OK] needs a detection that ran."""
     user, chome, home = sandbox
     asked = []
@@ -332,7 +365,7 @@ def test_deepface_is_optional(sandbox, tools_ok, capsys, monkeypatch, fields, st
     assert code == 0 and out.splitlines()[-1] == "Ready." and asked == [{"deep": True}]
     line = line_of(out, "deepface")
     assert line.startswith("[OK]" if state == "ok" else "[WARN]") and needle in line
-    assert line.endswith("-> setup.md, step 6 (webcam timeline)") == (state == "warn")
+    assert line.endswith("-> setup.md, step 8 (webcam timeline)") == (state == "warn")
 
 
 def test_install_deepface_action(sandbox, tools_ok, capsys, monkeypatch):
@@ -344,7 +377,7 @@ def test_install_deepface_action(sandbox, tools_ok, capsys, monkeypatch):
     code, out = run(capsys, "--install-deepface", "--json")
     action = json.loads(out)["actions"][0]
     assert item_of(json.loads(out), "deepface")["weights_path"] == ok["weights_path"]
-    assert action["id"] == "install-deepface" and action["state"] == "ok" and action["step"] == "6-webcam timeline"
+    assert action["id"] == "install-deepface" and action["state"] == "ok" and action["step"] == "8-webcam timeline"
     assert action["detail"] == f"install deepface 0.0.104; DeepFace ran a detection: deepface 0.0.104 in {ok['env']}"
     monkeypatch.setattr(environment, "install_deepface", lambda: {"env": ok["env"], "done": [], "status": ok})
     code, out = run(capsys, "--install-deepface")
@@ -363,5 +396,84 @@ def test_install_deepface_action(sandbox, tools_ok, capsys, monkeypatch):
     code, out = run(capsys, "--install-deepface", "--install-agents", "--apply-permissions")
     action = line_of(out, "install-deepface")
     assert code == 1 and action.startswith("[MISSING]") and "No matching distribution" in action
-    assert action.endswith("-> setup.md, step 6 (webcam timeline)")
+    assert action.endswith("-> setup.md, step 8 (webcam timeline)")
     assert out.splitlines()[-1] == "1 item(s) missing: run /video-analysis setup."
+
+
+# --- the transcription environment and the speakers --------------------------------------------------------
+
+@pytest.mark.parametrize("fields, state, needle", [
+    ({}, "ok", "videos without subtitles are transcribed here"),
+    ({"ok": False, "ready": False, "state": "absent", "problem": "absent", "version": None,
+      "detail": "no transcription environment at C:/x"}, "missing",
+     "no transcription environment at C:/x; without it, every video needs a .vtt of the same name"),
+    ({"ok": False, "ready": False, "state": "broken", "problem": "version",
+      "detail": "C:/x has whisperx 3.7.4, and the skill uses 3.8.6"}, "missing", "(--install-transcription repairs it)"),
+    ({"ready": False}, "missing", "but the models are not downloaded yet (--install-transcription downloads them)"),
+    ({"ok": False, "ready": False, "state": "unsupported", "problem": "platform",
+      "detail": "this Mac has an Intel processor: PyTorch 2.8, which WhisperX 3.8.6 needs, has no build for it"},
+     "missing", "this Mac has an Intel processor"),
+])
+def test_transcription_is_required(sandbox, tools_ok, capsys, monkeypatch, fields, state, needle):
+    """Without the transcription environment (or its models) the setup is not done: [MISSING], step 6."""
+    user, chome, home = sandbox
+    monkeypatch.setattr(environment, "transcription_status", lambda *a, **k: _transcription(user, **fields))
+    code, out = run(capsys, "--install-agents", "--apply-permissions")
+    line = line_of(out, "transcription")
+    assert line.startswith("[OK]" if state == "ok" else "[MISSING]") and needle in line
+    assert line.endswith("-> setup.md, step 6 (transcription)") == (state != "ok")
+    assert code == (0 if state == "ok" else 1)
+
+
+@pytest.mark.parametrize("ds, needle", [
+    ({"ok": False, "state": "no_token", "detail": "no Hugging Face token saved: the subtitles will not separate the speakers"},
+     "and runs & \"C:/w/Scripts/hf.exe\" auth login in their own terminal"),
+    ({"ok": False, "state": "no_access", "detail": "the saved token has no access to pyannote/x: accept its conditions at P"},
+     "accept its conditions at P"),
+    ({"ok": False, "state": "download", "detail": "token with access to pyannote/x, but the model is not downloaded yet"},
+     "(--install-transcription downloads it)"),
+    ({"ok": False, "state": "unavailable", "detail": "the transcription environment comes first (setup.md, step 6)"},
+     "comes first"),
+])
+def test_speakers_is_a_warning(sandbox, tools_ok, capsys, monkeypatch, ds, needle):
+    """No token, no access or no model: the subtitles come out without speakers, a [WARN] pointing to step 7
+    that does not fail the check."""
+    user, chome, home = sandbox
+    base = {"id": "speakers", "model": "pyannote/x", "page": "P", "login_command": '& "C:/w/Scripts/hf.exe" auth login',
+            "cached": False, "access": None}
+    monkeypatch.setattr(environment, "diarization_status", lambda st=None, **k: {**base, **ds})
+    code, out = run(capsys, "--install-agents", "--apply-permissions")
+    line = line_of(out, "speakers")
+    assert line.startswith("[WARN]") and needle in line and line.endswith("-> setup.md, step 7 (speakers)")
+    assert code == 0 and out.splitlines()[-1] == "Ready."
+    assert "auth login" in line or ds["state"] != "no_token"
+
+
+def test_install_transcription_action(sandbox, tools_ok, capsys, monkeypatch):
+    user, chome, home = sandbox
+    ok = _transcription(user)
+    proof = {"ok": True, "device": "cpu", "diarization": "ok"}
+    monkeypatch.setattr(environment, "install_transcription", lambda: {
+        "env": ok["env"], "done": ["create the environment", "install whisperx 3.8.6 with the cpu PyTorch build"],
+        "status": ok, "check": proof})
+    code, out = run(capsys, "--install-transcription", "--install-agents", "--apply-permissions", "--json")
+    data = json.loads(out)
+    action = next(a for a in data["actions"] if a["id"] == "install-transcription")
+    assert code == 0 and action["state"] == "ok" and action["step"] == "6-transcription" and action["note"] is None
+    assert action["detail"] == ("create the environment; install whisperx 3.8.6 with the cpu PyTorch build: "
+                                f"{ok['detail']}")
+    # without a token yet: done, with a note pointing to step 7 (shown as a [WARN] line, which does not fail)
+    monkeypatch.setattr(environment, "install_transcription", lambda: {
+        "env": ok["env"], "done": [], "status": ok, "check": {**proof, "diarization": "no_token"}})
+    code, out = run(capsys, "--install-transcription", "--install-agents", "--apply-permissions")
+    warn = [l for l in out.splitlines() if l.startswith("[WARN]") and " install-transcription " in l]
+    assert code == 0 and line_of(out, "install-transcription").startswith("[OK]")
+    assert warn and "no Hugging Face token yet" in warn[0] and warn[0].endswith("-> setup.md, step 7 (speakers)")
+
+    def refuse():
+        raise environment.SetupError("could not create the environment C:/x (exit 2): error: No interpreter found")
+    monkeypatch.setattr(environment, "install_transcription", refuse)
+    code, out = run(capsys, "--install-transcription", "--install-agents", "--apply-permissions")
+    action = line_of(out, "install-transcription")
+    assert code == 1 and action.startswith("[MISSING]") and "No interpreter found" in action
+    assert action.endswith("-> setup.md, step 6 (transcription)")

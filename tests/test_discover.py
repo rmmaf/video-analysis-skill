@@ -170,6 +170,17 @@ def test_rename_suggestion_doubles_curly_quotes(tmp_path):
     assert "DA’’s.vtt'" in s and "DA’’s-20260818_160841" in s
 
 
+def test_rename_suggestion_on_macos(tmp_path):
+    """macOS: mv -n (never overwrites) to the video's name in its folder; a ' closes and reopens the quotes."""
+    v = touch(tmp_path / "Reunião d'Ana-20260610_150844-Gravação de Reunião.mp4")
+    c = touch(tmp_path / "Reunião d'Ana.vtt")
+    s = D.rename_suggestion(c, v, posix=True)
+    new = tmp_path / (v.stem + ".vtt")
+    assert s == f"mv -n {D.sh_quote(str(c))} {D.sh_quote(str(new))}" and "d'\\''Ana-2026" in s
+    assert D.sh_quote("d'Ana") == "'d'\\''Ana'"
+    assert D.rename_suggestion(c, v, posix=False).startswith("Rename-Item -LiteralPath '")
+
+
 def _powershell():
     for exe in ("pwsh", "powershell"):
         path = shutil.which(exe)

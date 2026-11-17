@@ -6,9 +6,10 @@ whatever is already in place comes out `[OK]` and is skipped.
 
 **What code 0 means:** Python 3.10 or newer, `ffmpeg` and `ffprobe` on PATH, numpy and Pillow installed,
 the central folder (`%USERPROFILE%\video-analysis\`, or the folder in `VIDEO_ANALYSIS_HOME`) accepts
-writes, and the permission rules cover that folder. The verifier prints the concrete paths of this
-machine (`home` and `claude_home` in `--json`). With that, the Workflow's agents read frames and write reports without asking for permission for
-each file.
+writes, the permission rules cover that folder, and the transcription environment works, with its models
+downloaded. The verifier prints the concrete paths of this machine (`home` and `claude_home` in
+`--json`). With that, the Workflow's agents read frames and write reports without asking for permission
+for each file, and a video without subtitles is transcribed on the machine.
 
 **The installed agents and workflow never come out `[MISSING]`, only `[WARN]`.** Without the copies in
 `~/.claude/agents/`, or with copies different from the skill's, the analysis runs in `inline` mode,
@@ -16,9 +17,10 @@ which works the same and spends a little more per agent. Without the workflow sa
 `~/.claude/workflows/`, or with a copy different from the skill's, the skill passes the whole script to
 the Workflow on every run, which costs ~13k more tokens.
 
-**The DeepFace environment is optional: `[OK]` or `[WARN]`, never `[MISSING]`.** With it, `prepare.py`
-leaves each webcam out of the comparison only while it is on screen (step 6). Without it, the skill
-works the same, with the automatic mask only.
+**Separating the speakers and the DeepFace environment are optional: `[OK]` or `[WARN]`, never
+`[MISSING]`.** Without a Hugging Face token (step 7), a transcribed video gets subtitles that do not say who
+speaks. Without DeepFace (step 8), `prepare.py` does not leave each webcam out of the comparison only while
+it is on screen, and uses the automatic mask only. Both block nothing.
 
 What is only confirmed in use:
 
@@ -27,36 +29,45 @@ What is only confirmed in use:
 - the first analysis in a session opened after the setup proves `agents` mode and the workflow called
   by name (`name: "video-analysis"`).
 
-## What the setup does not ask for
+## What the setup writes, and the one secret
 
-The skill uses **no secrets** and no login: it works with local files, `ffmpeg` and Python. Outside the
-central folder, the setup writes to only these places, and only after the person's "yes" (the last row
-only if the person accepts the optional step 6):
+The skill uses **one secret, optional**: the Hugging Face token that separates the speakers, which the
+person saves in their own terminal (step 7). Claude never sees it. Everything else works with local files,
+`ffmpeg` and Python. Outside the central folder, the setup writes to only these places, and only after the
+person's "yes" (the transcription rows with step 6; the token with step 7; DeepFace with step 8):
 
 | what | where | how to undo |
 |---|---|---|
 | the two agent roles | `%USERPROFILE%\.claude\agents\video-analysis-*.md` | delete the two files |
 | the saved workflow | `%USERPROFILE%\.claude\workflows\video-analysis.js` | delete the file |
 | the permission rules for the central folder | `%USERPROFILE%\.claude\settings.json` | restore `settings.json.bak-<date>` |
+| the transcription environment (WhisperX, PyTorch and NLTK's punkt) | `%USERPROFILE%\whisperx-env\` | delete the folder |
+| uv, when the machine has none | the user's Python scripts folder (`pip install --user uv`) | `python -m pip uninstall uv` |
+| the Python 3.12 of that environment, which uv downloads when the machine has none | the folder that `uv python dir` prints | `uv python uninstall 3.12` |
+| the packages uv downloaded | the folder that `uv cache dir` prints | `uv cache clean` |
+| the models: Whisper, Portuguese alignment, pyannote | `%USERPROFILE%\.cache\huggingface\hub\` (or under `HF_HOME`) | delete the `models--*` folders (the cache may hold other programs' models) |
+| the Hugging Face token (the person saves it) | `%USERPROFILE%\.cache\huggingface\token` | `hf auth logout`, with the `hf` of the environment |
 | the DeepFace environment and the YuNet weights | `%USERPROFILE%\deepface-env\` and `%USERPROFILE%\.deepface\weights\face_detection_yunet_2023mar.onnx` | delete the environment folder and the YuNet file (the `weights` folder is DeepFace's and may hold other models) |
 
-These are the defaults; `VA_CLAUDE_HOME`, `VA_DEEPFACE_ENV` and `DEEPFACE_HOME` move them. When telling
-the person where something goes, use the paths the verifier printed, not this table: in `--json`,
-`claude_home`, and the `env` and `weights_path` of the `deepface` item.
+These are the defaults (on macOS, `~` instead of `%USERPROFILE%`); `VA_CLAUDE_HOME`, `VA_WHISPERX_ENV`,
+`VA_DEEPFACE_ENV`, `HF_HOME` and `DEEPFACE_HOME` move them. When telling the person where something goes,
+use the paths the verifier printed, not this table: in `--json`, `claude_home`, the `env` of the
+`transcription` item, and the `env` and `weights_path` of the `deepface` item. Without uv on PATH,
+`python -m uv` runs the commands of the table.
 
 You also do not accept terms or run an installation that asks for elevation on the person's behalf.
 
 ## How to conduct the setup
 
 1. **First check whether Python and ffmpeg are present**, read-only, because the verifier is a Python
-   script. In PowerShell:
+   script. On Windows, in PowerShell:
    `Get-Command python, py, ffmpeg, ffprobe, winget -ErrorAction SilentlyContinue | Select-Object Name, Source`.
    A `python` in `...\WindowsApps\` only counts if `python --version` shows the version: without the
-   Microsoft Store Python installed, it is only the shortcut that opens the store. Without Python, start
-   with step 1.
+   Microsoft Store Python installed, it is only the shortcut that opens the store. On macOS, with Bash:
+   `command -v python3 ffmpeg ffprobe brew uv`. Without Python, start with step 1.
 2. **Run the full verifier** and show the result to the person. Use the command in the **Setup** section
    of `SKILL.md`, which already comes with the skill path resolved and matches the pre-approval; run it
-   through the Bash tool:
+   through the Bash tool (`python3` instead of `python` on macOS):
 
    ```bash
    python "<skill folder>/check_environment.py"
@@ -72,8 +83,8 @@ You also do not accept terms or run an installation that asks for elevation on t
      another Claude Code folder; they are for testing, not for the normal setup.
 3. **Resolve the `[MISSING]` items in step order, one at a time.** The order follows the
    dependencies: each step only needs what the previous ones left ready. Steps 4 and 5 apply even
-   when the rest is `[OK]`. Step 6 is optional: offer it once, at the end, when `deepface` comes out
-   `[WARN]`.
+   when the rest is `[OK]`. Steps 7 and 8 are optional: offer each one once, at the end, when `speakers`
+   or `deepface` comes out `[WARN]`.
 4. **Each action carries one of two marks:**
    - **you run it**: show the command, say in one sentence what it changes on the machine and run it
      only after the person's "yes";
@@ -81,8 +92,9 @@ You also do not accept terms or run an installation that asks for elevation on t
      done and run the verifier again.
 5. **An item counts as done when the verifier shows `[OK]`**, not when the person says they did it.
 6. **Finish** when the verifier exits with code 0. Do not declare the setup ready with code 1.
-7. **If the setup started in the middle of an analysis** (`prepare.py` exited with 3, or reported
-   `permissions_ok: false`), offer to resume it when you finish.
+7. **If the setup started in the middle of an analysis** (`prepare.py` exited with 3, stopped with
+   `missing_vtt` for lack of the transcription, or reported `permissions_ok: false`), offer to resume it
+   when you finish.
 
 ## Step 1 — tools: Python and ffmpeg
 
@@ -95,10 +107,16 @@ winget install --id Python.Python.3.12 -e
 winget install --id Gyan.FFmpeg -e
 ```
 
-- Any Python 3.10 or newer works; whoever already has one does not need to switch.
+- Any Python 3.10 or newer works; whoever already has one does not need to switch. The transcription
+  brings its own Python (step 6).
 - The `Gyan.FFmpeg` package brings `ffmpeg` and `ffprobe` together.
 - Without `winget`, use the official installers: <https://www.python.org/downloads/> and
   <https://www.gyan.dev/ffmpeg/builds/> (adding the `bin` folder to PATH).
+- **macOS**, with Homebrew (<https://brew.sh>), which the person installs if it is missing:
+
+  ```bash
+  brew install python ffmpeg uv
+  ```
 
 **After installing**, the person closes and reopens Claude Code and calls `/video-analysis setup` again.
 PATH is only reread by a new process: `[MISSING]` right after the installation is usually that, not an
@@ -113,7 +131,9 @@ python -m pip install numpy Pillow
 ```
 
 If pip refuses because of permissions, repeat with `--user`. The skill does not use OpenCV or any other
-dependency.
+dependency. **macOS**: Homebrew's Python refuses `pip install` outside an environment
+("externally-managed-environment"); there, run `brew install numpy pillow` instead. With the python.org
+Python, `python3 -m pip install numpy Pillow` works.
 
 ## Step 3 — central folder
 
@@ -165,7 +185,7 @@ of prompts per run.
 
    - The rules apply only to the central folder: nothing outside it becomes allowed.
    - The two spellings (`~/…` and `//c/…`) stay until the first analysis shows which one Windows
-     accepts; after that, the one that does not work can be removed.
+     accepts; after that, the one that does not work can be removed. On macOS there is only `~/…`.
 2. **You run it**, only after the "yes":
 
    ```bash
@@ -175,7 +195,87 @@ of prompts per run.
    The verifier makes a backup at `settings.json.bak-<date>` and merges the rules into `settings.json`,
    without touching `enabledPlugins` or anything else.
 
-## Step 6 — optional: the DeepFace environment (webcam timeline)
+## Step 6 — local transcription (WhisperX)
+
+With it, a video without a `.vtt` of the same name is transcribed on this machine before the analysis:
+the skill asks how many people speak, WhisperX transcribes the speech, times each word and, with step 7,
+separates the speakers, and the skill saves `<name of the video>.vtt` next to the video. Without it, every
+video needs its `.vtt`, as in the earlier version.
+
+**Say what it costs** before the "yes":
+
+- a Python environment of its own, `%USERPROFILE%\whisperx-env\` (`~/whisperx-env` on macOS), with
+  whisperx 3.8.6 and PyTorch 2.8 (3.7 GB with the CPU build), plus the models, which the proof downloads:
+  the default Whisper model of the machine (`large-v3-turbo`, 1.6 GB, on a CPU and on a Mac; `large-v3`,
+  about 3 GB, on an NVIDIA GPU with 8 GB or more) and the Portuguese alignment model (1.2 GB). On a machine
+  without NVIDIA, about 6.5 GB in all, and 9 minutes on the connection where it was measured; with NVIDIA,
+  more (the CUDA build of PyTorch and `large-v3`);
+- then each video without subtitles is transcribed once, before its first analysis. On a CPU it is slow:
+  on the 4-core 2017 laptop where it was measured, 2.7 times the length of the video (25 min for a 9-min
+  meeting: the speech 1.2×, the times of the words 0.4×, the speakers 1.0×); a newer CPU is faster, and an
+  NVIDIA GPU should take minutes per hour (not measured). The estimate of each analysis gives the figure,
+  and the result stays in the video's cache and next to the video.
+
+**You run it**, after the "yes", always with `run_in_background` (wait for the notification):
+
+```bash
+python "<skill folder>/check_environment.py" --install-transcription
+```
+
+- Finds **uv** (on PATH, `python -m uv`, or its usual folders) and, without it, installs it with
+  `python -m pip install --user uv`. uv creates the environment with its own **Python 3.12**: WhisperX does
+  not run on Python 3.14, and uv downloads that Python when the machine lacks it. On macOS, if pip refuses
+  ("externally-managed-environment"), `brew install uv` (step 1) and run it again.
+- Installs whisperx 3.8.6 with the PyTorch build of the machine: CUDA with an NVIDIA GPU whose driver is
+  recent enough (`cu128` from driver 570, `cu126` from 528, read from `nvidia-smi`), CPU otherwise and on
+  every Mac. A GPU older than Volta (compute capability below 7.0: GTX 9xx and 10xx) transcribes on the CPU:
+  the CUDA builds and Whisper's float16 do not support it. The variable `VA_TORCH_BACKEND` forces one
+  (`cpu`, `cu126`, `cu128`…).
+- Downloads NLTK's punkt, which the alignment uses, straight from NLTK's repository into the environment
+  (NLTK's own downloader fails behind some proxies).
+- Then the **proof**: `scripts/transcribe.py --check` loads the default Whisper model and the Portuguese
+  alignment model and, with the token of step 7, pyannote, downloading them on the way. A proof that cannot
+  import whisperx reinstalls it once.
+- A part already in place is skipped, and a download that failed resumes when it runs again: running it
+  again repairs the environment. Other languages download their alignment model at first use.
+- **Mac**: Apple silicon only, on the CPU (PyTorch 2.8 has no build for Intel Macs, so the verifier says
+  "not supported" there, and every video needs its `.vtt`). WhisperX's Whisper (CTranslate2) does not use
+  the Mac's GPU.
+
+If it fails, the item's `detail` says where; the most common causes (proxy, SSL, a download that stalls)
+are in [`reference/troubleshooting.md`](reference/troubleshooting.md), "Local transcription".
+
+## Step 7 — optional: separating the speakers (Hugging Face token)
+
+pyannote's speaker model (`pyannote/speaker-diarization-community-1`) is free, but gated: Hugging Face
+only serves it to an account that accepted its conditions, through a token. Without it, the transcription
+works, and its subtitles do not say who speaks. **Offer it once**, when `speakers` comes out `[WARN]`.
+
+**The person does it** (Claude never sees the token):
+
+1. Create a free account at <https://huggingface.co/join>, if they have none, and a token of the **Read**
+   type at <https://huggingface.co/settings/tokens>.
+2. Signed in with the same account, open
+   <https://huggingface.co/pyannote/speaker-diarization-community-1> and accept the conditions.
+3. In their own terminal (PowerShell on Windows, Terminal on macOS), save the token with the command that
+   the verifier printed in the item (`login_command` in `--json`). By default, on Windows:
+
+   ```powershell
+   & "$env:USERPROFILE\whisperx-env\Scripts\hf.exe" auth login
+   ```
+
+   On macOS: `~/whisperx-env/bin/hf auth login`. Paste the token when asked (it does not show while
+   typed), and answer no if asked whether to add it as a git credential.
+
+Then **you run** step 6 again (`--install-transcription`, in the background): it downloads the pyannote
+model and proves it loads, and the verifier shows `speakers` `[OK]`. `no_access` in the item means the
+token works, but its account did not accept the conditions of step 2.
+
+A video transcribed before the token keeps its transcript: the next analysis of it redoes only the
+speakers (on a CPU, about the length of the video), not the speech, and replaces the `.vtt` the skill
+wrote, unless the person edited it.
+
+## Step 8 — optional: the DeepFace environment (webcam timeline)
 
 In a call whose layout changes (the camera alone, then a screen share, then the gallery), a webcam makes
 frames that are only someone moving, and a fixed region to ignore would also hide the shared screen
@@ -223,6 +323,8 @@ Run the verifier one last time and show the result. Remind the person:
   the name `video-analysis`, close and reopen Claude Code. Until then the skill passes the script inline,
   which works the same and costs ~13k more tokens per run.
 - If the permission prompts continue after the rules are written, close and reopen Claude Code.
+- With the transcription environment, a video without subtitles is transcribed before its first
+  analysis, after the skill asks how many people speak; the estimate says how long it takes.
 - With the DeepFace environment installed, the next analysis of each video starts with its webcam
   timeline; the estimate says how long it may take.
 - If there was an analysis before the setup, offer to resume it.

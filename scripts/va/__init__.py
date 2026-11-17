@@ -1,6 +1,6 @@
 """video-analysis, deterministic layer: versions and default parameters.
 
-Pure data, no side effects. Entry points must set ``sys.dont_write_bytecode = True``
+Data, plus old_python() (a pure check, no side effects). Entry points must set ``sys.dont_write_bytecode = True``
 *before* importing this package, so no ``__pycache__`` lands in the skill folder.
 
 Usage notes for the stage modules:
@@ -9,9 +9,32 @@ Usage notes for the stage modules:
 - Every value is JSON-serializable (lists, never tuples), so the effective params can be
   written to frames.json / stage.json and hashed into the cache keys (spec section 7).
 - Times are seconds in these dicts; stage code works in integer milliseconds internally.
+- This file must stay parseable by old Pythons (no ``X | None``, no ``match``): every entry script imports it
+  first to call ``old_python`` before anything written for 3.10.
 """
+import sys
 
 VERSION = "1.1.0"
+
+MIN_PYTHON = (3, 10)
+
+
+def old_python(version=None, executable=None, platform=None):
+    """The one line an entry script prints before exiting when its Python is older than MIN_PYTHON, or None.
+    The rest of the skill uses 3.10 syntax, so an older Python (Apple's /usr/bin/python3 is 3.9.6) would stop
+    at an import with a SyntaxError or TypeError instead of saying what to do. Arguments replace sys's (tests)."""
+    v = tuple(sys.version_info if version is None else version)[:3]
+    if v >= MIN_PYTHON:
+        return None
+    exe = executable if executable is not None else (sys.executable or "?")
+    plat = platform if platform is not None else sys.platform
+    if plat == "darwin":
+        todo = "brew install python, with /opt/homebrew/bin first on PATH, then run it with python3 again"
+    else:
+        todo = "install Python 3.12 (setup.md, step 1) and run it with that Python"
+    found = ".".join(str(n) for n in v)
+    return "video-analysis needs Python %d.%d or newer, and this is Python %s (%s): %s" % (
+        MIN_PYTHON[0], MIN_PYTHON[1], found, exe, todo)
 
 # Bumped whenever the output of a stage changes for the same inputs (part of the cache keys).
 ALGO_VERSION = "dedup-1.1"      # frames stage: dedup + extraction (frames-<h8>); 1.1 = calibrated defaults
@@ -258,6 +281,9 @@ TRANSCRIBE_DEFAULTS = {
     "whisperx_version": "3.8.6",    # the only version prepare.py runs: it is in the transcript's cache key
     # what whisperx 3.8.6 pins; installed explicitly so that --torch-backend routes them to the PyTorch index
     "torch_packages": ["torch==2.8.0", "torchaudio==2.8.0", "torchvision==0.23.0"],
+    # whisperx accepts any recent CTranslate2 (faster-whisper's engine): pinned to the calibrated environment's,
+    # which also brings the experimental Metal backend of Apple silicon (device "mps")
+    "ctranslate2_version": "4.9.0",
     # NVIDIA driver -> PyTorch index (the first whose minimum driver the machine meets); below them, cpu
     "cuda_backends": [[570, "cu128"], [528, "cu126"]],
     # below this compute capability (Maxwell, Pascal: GTX 9xx/10xx) the GPU is not used: PyTorch 2.8's cu128
@@ -278,7 +304,7 @@ TRANSCRIBE_DEFAULTS = {
     "punkt_url": "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/tokenizers/punkt_tab.zip",
     "punkt_languages": ["portuguese", "english"],
     "punkt_files": ["collocations.tab", "sent_starters.txt", "abbrev_types.txt", "ortho_context.tab"],
-    "batch_size": {"cuda": 16, "cpu": 8},
+    "batch_size": {"cuda": 16, "cpu": 8, "mps": 8},
     "chunk_s": 600.0,               # ASR in blocks of ~10 min, each one a checkpoint...
     "chunk_search_s": 30.0,         # ...cut at the quietest point within 30 s of the boundary
     "detect_window_s": 900.0,       # language detection: speech windows in the first 15 min...
@@ -301,6 +327,13 @@ TRANSCRIBE_DEFAULTS = {
                 "asr_other": 2.0, "align": 0.39, "diarize": 1.0},
         "cuda": {"startup_s": 40.0, "asr": {"large-v3-turbo": 0.03, "large-v3": 0.06, "large-v2": 0.06},
                  "asr_other": 0.05, "align": 0.02, "diarize": 0.03},
+        # Apple silicon (device "cpu" on darwin; transcript.estimate_seconds): the ASR with int8 on the
+        # performance cores, the alignment and pyannote on the GPU (MPS). NOT measured: a guess from the P-core
+        # count of an M4 Max against the 4-core laptop above and pyannote's published 5-14x MPS speedups;
+        # calibrate it on a Mac (tests/data/calibration.md)
+        "apple": {"startup_s": 60.0, "asr": {"large-v3-turbo": 0.35, "large-v3": 0.9, "large-v2": 0.9, "medium": 0.45,
+                                            "small": 0.2, "base": 0.09, "tiny": 0.05},
+                  "asr_other": 0.6, "align": 0.06, "diarize": 0.12},
     },
     "lock_wait_s": 6 * 3600.0,      # another prepare.py transcribing the same video: wait up to this
     "check_timeout_s": 3600.0,      # the setup's proof, which downloads the models

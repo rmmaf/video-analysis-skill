@@ -41,13 +41,21 @@ _TOOLS: dict[str, str] = {}
 
 
 def find_tool(name: str) -> str:
-    """Absolute path of ffmpeg/ffprobe (env VA_FFMPEG / VA_FFPROBE override the PATH)."""
+    """Absolute path of ffmpeg/ffprobe (env VA_FFMPEG / VA_FFPROBE override the PATH). On macOS, also
+    Homebrew's bin folders when they are not on PATH (environment.brew_tool: the shell of Claude Code may
+    never have run ``brew shellenv``)."""
     if name in _TOOLS:
         return _TOOLS[name]
     env = os.environ.get("VA_" + name.upper(), "").strip().strip('"')
     path = env if env and Path(env).is_file() else shutil.which(name)
     if not path:
-        raise FFmpegNotFound(f"{name} not found on PATH (install ffmpeg: see setup.md)")
+        from .environment import brew_tool   # lazy: only a Mac without Homebrew on PATH gets here
+        found = brew_tool(name)
+        path = found[0] if found else None
+    if not path:
+        hint = ("brew install ffmpeg, and Homebrew on PATH: eval \"$(/opt/homebrew/bin/brew shellenv)\" in "
+                "~/.zprofile" if sys.platform == "darwin" else "install ffmpeg: see setup.md")
+        raise FFmpegNotFound(f"{name} not found on PATH ({hint})")
     _TOOLS[name] = path
     return path
 

@@ -43,7 +43,31 @@ SKILL_DIR = SCRIPTS_DIR.parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-import va  # noqa: E402
+import va  # noqa: E402  (its __init__ parses on old Pythons; the rest of the skill needs 3.10)
+
+
+def _old_python_exit(message):
+    """Exit 3 with the missing_dependency envelope of reference/contracts.md (section 3) when the Python is too
+    old for the rest of the skill. Written for old Pythons too: no ``X | None`` and nothing from ``va`` but
+    VERSION, since the other modules would not even import (Apple's /usr/bin/python3 is 3.9)."""
+    names = set(a.split("=", 1)[0] for a in sys.argv[1:] if a.startswith("--"))   # --resume=latest -> --resume
+    modes = (("gc", ("--gc",)), ("resume", ("--resume", "--retomar")), ("estimate", ("--estimate", "--estimar")),
+             ("speaker_shots", ("--speaker-shots",)))   # every alias of build_parser's mode group
+    mode = next((m for m, aliases in modes if names.intersection(aliases)), "prepare")
+    env = {"ok": False, "error": {"code": "missing_dependency", "detail": message + ": run /video-analysis setup"},
+           "mode": mode, "version": va.VERSION, "home": None, "run_id": None, "run_dir": None, "json_path": None,
+           "videos": [], "estimate": None, "env": None,
+           "script_path": (SKILL_DIR / "workflow" / "video-analysis.js").as_posix(), "workflow_args": None,
+           "errors": [], "warnings": []}
+    sys.stderr.write(message + "\n")
+    sys.stdout.write(json.dumps(env, ensure_ascii=True, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+    sys.exit(3)
+
+
+if va.old_python():
+    _old_python_exit(va.old_python())
+
 from va import WEBCAM_DEFAULTS, WORKFLOW_DEFAULTS, WORKSPACE_DIRS, environment, cache, contracts, discover, runs, webcam  # noqa: E402
 from va import transcript  # noqa: E402
 from va.common import (as_posix, fmt_hms, parse_time, read_json, resolve_unicode_paths, setup_console,  # noqa: E402

@@ -52,6 +52,12 @@ SKILL = Path(__file__).resolve().parent
 if str(SKILL / "scripts") not in sys.path:
     sys.path.insert(0, str(SKILL / "scripts"))
 
+import va  # noqa: E402  (its __init__ parses on old Pythons; the rest of the skill needs 3.10)
+
+if va.old_python():   # Apple's /usr/bin/python3 is 3.9: one clear line instead of a SyntaxError in an import
+    print(va.old_python())
+    sys.exit(1)
+
 from va import environment  # noqa: E402
 from va.common import as_posix, setup_console, workspace_home  # noqa: E402
 
@@ -68,8 +74,22 @@ STEPS = {
 }
 MAC = sys.platform == "darwin"
 HINT_FFMPEG = " (brew install ffmpeg)" if MAC else " (winget install --id Gyan.FFmpeg -e)"
-HINT_LIBS = (" (brew install numpy pillow, or python3 -m pip install numpy Pillow with python.org's Python)" if MAC
-             else " (python -m pip install numpy Pillow)")
+
+
+def libs_hint(mac: bool = MAC, exe: str | None = None) -> str:
+    """How to install numpy and Pillow into exactly the Python being checked. On macOS not ``brew install numpy
+    pillow``: those formulae can belong to another Python version than the python3 that runs the skill;
+    ``--break-system-packages`` because Homebrew's Python refuses pip otherwise (PEP 668), ``--user`` so
+    nothing of Homebrew's own is touched."""
+    exe = exe or sys.executable or "python3"
+    if not mac:
+        return " (python -m pip install numpy Pillow)"
+    return (f' (for this Python, {exe}: "{exe}" -m pip install --user --break-system-packages numpy Pillow; or a '
+            f'virtual environment: "{exe}" -m venv ~/.venvs/video-analysis, then ~/.venvs/video-analysis/bin/python '
+            "-m pip install numpy Pillow, with ~/.venvs/video-analysis/bin first on PATH)")
+
+
+HINT_LIBS = libs_hint()
 LABEL = {"ok": "[OK]     ", "missing": "[MISSING]", "warn": "[WARN]   "}
 # The Workflow keeps in memory, per session, the saved workflow it has already read: once the file is
 # replaced, the name keeps running the previous version until Claude Code reopens (step 6 of SKILL.md).
@@ -120,6 +140,10 @@ def action_install_workflow(chome: Path) -> dict:
 def action_permissions(home: Path, chome: Path) -> dict:
     rules = environment.workspace_rules(home)
     target = chome / "settings.json"
+    if not rules:   # nothing merged would read as "already in place" while the prompts go on
+        return item("apply-permissions", "missing",
+                    f"no permission rule can name {as_posix(home)} (a network path?): add Read, Edit and Write rules "
+                    f"for it to {as_posix(target)} by hand, or use a central folder on a local disk", rules=rules)
     try:
         r = environment.merge_permissions(target, rules)
     except (environment.SetupError, OSError) as exc:
@@ -167,21 +191,28 @@ def action_install_transcription() -> dict:
 
 def transcription_item() -> dict:
     """The transcription environment: [OK] when it works and the setup already downloaded the default Whisper
-    model and the Portuguese alignment model; [MISSING] otherwise (without it, every video needs its .vtt)."""
+    model and the Portuguese alignment model ([WARN] when its CTranslate2 is not the pinned one); [MISSING]
+    otherwise (without it, every video needs its .vtt)."""
     st = environment.transcription_status()
-    keys = ("env", "python", "python_version", "version", "expected", "torch", "backend", "device", "gpu",
-            "default_model", "token", "models", "nltk_data", "login_command")
+    keys = ("env", "python", "python_version", "version", "expected", "torch", "ctranslate2", "backend", "device",
+            "gpu", "default_model", "token", "models", "nltk_data", "login_command")
     extra = {k: st.get(k) for k in keys}
     if st["state"] == "unsupported":
         return item("transcription", "missing", st["detail"], **extra), st
     if st["state"] == "absent":
         return item("transcription", "missing", f"{st['detail']}; without it, every video needs a .vtt of the same "
                     "name (--install-transcription creates it: about 6.5 GB)", **extra), st
+    if st.get("problem") == "architecture":   # the detail says what to do: --install-transcription refuses it
+        return item("transcription", "missing", st["detail"], **extra), st
     if not st["ok"]:
         return item("transcription", "missing", f"{st['detail']} (--install-transcription repairs it)", **extra), st
     if not st["ready"]:
         return item("transcription", "missing", f"{st['detail']}, but the models are not downloaded yet "
                     "(--install-transcription downloads them)", **extra), st
+    pin, ct2 = va.TRANSCRIBE_DEFAULTS["ctranslate2_version"], st.get("ctranslate2")
+    if ct2 and ct2 != pin:   # it works, but not with the CTranslate2 the setup pins (one of before the pin)
+        return item("transcription", "warn", f"{st['detail']}, with CTranslate2 {ct2} instead of {pin} "
+                    "(--install-transcription repairs it)", **extra), st
     return item("transcription", "ok", f"{st['detail']}: videos without subtitles are transcribed here", **extra), st
 
 
@@ -227,14 +258,14 @@ def checks(home: Path, chome: Path) -> list[dict]:
         items.append(item(name, "ok" if st["ok"] else "missing", st["detail"] + hint))
     for name in ("numpy", "pillow"):
         st = environment.module_status(name)
-        hint = "" if st["ok"] else HINT_LIBS
+        hint = "" if st["ok"] else libs_hint()
         items.append(item(name, "ok" if st["ok"] else "missing", st["detail"] + hint))
     ws = environment.workspace_status(home, create=True)
     items.append(item("central-folder", "ok" if ws["ok"] else "missing", ws["detail"]))
     perm = environment.permissions_status(home, chome)
     rules = environment.workspace_rules(home)
     detail = perm["detail"]
-    if not perm["ok"] and not perm["blocked"]:
+    if not perm["ok"] and not perm["blocked"] and rules:
         detail += " (--apply-permissions merges: " + ", ".join(rules) + ")"
     items.append(item("permissions", "ok" if perm["ok"] else "missing", detail, rules=rules,
                       covered=perm["covered"], blocked=perm["blocked"]))

@@ -65,16 +65,24 @@ VIDEO e o caminho do arquivo; se nao houver arquivo com esse nome, vale como cur
 para nomes com acentos decompostos.
 Os tempos e os grupos de rostos vao para a saida de erro.
 """
+import sys
 import time
 
 T_START = time.perf_counter()
+
+# Python antigo (o /usr/bin/python3 da Apple e 3.9): uma linha clara em vez de um erro no meio. Escrito
+# aqui, e nao com va.old_python, porque este script roda no ambiente da DeepFace, sem o pacote va.
+if sys.version_info < (3, 10):
+    sys.exit("video-analysis needs Python 3.10 or newer, and this is Python %d.%d.%d (%s)%s" % (
+        sys.version_info[0], sys.version_info[1], sys.version_info[2], sys.executable,
+        ": brew install python, with /opt/homebrew/bin first on PATH, then create the DeepFace environment again"
+        if sys.platform == "darwin" else ": create the DeepFace environment again with Python 3.12"))
 
 import argparse  # noqa: E402
 import glob  # noqa: E402
 import json  # noqa: E402
 import math  # noqa: E402
 import os  # noqa: E402
-import sys  # noqa: E402
 import threading  # noqa: E402
 
 import cv2  # noqa: E402

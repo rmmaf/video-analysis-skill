@@ -3,7 +3,7 @@
 - ``expand_inputs``: files, folders (non-recursive by default) and globs (``*``/``?`` only, used
   only when the literal path is missing; ``[`` and ``]`` are always literal) -> video paths as
   stored on disk (possibly NFD), deduplicated, in input order (folder contents sorted by
-  NFC.casefold).
+  NFC.casefold). Folder scans and glob matches skip the macOS AppleDouble companions ("._*").
 - ``find_vtt``: the strict rule. The subtitle has the same stem as the video (compared with
   NFC.casefold) and the ``.vtt`` extension, in the same folder. Nothing is renamed.
 - ``vtt_candidates`` / ``rename_suggestion``: what to show when the rule fails: stems that are a
@@ -24,6 +24,7 @@ from .common import AmbiguousPathError, nfc_casefold, resolve_unicode_paths
 __all__ = [
     "VIDEO_EXTS", "VTT_EXT", "expand_inputs", "find_vtt", "vtt_candidates", "rename_suggestion",
     "ps_quote", "sh_quote", "match_vtts", "missing_vtt_detail", "is_video_name",
+    "is_appledouble_name",
 ]
 
 VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".webm", ".m4v", ".avi", ".wmv", ".mpg", ".mpeg", ".ts", ".m2ts", ".flv")
@@ -39,10 +40,18 @@ def is_video_name(name: str) -> bool:
     return os.path.splitext(name)[1].lower() in VIDEO_EXTS
 
 
+def is_appledouble_name(name: str) -> bool:
+    """macOS writes a "._<name>" companion (4 KB of metadata, not media) next to each file it
+    copies to exFAT/FAT/SMB volumes; those must never become a video or a subtitle candidate."""
+    return name.startswith("._")
+
+
 def _scan(folder: Path) -> list[os.DirEntry]:
+    """The folder's entries, without the AppleDouble companions (every scan here looks for
+    candidates; a file the person names explicitly never goes through it)."""
     try:
         with os.scandir(folder) as it:
-            return list(it)
+            return [e for e in it if not is_appledouble_name(e.name)]
     except OSError:
         return []
 
@@ -95,6 +104,9 @@ def expand_inputs(entries: list[str], recursive: bool = False) -> tuple[list[Pat
         if not entry:
             continue
         has_glob = "*" in entry or "?" in entry
+        # "/Volumes/X/*.mp4" also matches the "._" companions; a pattern that itself starts with
+        # "._" asks for them, so it keeps them.
+        skip_appledouble = has_glob and not is_appledouble_name(os.path.basename(entry.rstrip("/\\")))
         try:
             matches = resolve_unicode_paths(entry)
         except (OSError, ValueError, AmbiguousPathError):
@@ -116,6 +128,8 @@ def expand_inputs(entries: list[str], recursive: bool = False) -> tuple[list[Pat
             elif m.is_file():
                 if has_glob and not is_video_name(m.name):
                     continue  # "C:/x/*" also matches the .vtt files
+                if skip_appledouble and is_appledouble_name(m.name):
+                    continue
                 matched += 1
                 add(m)
         if has_glob and not matched and not any(p["input"] == entry for p in problems):

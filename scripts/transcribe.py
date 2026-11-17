@@ -7,7 +7,7 @@ prepare.py runs it, one video at a time, for a video without subtitles (scripts/
 
     <env python> -B transcribe.py VIDEO --work DIR --asr-out DIR/asr.json --model M --language auto|xx
         [--diar-out DIR/diar-<d8>.json --diar-key d8 --speakers S [--min-speakers N] [--max-speakers N]]
-        [--device auto|cpu|cuda] [--batch-size N] [--threads N] [--progress FILE --vid vN] [--watch-stdin]
+        [--device auto|cpu|cuda|mps] [--batch-size N] [--threads N] [--progress FILE --vid vN] [--watch-stdin]
 
 and the setup proves the environment with it, downloading the models on the way:
 
@@ -22,6 +22,13 @@ segments keep their own times) -> asr.json. With --diar-out: pyannote's speaker 
 when pyannote fails, it writes "diarized": false and the reason, and exits 0: the subtitles come out without
 speakers. An asr.json already complete (same model and language) is kept: only the diarization runs.
 
+Devices: the ASR (CTranslate2) runs on CUDA from Volta on, else on the CPU (int8; on Apple silicon CTranslate2's
+wheels are CPU only, Accelerate + Ruy). The torch phases (alignment, pyannote) follow CUDA when the ASR uses it,
+else run on MPS when this Mac has it (--device mps forces it), else on the CPU; a phase that fails on MPS is
+retried once on the CPU. VA_ASR_DEVICE=mps (macOS only, experimental; with --device auto, so an explicit --device keeps
+its meaning) runs the ASR itself on CTranslate2's Metal backend (float16), falling back to cpu/int8 for the rest
+of the run when it does not load, runs out of memory or fails in any other way.
+
 Exit codes: 0 ok · 2 arguments · 3 the environment does not load · 4 a model download failed (--check) ·
 5 out of memory even with the smallest batch · 1 other · 130 the standard input closed (prepare.py stopped).
 """
@@ -30,6 +37,7 @@ import gc
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -41,7 +49,8 @@ SCHEMA_DIAR = "va.diar/1"
 MIN_GPU_CAPABILITY = (7, 0)   # TRANSCRIBE_DEFAULTS["gpu_min_compute_cap"]: older GPUs transcribe on the CPU
 CHUNK_VERSION = 1             # the header of partial/chunk_NNN.json
 DEFAULTS = {"chunk_s": 600.0, "chunk_search_s": 30.0, "detect_window_s": 900.0, "detect_segments": 6,
-            "batch_cuda": 16, "batch_cpu": 8, "diarize_model": "pyannote/speaker-diarization-community-1"}
+            "batch_cuda": 16, "batch_cpu": 8, "batch_mps": 8, "diarize_model": "pyannote/speaker-diarization-community-1"}
+ASR_DEVICE_ENV = "VA_ASR_DEVICE"   # =mps on macOS: the Whisper ASR on CTranslate2's Metal backend (experimental)
 
 
 def _pipe_peek():
@@ -226,11 +235,25 @@ def classify_failure(exc, token_present):
     return f"error: {type(exc).__name__}: {' '.join(str(exc).split())[:300]}"
 
 
+def _performance_cores():
+    """macOS: the performance cores (hw.perflevel0.physicalcpu), or None where sysctl does not tell."""
+    try:
+        r = subprocess.run(["sysctl", "-n", "hw.perflevel0.physicalcpu"], capture_output=True, text=True,
+                           timeout=2)
+        n = int((r.stdout or "").strip())
+    except Exception:
+        return None
+    return n if n > 0 else None
+
+
 def default_threads():
     """CPU threads for CTranslate2 and torch: the physical cores (half the logical ones where SMT is the
-    rule; every core on Apple silicon, which has none)."""
+    rule). On Apple silicon only the performance cores: a CTranslate2 pool that includes the efficiency cores
+    runs at the speed of its slowest thread (os.cpu_count() when sysctl does not answer)."""
     n = os.cpu_count() or 2
-    return max(1, min(16, n if sys.platform == "darwin" else n // 2))
+    if sys.platform == "darwin":
+        return max(1, min(16, _performance_cores() or n))
+    return max(1, min(16, n // 2))
 
 
 def is_oom(exc):
@@ -275,6 +298,13 @@ def clean_segments(segments, offset_s=0.0):
 
 # --- the environment --------------------------------------------------------------------------------------
 
+def set_mps_fallback():
+    """macOS: an operator MPS lacks runs on the CPU instead of raising. torch reads the variable when it is
+    imported, so this runs before load_libs()."""
+    if sys.platform == "darwin":
+        os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
+
 def load_libs():
     """torch first (on Windows it loads the CUDA DLLs that CTranslate2 also needs), then whisperx. Exit 3
     when they do not load."""
@@ -291,15 +321,75 @@ def load_libs():
 
 def pick_device(torch, wanted):
     """auto: CUDA only on a GPU from Volta on (TRANSCRIBE_DEFAULTS["gpu_min_compute_cap"]): torch still sees a
-    Pascal or Maxwell card, but CTranslate2's float16 needs 7.0 and the cu128 build has no kernels for it."""
+    Pascal or Maxwell card, but CTranslate2's float16 needs 7.0 and the cu128 build has no kernels for it.
+    This is the ASR's device: mps (the torch phases' choice) leaves the ASR on the CPU."""
     if wanted in ("cpu", "cuda"):
         return wanted
+    if wanted == "mps":
+        return "cpu"
     try:
         if not torch.cuda.is_available():
             return "cpu"
         return "cuda" if tuple(torch.cuda.get_device_capability(0)) >= MIN_GPU_CAPABILITY else "cpu"
     except Exception:
         return "cpu"
+
+
+def mps_available(torch):
+    """Whether torch has a usable MPS backend (Apple silicon); False on any build without one."""
+    try:
+        mps = getattr(getattr(torch, "backends", None), "mps", None)
+        return bool(mps is not None and mps.is_available())
+    except Exception:
+        return False
+
+
+def pick_torch_device(torch, wanted, asr_device):
+    """The device of the torch phases (alignment, diarization): CUDA when the ASR runs there; otherwise MPS
+    when wanted is auto or mps and this Mac has it, else the CPU."""
+    if asr_device == "cuda":
+        return "cuda"
+    if wanted == "cpu":
+        return "cpu"
+    if wanted in ("auto", "mps") and mps_available(torch):
+        return "mps"
+    return "cpu"
+
+
+def torch_device_for(torch, wanted, asr_device):
+    """pick_torch_device, saying so when --device mps cannot be honoured."""
+    dev = pick_torch_device(torch, wanted, asr_device)
+    if wanted == "mps" and dev != "mps":
+        log("--device mps: MPS is not available here; alignment and diarization on the CPU")
+    return dev
+
+
+def asr_device_override():
+    """VA_ASR_DEVICE=mps on macOS: "mps" (the ASR on CTranslate2's Metal backend); otherwise None."""
+    if sys.platform != "darwin":
+        return None
+    return "mps" if os.environ.get(ASR_DEVICE_ENV, "").strip().lower() == "mps" else None
+
+
+def asr_device_for(torch, args):
+    """The ASR's device for this run: pick_device, or mps when VA_ASR_DEVICE=mps and --device is auto (an
+    explicit --device keeps its meaning: --device mps puts only the torch phases on Metal)."""
+    device = pick_device(torch, args.device)
+    if device == "cpu" and args.device == "auto" and asr_device_override():
+        return "mps"
+    return device
+
+
+def free_device(torch, device):
+    """Return the memory of a finished phase: Python's garbage, then the cache of the device it used."""
+    gc.collect()
+    try:
+        if device == "cuda":
+            torch.cuda.empty_cache()
+        elif device == "mps":
+            torch.mps.empty_cache()
+    except Exception:
+        pass
 
 
 def version_of(dist):
@@ -316,10 +406,21 @@ class Asr:
     def __init__(self, whisperx, torch, model, device, language, batch_size, threads):
         self.whisperx, self.torch = whisperx, torch
         self.name, self.device, self.language = model, device, language
-        self.compute_type = "float16" if device == "cuda" else "int8"
-        self.batch_size = batch_size or (DEFAULTS["batch_cuda"] if device == "cuda" else DEFAULTS["batch_cpu"])
+        # float16 on CUDA and on CTranslate2's Metal backend; int8 on the CPU
+        self.compute_type = "float16" if device in ("cuda", "mps") else "int8"
+        self.batch_request = batch_size
+        self.batch_size = batch_size or DEFAULTS.get(f"batch_{device}", DEFAULTS["batch_cpu"])
         self.threads = threads or default_threads()
         self.model = None
+        self.notes = []
+
+    def to_cpu(self, why):
+        """Leave the Metal backend for cpu/int8, for the rest of the run."""
+        log(f"ASR on mps: {why}; falling back to cpu/int8")
+        self.notes.append(f"ASR on mps failed ({why}): cpu/int8")
+        self.free()
+        self.device, self.compute_type = "cpu", "int8"
+        self.batch_size = self.batch_request or DEFAULTS["batch_cpu"]
 
     def load(self):
         self.free()
@@ -332,16 +433,12 @@ class Asr:
     def free(self):
         if self.model is not None:
             self.model = None
-            gc.collect()
-            if self.device == "cuda":
-                try:
-                    self.torch.cuda.empty_cache()
-                except Exception:
-                    pass
+            free_device(self.torch, self.device)
 
     def transcribe(self, audio, language, callback):
         """One block, with the batch halved (and then int8_float16 on a GPU) when memory runs out; exit 5
-        when nothing fits."""
+        when nothing fits. On mps (VA_ASR_DEVICE) any other failure of the Metal backend moves the ASR to
+        cpu/int8."""
         while True:
             try:
                 return self.model.transcribe(audio, batch_size=self.batch_size, language=language,
@@ -351,7 +448,11 @@ class Asr:
                 return self.model.transcribe(audio, batch_size=self.batch_size, language=language)
             except Exception as exc:
                 if not is_oom(exc):
-                    raise
+                    if self.device != "mps":
+                        raise
+                    self.to_cpu(f"{type(exc).__name__}: {' '.join(str(exc).split())[:200]}")
+                    self.load()
+                    continue
                 if self.batch_size > 1:
                     self.batch_size = max(1, self.batch_size // 2)
                     log(f"out of memory: batch {self.batch_size}")
@@ -363,8 +464,24 @@ class Asr:
                     log("out of memory: int8_float16")
                     self.load()
                     continue
+                if self.device == "mps":
+                    self.to_cpu("out of memory even with batch 1")
+                    self.load()
+                    continue
                 log(f"ERROR: out of memory even with batch 1: {exc}")
                 sys.exit(5)
+
+
+def load_asr(whisperx, torch, model, device, language, batch_size, threads):
+    """The Whisper model on ``device``; one that does not load on mps (VA_ASR_DEVICE) loads on cpu/int8."""
+    asr = Asr(whisperx, torch, model, device, language, batch_size, threads)
+    try:
+        return asr.load()
+    except Exception as exc:
+        if device != "mps":
+            raise
+        asr.to_cpu(f"{type(exc).__name__}: {' '.join(str(exc).split())[:200]}")
+        return asr.load()
 
 
 def detect_language(asr, audio, work, progress):
@@ -377,28 +494,41 @@ def detect_language(asr, audio, work, progress):
         return saved["language"], saved.get("probability")
     progress("language", 0.0, force=True)
     window = audio[: int(DEFAULTS["detect_window_s"] * SR)]
-    prob = None
     try:
-        lang, prob, _ = asr.model.model.detect_language(audio=window, vad_filter=True,
-                                                        language_detection_segments=DEFAULTS["detect_segments"])
+        lang, prob = _detect(asr, window)
     except Exception as exc:
-        log(f"detection over speech windows failed ({type(exc).__name__}: {exc}); using the first 30 s")
-        lang = asr.model.detect_language(window)
+        if asr.device != "mps":
+            raise
+        asr.to_cpu(f"{type(exc).__name__}: {' '.join(str(exc).split())[:200]}")   # the Metal backend failed
+        asr.load()
+        lang, prob = _detect(asr, window)
     prob = clean_number(prob)
     log(f"language: {lang}" + (f" ({prob:.2f})" if prob is not None else ""))
     write_json(path, {"model": asr.name, "language": lang, "probability": prob})
     return lang, prob
 
 
+def _detect(asr, window):
+    """(language, probability) of ``window``: over speech windows, else whisperx's own (probability None)."""
+    try:
+        lang, prob, _ = asr.model.model.detect_language(audio=window, vad_filter=True,
+                                                        language_detection_segments=DEFAULTS["detect_segments"])
+        return lang, prob
+    except Exception as exc:
+        log(f"detection over speech windows failed ({type(exc).__name__}: {exc}); using the first 30 s")
+        return asr.model.detect_language(window), None
+
+
 def run_asr(args, torch, whisperx, audio, duration, progress):
     """ASR (in checkpointed blocks) and alignment -> the asr.json document."""
     t0 = time.perf_counter()
     timing, notes = {}, []
-    device = pick_device(torch, args.device)
-    asr = Asr(whisperx, torch, args.model, device, args.language, args.batch_size, args.threads).load()
-    if device == "cpu":
+    device = asr_device_for(torch, args)
+    tdev = torch_device_for(torch, args.device, device)
+    asr = load_asr(whisperx, torch, args.model, device, args.language, args.batch_size, args.threads)
+    if asr.device != "cuda":
         try:
-            torch.set_num_threads(asr.threads)
+            torch.set_num_threads(asr.threads)      # the torch phases that run (or fall back) on the CPU
         except Exception:
             pass
     timing["load"] = round(time.perf_counter() - t0, 1)
@@ -433,39 +563,55 @@ def run_asr(args, torch, whisperx, audio, duration, progress):
         segments += segs
         progress("asr", e / SR, force=True)
     timing["asr"] = round(time.perf_counter() - t1, 1)
-    batch, compute = asr.batch_size, asr.compute_type
+    batch, compute, device = asr.batch_size, asr.compute_type, asr.device
+    notes += asr.notes
     asr.free()
     t2 = time.perf_counter()
-    aligned = False
+    align_device = None
     if segments:
-        progress("align", 0.0, force=True)
-        try:
-            model_a, meta = whisperx.load_align_model(language_code=lang, device=device)
-
-            def acb(*a, **k):
-                pct = next((float(x) for x in list(a) + list(k.values()) if isinstance(x, (int, float))), None)
-                if pct is not None:
-                    progress("align", duration * min(100.0, max(0.0, pct)) / 100.0)
-            try:
-                result = whisperx.align(segments, model_a, meta, audio, device, return_char_alignments=False,
-                                        progress_callback=acb)
-            except TypeError:
-                result = whisperx.align(segments, model_a, meta, audio, device, return_char_alignments=False)
-            segments = clean_segments(result.get("segments"))
-            aligned = True
-            del model_a
-            gc.collect()
-        except Exception as exc:
-            msg = " ".join(str(exc).split())[:300]
-            log(f"alignment skipped: {type(exc).__name__}: {msg}")
-            notes.append(f"word alignment skipped ({type(exc).__name__}: {msg}): the cues keep the segments' times")
+        segments, align_device = run_alignment(whisperx, torch, segments, lang, audio, tdev, duration, progress,
+                                               notes)
     timing["align"] = round(time.perf_counter() - t2, 1)
     timing["total"] = round(time.perf_counter() - t0, 1)
     return {"schema": SCHEMA_ASR, "complete": True, "whisperx": version_of("whisperx"), "model": args.model,
-            "device": device, "compute_type": compute, "batch_size": batch, "threads": asr.threads,
-            "language": lang, "language_probability": prob, "language_requested": args.language,
-            "aligned": aligned, "duration_s": round(duration, 3), "has_speech": bool(segments), "chunks": len(chunks),
-            "timing_s": timing, "warnings": notes, "segments": segments, "created": iso_now()}
+            "device": device, "align_device": align_device, "compute_type": compute, "batch_size": batch,
+            "threads": asr.threads, "language": lang, "language_probability": prob,
+            "language_requested": args.language, "aligned": align_device is not None,
+            "duration_s": round(duration, 3), "has_speech": bool(segments), "chunks": len(chunks), "timing_s": timing,
+            "warnings": notes, "segments": segments, "created": iso_now()}
+
+
+def run_alignment(whisperx, torch, segments, lang, audio, device, duration, progress, notes):
+    """wav2vec2's word times -> (segments, the device that aligned them), or (the segments as they were, None)
+    when the alignment is skipped. A failure on mps is retried once on the CPU."""
+    def acb(*a, **k):
+        pct = next((float(x) for x in list(a) + list(k.values()) if isinstance(x, (int, float))), None)
+        if pct is not None:
+            progress("align", duration * min(100.0, max(0.0, pct)) / 100.0)
+
+    devices = [device] + (["cpu"] if device == "mps" else [])
+    for i, dev in enumerate(devices):
+        progress("align", 0.0, force=True)
+        model_a = None
+        try:
+            model_a, meta = whisperx.load_align_model(language_code=lang, device=dev)
+            try:
+                result = whisperx.align(segments, model_a, meta, audio, dev, return_char_alignments=False,
+                                        progress_callback=acb)
+            except TypeError:
+                result = whisperx.align(segments, model_a, meta, audio, dev, return_char_alignments=False)
+            return clean_segments(result.get("segments")), dev
+        except Exception as exc:
+            msg = " ".join(str(exc).split())[:300]
+            if i + 1 < len(devices):
+                log(f"alignment on {dev} failed ({type(exc).__name__}: {msg}): retrying on the cpu")
+                continue
+            log(f"alignment skipped: {type(exc).__name__}: {msg}")
+            notes.append(f"word alignment skipped ({type(exc).__name__}: {msg}): the cues keep the segments' times")
+        finally:
+            model_a = None
+            free_device(torch, dev)
+    return segments, None
 
 
 def token_present():
@@ -476,26 +622,26 @@ def token_present():
         return False
 
 
+def load_diarization(model, device):
+    """pyannote's pipeline through whisperx, on ``device``; raises when pyannote returns none."""
+    from whisperx.diarize import DiarizationPipeline
+    pipe = DiarizationPipeline(model_name=model, token=None, device=device)
+    if getattr(pipe, "model", None) is None:
+        raise RuntimeError("pyannote returned no pipeline: 'NoneType' object has no attribute 'to'")
+    return pipe
+
+
 def run_diarization(args, torch, audio, device, progress):
     """pyannote's turns -> the diar-<d8>.json document; never raises (diarized: false and the reason)."""
     t0 = time.perf_counter()
     doc = {"schema": SCHEMA_DIAR, "complete": True, "key": args.diar_key, "speakers": args.speakers,
            "mode": "pyannote", "model": args.diarize_model, "min_speakers": args.min_speakers,
-           "max_speakers": args.max_speakers, "diarized": False, "reason": None, "turns": [], "created": iso_now()}
+           "max_speakers": args.max_speakers, "diarized": False, "reason": None, "device": None, "turns": [],
+           "created": iso_now()}
     has_token = token_present()
     if not has_token:
         doc["reason"] = "no_token"
         log("diarization skipped: no Hugging Face token (hf auth login)")
-        return doc
-    progress("diarize", 0.0, force=True)
-    try:
-        from whisperx.diarize import DiarizationPipeline
-        pipe = DiarizationPipeline(model_name=args.diarize_model, token=None, device=device)
-        if getattr(pipe, "model", None) is None:
-            raise RuntimeError("pyannote returned no pipeline: 'NoneType' object has no attribute 'to'")
-    except Exception as exc:
-        doc["reason"] = classify_failure(exc, has_token)
-        log(f"diarization skipped ({doc['reason']}): {type(exc).__name__}: {exc}")
         return doc
     kwargs = {}
     if args.min_speakers is not None and args.min_speakers == args.max_speakers:
@@ -505,21 +651,40 @@ def run_diarization(args, torch, audio, device, progress):
             kwargs["min_speakers"] = args.min_speakers
         if args.max_speakers is not None:
             kwargs["max_speakers"] = args.max_speakers
-    try:
-        df = pipe(audio, **kwargs)
-        if isinstance(df, tuple):
-            df = df[0]
-        turns = []
-        for row in df[["start", "end", "speaker"]].itertuples(index=False):
-            s, e = clean_number(row[0]), clean_number(row[1])
-            if s is not None and e is not None and e >= s:
-                turns.append([s, e, str(row[2])])
-        turns.sort(key=lambda t: (t[0], t[1]))
-        doc.update(diarized=True, turns=turns, speakers_found=len({t[2] for t in turns}))
-        log(f"diarization: {len(turns)} turns, {doc['speakers_found']} speakers")
-    except Exception as exc:
-        doc["reason"] = classify_failure(exc, has_token)
-        log(f"diarization failed ({doc['reason']})")
+    # a failure on mps for any reason but access (an operator, memory, the network) is retried once on the CPU
+    devices = [device] + (["cpu"] if device == "mps" else [])
+    for i, dev in enumerate(devices):
+        progress("diarize", 0.0, force=True)
+        doc["device"] = dev
+        pipe, loaded = None, False
+        try:
+            pipe = load_diarization(args.diarize_model, dev)
+            loaded = True
+            df = pipe(audio, **kwargs)
+            if isinstance(df, tuple):
+                df = df[0]
+            turns = []
+            for row in df[["start", "end", "speaker"]].itertuples(index=False):
+                s, e = clean_number(row[0]), clean_number(row[1])
+                if s is not None and e is not None and e >= s:
+                    turns.append([s, e, str(row[2])])
+            turns.sort(key=lambda t: (t[0], t[1]))
+            doc.update(diarized=True, reason=None, turns=turns, speakers_found=len({t[2] for t in turns}))
+            log(f"diarization on {dev}: {len(turns)} turns, {doc['speakers_found']} speakers")
+            break
+        except Exception as exc:
+            doc["reason"] = classify_failure(exc, has_token)
+            if i + 1 < len(devices) and doc["reason"].startswith("error:"):
+                log(f"diarization on {dev} failed ({doc['reason']}): retrying on the cpu")
+                continue
+            if loaded:
+                log(f"diarization failed ({doc['reason']})")
+            else:
+                log(f"diarization skipped ({doc['reason']}): {type(exc).__name__}: {exc}")
+            break
+        finally:
+            pipe = None
+            free_device(torch, dev)
     doc["timing_s"] = round(time.perf_counter() - t0, 1)
     return doc
 
@@ -537,13 +702,19 @@ def transcribe(args):
             and saved.get("model") == args.model and saved.get("language_requested") == args.language)
     if keep:
         log("asr.json already complete: only the diarization runs")
-        device = pick_device(torch, args.device)    # this run's device; asr.json's "device" is only a record
-        if saved.get("device") and saved.get("device") != device:
+        asr_device = asr_device_for(torch, args)   # this run's device; asr.json's "device" is only a record
+        device = torch_device_for(torch, args.device, asr_device)
+        if asr_device != "cuda":
+            try:
+                torch.set_num_threads(args.threads or default_threads())   # a diarization on the CPU: P-cores
+            except Exception:
+                pass
+        if saved.get("device") and saved.get("device") != asr_device:
             log(f"ASR made on {saved.get('device')}; diarization on {device}")
     else:
         doc = run_asr(args, torch, whisperx, audio, duration, progress)
         write_json(args.asr_out, doc)
-        device = doc["device"]
+        device = pick_torch_device(torch, args.device, doc["device"])   # run_asr already logged a missing MPS
         log(f"asr.json: {len(doc['segments'])} segments, {doc['language']}, {doc['timing_s']}")
     if args.diar_out:
         doc = run_diarization(args, torch, audio, device, progress)
@@ -557,11 +728,13 @@ def check(args):
     """The setup's proof: the libraries load, and the Whisper model, the alignment models and (with
     --diarize and a token) pyannote load too, which downloads them. The last line of stdout is a JSON."""
     torch, whisperx = load_libs()
-    device = pick_device(torch, args.device)
+    device = asr_device_for(torch, args)
+    tdev = torch_device_for(torch, args.device, device)
     out = {"ok": False, "python": sys.version.split()[0], "whisperx": version_of("whisperx"),
            "torch": getattr(torch, "__version__", None), "ctranslate2": version_of("ctranslate2"),
            "pyannote_audio": version_of("pyannote.audio"), "device": device, "gpu": None, "vram_mb": None,
-           "model": args.model, "model_ok": False, "align": {}, "diarization": None, "error": None}
+           "model": args.model, "model_ok": False, "align": {}, "diarization": None, "error": None,
+           "torch_device": tdev, "mps": mps_available(torch)}
     if device == "cuda":
         try:
             props = torch.cuda.get_device_properties(0)
@@ -570,34 +743,47 @@ def check(args):
             pass
     code = 0
     try:
-        asr = Asr(whisperx, torch, args.model, device, None, None, args.threads).load()
+        asr = load_asr(whisperx, torch, args.model, device, None, None, args.threads)
+        out["device"] = asr.device                  # cpu when the Metal backend (VA_ASR_DEVICE) did not load
         asr.free()
         out["model_ok"] = True
     except Exception as exc:
         out["error"] = f"{args.model}: {type(exc).__name__}: {' '.join(str(exc).split())[:300]}"
         code = 4
+    devices = [tdev] + (["cpu"] if tdev == "mps" else [])   # a load that fails on mps is retried on the CPU
     for lang in args.align or []:
-        try:
-            model_a, _meta = whisperx.load_align_model(language_code=lang, device=device)
-            del model_a
-            gc.collect()
-            out["align"][lang] = "ok"
-        except Exception as exc:
-            out["align"][lang] = f"{type(exc).__name__}: {' '.join(str(exc).split())[:200]}"
-            code = code or 4
+        for i, dev in enumerate(devices):
+            try:
+                model_a, _meta = whisperx.load_align_model(language_code=lang, device=dev)
+                del model_a
+                out["align"][lang] = "ok"
+                break
+            except Exception as exc:
+                out["align"][lang] = f"{type(exc).__name__}: {' '.join(str(exc).split())[:200]}"
+                if i + 1 < len(devices):
+                    log(f"alignment model {lang} on {dev} failed ({out['align'][lang]}): retrying on the cpu")
+                    continue
+                code = code or 4
+            finally:
+                free_device(torch, dev)
     if args.diarize:
         has_token = token_present()
         if not has_token:
             out["diarization"] = "no_token"
         else:
-            try:
-                from whisperx.diarize import DiarizationPipeline
-                pipe = DiarizationPipeline(model_name=args.diarize_model, token=None, device=device)
-                if getattr(pipe, "model", None) is None:
-                    raise RuntimeError("pyannote returned no pipeline: 'NoneType' object has no attribute 'to'")
-                out["diarization"] = "ok"
-            except Exception as exc:
-                out["diarization"] = classify_failure(exc, has_token)
+            for i, dev in enumerate(devices):
+                try:
+                    load_diarization(args.diarize_model, dev)
+                    out["diarization"] = "ok"
+                    break
+                except Exception as exc:
+                    out["diarization"] = classify_failure(exc, has_token)
+                    if i + 1 < len(devices) and out["diarization"].startswith("error:"):
+                        log(f"pyannote on {dev} failed ({out['diarization']}): retrying on the cpu")
+                        continue
+                    break
+                finally:
+                    free_device(torch, dev)
     out["ok"] = code == 0
     print(json.dumps(out, ensure_ascii=False), flush=True)
     return code
@@ -619,7 +805,9 @@ def build_parser():
     ap.add_argument("--diarize-model", default=DEFAULTS["diarize_model"])
     ap.add_argument("--diarize", action="store_true", help="--check: also load pyannote")
     ap.add_argument("--align", action="append", help="--check: an alignment model to load (language code)")
-    ap.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    # mps: the alignment and pyannote on Apple silicon's GPU (the ASR stays on the CPU; VA_ASR_DEVICE=mps puts it
+    # on Metal only with --device auto)
+    ap.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
     ap.add_argument("--batch-size", type=int)
     ap.add_argument("--threads", type=int)
     ap.add_argument("--progress")
@@ -638,6 +826,7 @@ def main(argv=None):
     # transformers, loading an alignment model published only as pytorch_model.bin (the Portuguese one), starts a
     # background thread that downloads the Hub bot's safetensors conversion: 1.2 GB that is never loaded
     os.environ.setdefault("DISABLE_SAFETENSORS_CONVERSION", "true")
+    set_mps_fallback()                   # before load_libs() imports torch
     ap = build_parser()
     args = ap.parse_args(argv)
     if args.check:

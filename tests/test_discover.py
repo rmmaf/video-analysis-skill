@@ -226,3 +226,60 @@ def test_missing_vtt_detail(tree, tmp_path):
     assert "no similar .vtt in the folder" in detail
     assert "--skip-missing" in detail and "--vtt" not in detail
     assert "--vtt" in D.missing_vtt_detail(missing[:1], allow_vtt_flag=True)
+
+
+# --- macOS AppleDouble companions ("._*") -------------------------------------------------------
+
+@pytest.fixture
+def appledouble(tmp_path):
+    """An exFAT/SMB folder after a Mac copied a meeting into it: each file has a 4 KB "._" twin."""
+    folder = tmp_path / "Volumes" / "REUNIOES"
+    video = touch(folder / "reuniao.mp4")
+    vtt = touch(folder / "reuniao.vtt")
+    touch(folder / "._reuniao.mp4", b"\0" * 4096)
+    touch(folder / "._reuniao.vtt", b"\0" * 4096)
+    touch(folder / ".DS_Store", b"\0" * 6148)
+    return {"folder": folder, "video": video, "vtt": vtt}
+
+
+def test_is_appledouble_name():
+    assert D.is_appledouble_name("._reuniao.mp4")
+    assert not D.is_appledouble_name(".DS_Store")
+    assert not D.is_appledouble_name("reuniao._x.mp4")
+
+
+def test_folder_scan_skips_appledouble(appledouble):
+    videos, problems = D.expand_inputs([str(appledouble["folder"])])
+    assert videos == [appledouble["video"]] and problems == []
+    videos, _ = D.expand_inputs([str(appledouble["folder"].parent)], recursive=True)
+    assert videos == [appledouble["video"]]
+
+
+def test_glob_skips_appledouble_unless_asked(appledouble):
+    folder = appledouble["folder"]
+    videos, problems = D.expand_inputs([str(folder / "*.mp4")])
+    assert videos == [appledouble["video"]] and problems == []
+    videos, _ = D.expand_inputs([str(folder / "*")])
+    assert videos == [appledouble["video"]]
+    # a pattern that itself starts with "._" names the companions on purpose
+    videos, _ = D.expand_inputs([str(folder / "._*.mp4")])
+    assert [v.name for v in videos] == ["._reuniao.mp4"]
+
+
+def test_vtt_scan_skips_appledouble(appledouble):
+    video, vtt = appledouble["video"], appledouble["vtt"]
+    assert D.find_vtt(video) == vtt
+    assert D.vtt_candidates(video) == []
+    pairs, skipped, missing = D.match_vtts([video])
+    assert pairs == [(video, vtt)] and skipped == [] and missing == []
+    # no "._" twin is ever offered as the subtitle of a video with another name
+    other = touch(appledouble["folder"] / "reuniao parte 2.mp4")
+    assert all(not c["name"].startswith("._") for c in D.vtt_candidates(other))
+
+
+def test_explicit_appledouble_file_is_left_alone(appledouble):
+    named = appledouble["folder"] / "._reuniao.mp4"
+    videos, problems = D.expand_inputs([str(named)])
+    assert videos == [named] and problems == []
+    pairs, _, _ = D.match_vtts([named], explicit_vtt=appledouble["folder"] / "._reuniao.vtt")
+    assert pairs == [(named, appledouble["folder"] / "._reuniao.vtt")]

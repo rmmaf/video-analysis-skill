@@ -181,6 +181,10 @@ def test_torch_backend_without_gpu_on_mac_and_forced(monkeypatch):
     assert E.torch_backend(None) == "cpu"
     monkeypatch.setattr(E.sys, "platform", "darwin")
     assert E.torch_backend(None) is None                                       # PyPI's build (CPU and Metal)
+    monkeypatch.setenv("VA_TORCH_BACKEND", "cpu")
+    # ignored on a Mac: the cpu index's macOS wheel has no "+cpu" tag, so a forced build reinstalled torch every time
+    assert E.torch_backend(None) is None
+    monkeypatch.setattr(E.sys, "platform", "win32")
     monkeypatch.setenv("VA_TORCH_BACKEND", "cu126")
     assert E.torch_backend(None) == "cu126"
 
@@ -258,6 +262,34 @@ def test_punkt_download_reuse_and_manual(tmp_path, monkeypatch):
     assert E.prepare_punkt(nd, opener=Opener(punkt_zip()), force=True) == "downloaded"
 
 
+def _cert_failure():
+    import ssl
+    import urllib.error
+    return urllib.error.URLError(ssl.SSLCertVerificationError(
+        1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate"))
+
+
+@pytest.mark.parametrize("platform_name, hinted", [("darwin", True), ("win32", False)])
+def test_downloads_explain_a_certificate_error_on_a_mac(tmp_path, monkeypatch, platform_name, hinted):
+    """python.org's Python on macOS ships without a CA bundle: every HTTPS download fails the same way, so it
+    is not tried again, and on a Mac the error says how to fix it."""
+    monkeypatch.setattr(E.time, "sleep", lambda s: pytest.fail("a certificate error is not tried again"))
+    monkeypatch.setattr(E.sys, "platform", platform_name)
+    monkeypatch.setenv("DEEPFACE_HOME", str(tmp_path / "df"))
+    op = Opener(_cert_failure(), _cert_failure())
+    with pytest.raises(E.SetupError) as punkt:
+        E.prepare_punkt(tmp_path / "nltk_data", opener=op)
+    with pytest.raises(E.SetupError) as weights:
+        E.download_weights(opener=op)
+    assert op.calls == 2 and not E.yunet_weights().exists()
+    v = sys.version_info
+    for exc in (punkt, weights):
+        text = str(exc.value)
+        assert "CERTIFICATE_VERIFY_FAILED" in text
+        assert (f'"/Applications/Python {v.major}.{v.minor}/Install Certificates.command"' in text) == hinted
+        assert ("Homebrew's Python" in text) == hinted
+
+
 @pytest.mark.parametrize("data, needle", [
     (punkt_zip(languages=("portuguese",)), "lacks portuguese, english whole"),
     (punkt_zip(extra=("../fora.txt",)), "paths outside its folder"),
@@ -331,8 +363,8 @@ def test_install_from_scratch(machine, env_dir):
     venv, pip, check = machine.cmds
     assert venv == ["uv", "venv", "--python", "3.12", str(env_dir)]
     assert pip[:5] == ["uv", "pip", "install", "--python", str(E.whisperx_python(env_dir))]
-    assert pip[5:7] == ["--torch-backend", "cpu"] and pip[7:] == ["whisperx==3.8.6", "torch==2.8.0", "torchaudio==2.8.0",
-                                                                   "torchvision==0.23.0"]
+    assert pip[5:7] == ["--torch-backend", "cpu"] and pip[7:] == ["whisperx==3.8.6", "ctranslate2==4.9.0", "torch==2.8.0",
+                                                                   "torchaudio==2.8.0", "torchvision==0.23.0"]
     assert check[1:4] == ["-B", str(E.TRANSCRIBE_SCRIPT), "--check"] and check[check.index("--model") + 1] == "large-v3-turbo"
     assert "--diarize" in check and check[check.index("--align") + 1] == "pt"
     assert r["done"][0].startswith("create the environment") and "NLTK punkt: downloaded" in r["done"]
@@ -353,6 +385,55 @@ def test_install_again_only_proves(machine, env_dir, monkeypatch):
 def test_install_on_mac_uses_pypi_torch(machine, env_dir):
     E.install_transcription(runner=machine, uv=["uv"], backend=None)
     assert "--torch-backend" not in machine.cmds[1]
+
+
+def test_install_on_mac_asks_uv_for_an_arm64_python(machine, env_dir, monkeypatch):
+    """An x86_64 uv or base Python (Intel Homebrew, under Rosetta) would make an x86_64 environment, which
+    cannot install torch 2.8: on a Mac the environment's Python is the arm64 build, by name."""
+    monkeypatch.setattr(E.sys, "platform", "darwin")
+    monkeypatch.setattr(E.platform, "machine", lambda: "arm64")
+    monkeypatch.setenv("VA_TORCH_BACKEND", "cpu")                              # ignored on a Mac
+    E.install_transcription(runner=machine, uv=["uv"])
+    venv, pip = machine.cmds[:2]
+    assert venv == ["uv", "venv", "--python", "cpython-3.12-macos-aarch64-none", str(env_dir)]
+    assert "--torch-backend" not in pip and "ctranslate2==4.9.0" in pip
+
+
+def test_install_updates_ctranslate2_of_before_the_pin(machine, env_dir, monkeypatch):
+    py = E.whisperx_python(env_dir)
+    py.parent.mkdir(parents=True)
+    py.write_bytes(b"")
+    machine.check_codes = [0, 0]
+    monkeypatch.setattr(E, "transcription_status", lambda *a, **k: ok_status(env_dir, ctranslate2="4.6.0"))
+    E.install_transcription(runner=machine, uv=["uv"], backend="cpu")
+    assert "ctranslate2==4.9.0" in machine.cmds[0] and "--check" in machine.cmds[1]
+    machine.cmds.clear()
+    monkeypatch.setattr(E, "transcription_status", lambda *a, **k: ok_status(env_dir, ctranslate2="4.9.0"))
+    E.install_transcription(runner=machine, uv=["uv"], backend="cpu")
+    assert [c for c in machine.cmds if "--check" not in c] == []
+
+
+def test_status_reports_the_machine_and_refuses_x86_64_on_a_mac(tmp_path, monkeypatch, env_dir):
+    """The probe reports the environment's platform.machine(); on a Mac, one that is not arm64 (made under
+    Rosetta) is broken, with what to do, and install_transcription refuses to pip into it."""
+    st = status(tmp_path, monkeypatch)
+    real = E.platform.machine()
+    assert st["ok"] and st["machine"] == real and st["ctranslate2"] == "4.6.0"
+    if real.lower() in ("arm64", "aarch64"):
+        pytest.skip("this machine is arm64: the probe cannot report x86_64")
+    monkeypatch.setattr(E.sys, "platform", "darwin")
+    monkeypatch.setattr(E.platform, "machine", lambda: "arm64")                # the host Mac: Apple silicon
+    st = E.transcription_status(python=sys.executable, gpu=None)
+    assert (st["ok"], st["state"], st["problem"]) == (False, "broken", "architecture")
+    assert f"is an {real} environment" in st["detail"] and "delete that folder" in st["detail"]
+    assert "step 6" in st["detail"] and "arm64" in st["detail"]
+    py = E.whisperx_python(env_dir)
+    py.parent.mkdir(parents=True)
+    py.write_bytes(b"")
+    monkeypatch.setattr(E, "transcription_status", lambda *a, **k: st)
+    monkeypatch.setattr(E, "prepare_punkt", lambda nd, opener=None: pytest.fail("nothing runs"))
+    with pytest.raises(E.SetupError, match="delete that folder"):
+        E.install_transcription(runner=lambda cmd, t: pytest.fail("nothing runs"), uv=["uv"])
 
 
 def test_install_switches_the_torch_build(machine, env_dir):

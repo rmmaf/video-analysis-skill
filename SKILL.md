@@ -8,6 +8,7 @@ allowed-tools:
   - Bash(python "${CLAUDE_SKILL_DIR}/verificar_ambiente.py" *)
   - Bash(python3 "${CLAUDE_SKILL_DIR}/scripts/prepare.py" *)
   - Bash(python3 "${CLAUDE_SKILL_DIR}/check_environment.py" *)
+  - Bash(python3 "${CLAUDE_SKILL_DIR}/verificar_ambiente.py" *)
   - Write(~/video-analysis/requests/*)
   - Write(~/video-analysis/pedidos/*)
 ---
@@ -41,7 +42,8 @@ The argument reaches the end of the skill as `ARGUMENTS: …`. A request to "con
 
 Every command of this skill goes through the **Bash** tool, the one the skill pre-approves (never
 PowerShell), with `python` on Windows (there, `python3` is the Microsoft Store shortcut) and `python3` on
-macOS. The examples below use `python`.
+macOS. The examples below use `python`; paths are written with `/`, with Windows and macOS examples
+(`C:/Users/<user>/…`, `/Users/<user>/…`).
 
 | option | in `request.md` | effect |
 |---|---|---|
@@ -90,7 +92,8 @@ still work, as do `num_falantes`, `modelo_whisper` and `idioma_audio`: map them 
    available agent types; otherwise `inline`, which works the same and spends a little more per agent.
    The user's `--roles` option prevails.
 3. **Request.** With Write, save `<home>/requests/request.md`, where `<home>` is the central folder
-   (**Files** section) with `/`, such as `C:/Users/<user>/video-analysis`. Take it from the `home` that
+   (**Files** section) with `/`, such as `C:/Users/<user>/video-analysis` (on macOS,
+   `/Users/<user>/video-analysis`). Take it from the `home` that
    `prepare.py` or `check_environment.py` already printed in this conversation; otherwise run
    `python "${CLAUDE_SKILL_DIR}/check_environment.py" --paths` (instant: it checks nothing) and use its
    `home`. If the file exists, read it first (Write requires it). The objective goes in verbatim, with quotes and line breaks: nothing
@@ -177,8 +180,8 @@ still work, as do `num_falantes`, `modelo_whisper` and `idioma_audio`: map them 
        (step 6, with that JSON).
      - `130` interrupted: the completed stages stay in the cache (a transcription, its blocks of ~10 min);
        offer to run it again.
-     - `1` internal error of `prepare.py`: give the `detail` and the log in `logs\`; do not try to work
-       around it.
+     - `1` internal error of `prepare.py`: give the `detail` and the log in `<home>/logs/`; do not try to
+       work around it.
 
      An error in step 5 (not in 4) renames the request to `request.error.md`: to retry, write it again.
    - `env.permissions_ok: false` → warn that every frame read will ask for permission and offer the
@@ -227,7 +230,9 @@ still work, as do `num_falantes`, `modelo_whisper` and `idioma_audio`: map them 
    greater than `planned`: no new batch). A video whose `transcript.state` was `made` or `cached` in the
    `prepare.py` JSON gets one more line: `Legenda gerada: <transcript.sidecar, or transcript.path> ·
    <transcript.model> · <transcript.language> · <transcript.speakers_found> falantes` (without
-   `speakers_found`, `falantes não separados`). Then the batches in `batches.partial` and
+   `speakers_found`, `falantes não separados`). On a Mac, a warning `ASR on mps failed (…): cpu/int8`
+   (only with the experimental `VA_ASR_DEVICE=mps`) means the speech fell back to the CPU; the subtitles
+   are made all the same. Then the batches in `batches.partial` and
    `batches.failed`, up to 3 warnings of the video and, if present, the `combined` (summary and path;
    with `error`, the synthesis failed). `partial` with `--max-batches` is partial coverage, not an error;
    `failed` → the last warning gives the reason; offer `/video-analysis resume`. End by offering to open a
@@ -268,11 +273,13 @@ with `run_in_background`.
 
 ## Files
 
-Central folder (`<home>`): `%USERPROFILE%\video-analysis\`, or the folder in `VIDEO_ANALYSIS_HOME`;
-the `home` of `check_environment.py --paths` gives its concrete path. `cache\<slug>-<fp8>\` (subtitles,
+Central folder (`<home>`): `<user home>/video-analysis/` (`C:/Users/<user>/video-analysis` on Windows,
+`/Users/<user>/video-analysis` on macOS), or the folder in `VIDEO_ANALYSIS_HOME`; the `home` of
+`check_environment.py --paths` gives its concrete path. `<home>/cache/<slug>-<fp8>/` (subtitles,
 frames, batches, the webcam timeline, the local transcription and the screenshots of the speaker count,
-reused across runs) · `runs\<YYYYMMDD-HHMMSS>-<slug>\` (combined `relatorio.md`, with 2+ videos; per video,
-`v1\relatorio.md`, `v2\…`, with ledger, prompts and batch reports) · `requests\` · `roles\` · `logs\`. The
+reused across runs) · `<home>/runs/<YYYYMMDD-HHMMSS>-<slug>/` (combined `relatorio.md`, with 2+ videos; per
+video, `v1/relatorio.md`, `v2/…`, with ledger, prompts and batch reports) · `<home>/requests/` ·
+`<home>/roles/` · `<home>/logs/`. The
 `.vtt` the skill generates goes next to the video, only when there is none there. Formats and paths:
 [`reference/contracts.md`](reference/contracts.md). Errors and warnings:
 [`reference/troubleshooting.md`](reference/troubleshooting.md).

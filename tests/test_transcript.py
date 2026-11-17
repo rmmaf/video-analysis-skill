@@ -475,8 +475,9 @@ def test_plan_redoing_ours_keeps_the_speaker_count_they_were_made_with(tmp_path)
     assert (up["needs_speakers"], up["akey"]) == (False, first["akey"])
 
 
-def test_view_and_estimate():
-    p = {"state": "pending", "phase": "asr", "model": "large-v3-turbo", "device": "cpu", "vtt": None, "estimate_s": 9.0}
+def test_view_and_estimate(monkeypatch):
+    monkeypatch.setattr(T.sys, "platform", "win32")   # the measured CPU profile, not Apple silicon's
+    p ={"state": "pending", "phase": "asr", "model": "large-v3-turbo", "device": "cpu", "vtt": None, "estimate_s": 9.0}
     v = T.view(p)
     assert v["state"] == "pending" and v["path"] is None and v["estimate_s"] == 9.0
     assert T.view({"state": "file", "vtt": Path("C:/x/a.vtt")}) == {**{k: None for k in v}, "state": "file", "path": "C:/x/a.vtt"}
@@ -486,6 +487,24 @@ def test_view_and_estimate():
     assert cpu / 3 < T.estimate_seconds(3600, "cpu", "large-v3-turbo", "diar", "pyannote") < cpu / 2
     assert T.estimate_seconds(3600, "cpu", "large-v3-turbo", "asr", "none") < cpu
     assert math.isclose(T.estimate_seconds(0, "cpu", "x", "asr", "single"), TRANSCRIBE_DEFAULTS["cost"]["cpu"]["startup_s"])
+
+
+def test_estimate_on_apple_silicon(monkeypatch):
+    """On macOS the "cpu" device is Apple silicon: the "apple" profile (ASR on the P-cores, alignment and
+    speakers on MPS), much faster than the 4-core laptop's CPU numbers; elsewhere "cpu" stays the measured one."""
+    apple = TRANSCRIBE_DEFAULTS["cost"]["apple"]
+    assert apple["startup_s"] == 60.0 and apple["asr"]["large-v3-turbo"] == 0.35 and apple["asr"]["large-v3"] == 0.9
+    assert (apple["asr_other"], apple["align"], apple["diarize"]) == (0.6, 0.06, 0.12)
+    assert set(apple["asr"]) == set(TRANSCRIBE_DEFAULTS["cost"]["cpu"]["asr"])
+    monkeypatch.setattr(T.sys, "platform", "win32")
+    windows = T.estimate_seconds(3600, "cpu", "large-v3-turbo", "asr", "pyannote")
+    monkeypatch.setattr(T.sys, "platform", "darwin")
+    mac = T.estimate_seconds(3600, "cpu", "large-v3-turbo", "asr", "pyannote")
+    assert mac == round(60.0 + 3600 * (0.35 + 0.06 + 0.12), 1) and mac < windows / 3
+    assert T.estimate_seconds(3600, "mps", "large-v3-turbo", "asr", "pyannote") == mac
+    assert T.estimate_seconds(3600, None, "large-v3-turbo", "asr", "pyannote") == mac
+    assert T.estimate_seconds(3600, "cpu", "x", "asr", "none") == round(60.0 + 3600 * (0.6 + 0.06), 1)
+    assert T.estimate_seconds(3600, "cpu", "large-v3-turbo", "diar", "pyannote") == round(60.0 + 3600 * 0.12, 1)
 
 
 # --- make() with a stand-in for transcribe.py ---------------------------------------------------------------
@@ -680,10 +699,35 @@ def test_make_keeps_the_gc_away_while_it_transcribes(tmp_path, video, monkeypatc
 
 
 def test_driver_env(monkeypatch, tmp_path):
+    from va import ffmpeg_io
+    monkeypatch.setattr(ffmpeg_io, "_TOOLS", {})
     monkeypatch.setenv("PYTHONPATH", "C:/vazamento")
     ff = tmp_path / "ff" / "ffmpeg.exe"
+    ff.parent.mkdir()
+    ff.write_bytes(b"")
     monkeypatch.setenv("VA_FFMPEG", str(ff))
     env = T.driver_env("C:/env/nltk_data")
     assert "PYTHONPATH" not in env and env["NLTK_DATA"] == "C:/env/nltk_data" and env["PYTHONIOENCODING"] == "utf-8"
     assert env["PATH"].split(os.pathsep)[0] == str(ff.parent)                 # the same ffmpeg as the skill's
     assert env["MPLBACKEND"] == "Agg" and env["CUDA_CACHE_MAXSIZE"]
+
+
+def test_driver_env_puts_homebrew_ffmpeg_on_path(monkeypatch, tmp_path):
+    """A Mac whose shell never ran brew shellenv: prepare.py finds /opt/homebrew/bin/ffmpeg, and so must the
+    transcription (whisperx.load_audio runs a bare ffmpeg from PATH)."""
+    from va import environment, ffmpeg_io
+    opt = tmp_path / "opt-homebrew-bin"
+    opt.mkdir()
+    (opt / "ffmpeg").write_bytes(b"")
+    monkeypatch.setattr(ffmpeg_io, "_TOOLS", {})
+    monkeypatch.setattr(environment, "BREW_BIN_DIRS", (str(opt), str(tmp_path / "usr-local-bin")))
+    monkeypatch.setattr(environment.sys, "platform", "darwin")
+    monkeypatch.setattr(environment.os, "access", lambda p, mode: True)
+    monkeypatch.setattr(ffmpeg_io.shutil, "which", lambda name: None)
+    monkeypatch.delenv("VA_FFMPEG", raising=False)
+    monkeypatch.setenv("PATH", "/usr/bin" + os.pathsep + "/bin")
+    env = T.driver_env(None)
+    assert env["PATH"].split(os.pathsep)[:2] == [str(opt), "/usr/bin"]
+    monkeypatch.setattr(environment.sys, "platform", "win32")                 # nowhere: PATH as it was
+    monkeypatch.setattr(ffmpeg_io, "_TOOLS", {})
+    assert T.driver_env(None)["PATH"] == "/usr/bin" + os.pathsep + "/bin"

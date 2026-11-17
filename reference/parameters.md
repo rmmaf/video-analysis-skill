@@ -132,15 +132,27 @@ How a video is transcribed:
    quietest half second within 30 s of its boundary, so that no word is cut in two. Each block is a
    checkpoint (`partial\chunk_NNN.json`): an interrupted transcription resumes at the first block missing.
    On a CPU, `int8` with batch 8; on an NVIDIA GPU, `float16` with batch 16, halved at each out-of-memory
-   error, then `int8_float16`, before giving up.
+   error, then `int8_float16`, before giving up. The CPU threads are the physical cores (half the logical
+   ones), at most 16; on Apple silicon, only the performance cores (`sysctl -n hw.perflevel0.physicalcpu`),
+   since a pool that includes the efficiency cores runs at the speed of the slowest. On a Mac,
+   `VA_ASR_DEVICE=mps` (experimental) runs this phase on CTranslate2's Metal backend, `float16` with batch 8
+   halved down to 1, and falls back to `int8` on the CPU for the rest of the run, with a warning, when the
+   model does not load there, runs out of memory at batch 1 or fails in any other way (the language
+   detection included).
 4. **Words.** The alignment model of the language (wav2vec2; the Portuguese one comes with the setup, the
    others at their first use) gives each word its time. Without a model for the language, or when the
-   alignment fails, the times stay per segment, with a warning.
+   alignment fails, the times stay per segment, with a warning. It runs on the NVIDIA GPU when the speech
+   did, else on the Mac's GPU through MPS when PyTorch has it, else on the CPU; a failure on MPS is retried
+   once on the CPU (`align_device` in `asr.json`).
 5. **Speakers.** pyannote (`speaker-diarization-community-1`, with the Hugging Face token of step 7 of the
    setup) splits the audio into turns, with `num_speakers` as the exact, minimum or maximum count. Each word
    goes to the turn it overlaps the most, or to the nearest one within 1 s; a word without a time (a
    number, a symbol) takes the speaker of the word before. Without the token, or without access to the
-   model, the subtitles come out without speakers, with a warning.
+   model, the subtitles come out without speakers, with a warning. pyannote runs on the same device as the
+   words, with the same retry on the CPU after an error on MPS (not after a missing token or access).
+   `transcribe.py --device auto|cpu|cuda|mps`, for manual use (`prepare.py` leaves it at `auto`), forces
+   the device: `mps` puts the words and the speakers on MPS and leaves the speech on the CPU, even with
+   `VA_ASR_DEVICE=mps` (the override applies with `--device auto`).
 6. **Cues.** A new cue at each sentence, at each change of speaker, at a pause of 0.8 s or more, and before
    going past 8 s or 160 characters: short cues, which the subtitle parser does not need to repair. A
    word whose speaker was not found is labelled `FALANTE_?`.
@@ -167,7 +179,9 @@ words, speakers) and device. Measured on a 4-core 2017 laptop CPU with `large-v3
 25 min in all): 86 s to start (the imports, the model, the language), then 1.17 s per second of audio for
 the speech, 0.39 for the words and 1.0 for the speakers, 2.7 times the length of the video
 (`tests/data/calibration.md`, section 9). The other models on a CPU are scaled from that one, and the
-NVIDIA figures are not measured.
+NVIDIA figures are not measured. On a Mac the estimate uses the `apple` profile (the speech on the
+performance cores, the words and the speakers on MPS): a guess from the core count of an M4 Max and
+pyannote's published MPS speedups, not a measurement, until it is calibrated on a Mac.
 
 ## How a frame becomes "unique"
 

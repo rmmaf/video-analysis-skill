@@ -20,6 +20,11 @@ import sys
 
 sys.dont_write_bytecode = True
 
+import va  # noqa: E402  (its __init__ parses on old Pythons; the rest of the skill needs 3.10)
+
+if va.old_python():   # one clear line instead of a SyntaxError in an import (Apple's python3 is 3.9)
+    sys.exit(va.old_python())
+
 import argparse  # noqa: E402
 from pathlib import Path  # noqa: E402
 

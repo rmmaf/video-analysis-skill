@@ -88,7 +88,7 @@ python "<skill>/scripts/prepare.py" --resume <run_id|run_dir|latest> [--roles ag
 - Manual use, outside the skill: direct inputs (`<videos…> --objective-file <md> | --objective "…"
   [--run [NAME]]`; without an objective, it only warms the cache, without a run), `--gc [DAYS]` (default 30)
   and the parameters of [`parameters.md`](parameters.md). General: `--home FOLDER` (default
-  `VIDEO_ANALYSIS_HOME` or `%USERPROFILE%\video-analysis`), `--jobs N` (videos in parallel, default 2),
+  `VIDEO_ANALYSIS_HOME` or `%USERPROFILE%\video-analysis`, `~/video-analysis` on macOS), `--jobs N` (videos in parallel, default 2),
   `--force[=all|cues|frames|batches]` (redoes the stage and the following ones), `--ignore-agent-limit` (accepts more
   than 800 agents, but the Workflow refuses them anyway), `--recursive`, `--json-out FILE`, `--ascii`,
   `--quiet`, `--debug`. The request options also exist as command-line options (`--roles`, `--max-batches`,
@@ -174,6 +174,10 @@ exception is exit code 4 with some video ready, which brings usable `videos` and
 - Exit code 4 in the prepare: `run.json`, `objective.md` and a usable `workflow_args` with the videos that
   succeeded are still written; `error.code` is `video_failed` and `errors` lists the ones that failed.
 - `--gc` returns `"mode": "gc"` and the key `gc` (`removed`, `freed_mb`, `kept`, `failed`).
+- A Python older than 3.10 (Apple's `/usr/bin/python3` is 3.9) stops before anything else, with exit code 3
+  and the same envelope: `error.code` `missing_dependency`, whose `detail` names that Python and ends with
+  `: run /video-analysis setup`; `mode` taken from the command line; `home`, `run_id`, `run_dir`, `env` and
+  `workflow_args` null. The message also goes to stderr.
 
 | field | use by the main agent |
 |---|---|
@@ -465,6 +469,12 @@ const S_FINAL = { type: 'object', required: ['status', 'report_path', 'answered'
   the requested language (`auto` or the code) and the whisperx version: the speakers are not in it, so
   another `num_speakers` redoes only `diar-<d8>.json` (`d8` = the count, the mode, `pyannote`, `single` or
   `none`, and the pyannote model), not the speech (on a CPU, the speakers take about 40% of the whole).
+  The device is not in either key: a run with another device reuses them.
+  `asr.json` records `device`, where the speech ran (`cpu`, `cuda`, or `mps` with the experimental
+  `VA_ASR_DEVICE=mps` on a Mac; `cpu` after its fallback), `compute_type`, `align_device`, where the word
+  times ran (`cuda`, `mps` or `cpu`, the CPU also after a failure on MPS; null when the alignment was
+  skipped), and `aligned` (`align_device` is not null). `diar-<d8>.json` records `device`, where pyannote
+  produced the turns (or the last device tried, when it failed; null without a token).
   When it replaces the `.vtt` the skill wrote, the model and the language the call does not give come from
   that `.vtt`'s `NOTE`, so another count (or a token added later) keeps the same `a8`.
   `partial\` keeps the blocks of ~10 min

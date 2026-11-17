@@ -40,6 +40,7 @@ import math
 import os
 import re
 import shutil
+import sys
 import time
 import unicodedata
 from pathlib import Path
@@ -376,8 +377,13 @@ def wants_redo(own: dict, given: str | None, model: str | None, language: str | 
 
 def estimate_seconds(duration_s: float, device: str | None, model: str | None, phase: str | None,
                      mode: str | None) -> float:
-    """Rough seconds of transcribe.py on this video (cost model in TRANSCRIBE_DEFAULTS)."""
-    cost = TRANSCRIBE_DEFAULTS["cost"].get(device or "cpu") or TRANSCRIBE_DEFAULTS["cost"]["cpu"]
+    """Rough seconds of transcribe.py on this video (cost model in TRANSCRIBE_DEFAULTS). On macOS, where only
+    Apple silicon transcribes, the "cpu" device (and "mps") takes the "apple" profile: the alignment and the
+    speakers run on the GPU there, so the 4-core laptop's CPU numbers would overstate them several times."""
+    profile = device or "cpu"
+    if sys.platform == "darwin" and profile in ("cpu", "mps"):
+        profile = "apple"
+    cost = TRANSCRIBE_DEFAULTS["cost"].get(profile) or TRANSCRIBE_DEFAULTS["cost"]["cpu"]
     dur = max(0.0, float(duration_s or 0.0))
     s = float(cost["startup_s"])
     if phase == "asr":
@@ -744,7 +750,8 @@ def export_sidecar(text: str, video: Any, video_dir: str | os.PathLike, replace:
 def driver_env(nltk_data: str | os.PathLike | None) -> dict:
     """The environment of transcribe.py: UTF-8, unbuffered, nothing of this Python leaking into the other one
     (PYTHONPATH), matplotlib without the notebook's backend, the NLTK data the setup downloaded, ffmpeg (the
-    one VA_FFMPEG names, else the one on PATH) first on PATH, and a CUDA JIT cache big enough to keep."""
+    skill's: ffmpeg_io.find_tool, so VA_FFMPEG, the PATH or, on macOS, Homebrew's folder off PATH) first on
+    PATH, and a CUDA JIT cache big enough to keep."""
     env = dict(os.environ)
     for k in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP"):
         env.pop(k, None)
@@ -753,7 +760,11 @@ def driver_env(nltk_data: str | os.PathLike | None) -> dict:
     env.setdefault("CUDA_CACHE_MAXSIZE", "4294967296")
     if nltk_data:
         env["NLTK_DATA"] = str(nltk_data)
-    ff = os.environ.get("VA_FFMPEG", "").strip().strip('"') or shutil.which("ffmpeg") or ""
+    from .ffmpeg_io import FFmpegNotFound, find_tool   # lazy: numpy comes with it
+    try:   # the skill's own ffmpeg, also Homebrew's off PATH: whisperx.load_audio runs a bare "ffmpeg"
+        ff = find_tool("ffmpeg")
+    except FFmpegNotFound:
+        ff = os.environ.get("VA_FFMPEG", "").strip().strip('"') or shutil.which("ffmpeg") or ""
     if ff:
         folder = os.path.dirname(os.path.abspath(ff))
         env["PATH"] = folder + os.pathsep + env.get("PATH", "")

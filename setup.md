@@ -4,6 +4,9 @@ This is the procedure for the `setup` command. **No video is analysed in this ca
 `check_environment.py` to exit with code 0 ("Ready."). The setup can run as many times as needed:
 whatever is already in place comes out `[OK]` and is skipped.
 
+**On macOS, every `python` in this file is `python3`**, and the paths under `%USERPROFILE%\` are under `~/`
+(`~/video-analysis/`, `~/whisperx-env/`…). Only Apple silicon transcribes (step 6).
+
 **What code 0 means:** Python 3.10 or newer, `ffmpeg` and `ffprobe` on PATH, numpy and Pillow installed,
 the central folder (`%USERPROFILE%\video-analysis\`, or the folder in `VIDEO_ANALYSIS_HOME`) accepts
 writes, the permission rules cover that folder, and the transcription environment works, with its models
@@ -42,7 +45,7 @@ person's "yes" (the transcription rows with step 6; the token with step 7; DeepF
 | the saved workflow | `%USERPROFILE%\.claude\workflows\video-analysis.js` | delete the file |
 | the permission rules for the central folder | `%USERPROFILE%\.claude\settings.json` | restore `settings.json.bak-<date>` |
 | the transcription environment (WhisperX, PyTorch and NLTK's punkt) | `%USERPROFILE%\whisperx-env\` | delete the folder |
-| uv, when the machine has none | the user's Python scripts folder (`pip install --user uv`) | `python -m pip uninstall uv` |
+| uv, when the machine has none | the user's Python scripts folder (`pip install --user uv`); on macOS, Homebrew (`brew install uv`, step 1) | `python -m pip uninstall uv`; from Homebrew, `brew uninstall uv` |
 | the Python 3.12 of that environment, which uv downloads when the machine has none | the folder that `uv python dir` prints | `uv python uninstall 3.12` |
 | the packages uv downloaded | the folder that `uv cache dir` prints | `uv cache clean` |
 | the models: Whisper, Portuguese alignment, pyannote | `%USERPROFILE%\.cache\huggingface\hub\` (or under `HF_HOME`) | delete the `models--*` folders (the cache may hold other programs' models) |
@@ -64,7 +67,9 @@ You also do not accept terms or run an installation that asks for elevation on t
    `Get-Command python, py, ffmpeg, ffprobe, winget -ErrorAction SilentlyContinue | Select-Object Name, Source`.
    A `python` in `...\WindowsApps\` only counts if `python --version` shows the version: without the
    Microsoft Store Python installed, it is only the shortcut that opens the store. On macOS, with Bash:
-   `command -v python3 ffmpeg ffprobe brew uv`. Without Python, start with step 1.
+   `command -v python3 ffmpeg ffprobe brew uv; python3 --version`. Apple's `/usr/bin/python3` (3.9, from the
+   Command Line Tools) does not count: the verifier then prints only `video-analysis needs Python 3.10 or
+   newer, and this is Python 3.9…` and exits 1. Without a Python 3.10 or newer, start with step 1.
 2. **Run the full verifier** and show the result to the person. Use the command in the **Setup** section
    of `SKILL.md`, which already comes with the skill path resolved and matches the pre-approval; run it
    through the Bash tool (`python3` instead of `python` on macOS):
@@ -118,6 +123,20 @@ winget install --id Gyan.FFmpeg -e
   brew install python ffmpeg uv
   ```
 
+  - If `brew` is not found right after installing it (or the verifier says ffmpeg was `found in
+    /opt/homebrew/bin, which is not on PATH`), Homebrew is not on PATH yet. The person adds it once and
+    opens a new terminal:
+
+    ```zsh
+    echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
+    ```
+
+    With it, `python3` is Homebrew's (`python3 --version` 3.12 or newer, `command -v python3` in
+    `/opt/homebrew/bin`), not Apple's 3.9. An Intel Homebrew in `/usr/local` on an Apple silicon Mac runs
+    under Rosetta: use the one in `/opt/homebrew`.
+  - Take ffmpeg from Homebrew. An `ffmpeg` downloaded in a browser is blocked by Gatekeeper ("cannot be
+    opened"): the person clears the flag on each binary, `xattr -d com.apple.quarantine <path>/ffmpeg`
+    (and `ffprobe`), and puts its folder on PATH.
 **After installing**, the person closes and reopens Claude Code and calls `/video-analysis setup` again.
 PATH is only reread by a new process: `[MISSING]` right after the installation is usually that, not an
 installation failure.
@@ -131,9 +150,18 @@ python -m pip install numpy Pillow
 ```
 
 If pip refuses because of permissions, repeat with `--user`. The skill does not use OpenCV or any other
-dependency. **macOS**: Homebrew's Python refuses `pip install` outside an environment
-("externally-managed-environment"); there, run `brew install numpy pillow` instead. With the python.org
-Python, `python3 -m pip install numpy Pillow` works.
+dependency. **macOS**: install them into exactly the `python3` that runs the skill, the one the verifier
+names in the item (not `brew install numpy pillow`, whose formulae can belong to another Python version).
+Homebrew's Python refuses a plain `pip install` ("externally-managed-environment"), so the verifier
+prints:
+
+```bash
+"<that python3>" -m pip install --user --break-system-packages numpy Pillow
+```
+
+`--user` leaves Homebrew's own packages alone. The alternative it also prints is a virtual environment,
+`"<that python3>" -m venv ~/.venvs/video-analysis`, then `~/.venvs/video-analysis/bin/python -m pip install
+numpy Pillow`, with `~/.venvs/video-analysis/bin` first on PATH so that `python3` is that one.
 
 ## Step 3 — central folder
 
@@ -185,7 +213,13 @@ of prompts per run.
 
    - The rules apply only to the central folder: nothing outside it becomes allowed.
    - The two spellings (`~/…` and `//c/…`) stay until the first analysis shows which one Windows
-     accepts; after that, the one that does not work can be removed. On macOS there is only `~/…`.
+     accepts; after that, the one that does not work can be removed. On macOS a central folder under the
+     home gets only `~/…`; one outside it (an external disk, `VIDEO_ANALYSIS_HOME=/Volumes/SSD/video-analysis`)
+     gets the absolute spelling, `Read(//Volumes/SSD/video-analysis/**)` and so on (one `/` would be
+     relative to the settings file).
+   - A central folder no rule can name (a network path) makes `--apply-permissions` come out `[MISSING]`
+     with `no permission rule can name …`: the person adds the rules by hand or moves the central folder to
+     a local disk.
 2. **You run it**, only after the "yes":
 
    ```bash
@@ -205,7 +239,8 @@ video needs its `.vtt`, as in the earlier version.
 **Say what it costs** before the "yes":
 
 - a Python environment of its own, `%USERPROFILE%\whisperx-env\` (`~/whisperx-env` on macOS), with
-  whisperx 3.8.6 and PyTorch 2.8 (3.7 GB with the CPU build), plus the models, which the proof downloads:
+  whisperx 3.8.6, CTranslate2 4.9.0 and PyTorch 2.8 (3.7 GB with the Windows CPU build), plus the models,
+  which the proof downloads:
   the default Whisper model of the machine (`large-v3-turbo`, 1.6 GB, on a CPU and on a Mac; `large-v3`,
   about 3 GB, on an NVIDIA GPU with 8 GB or more) and the Portuguese alignment model (1.2 GB). On a machine
   without NVIDIA, about 6.5 GB in all, and 9 minutes on the connection where it was measured; with NVIDIA,
@@ -213,8 +248,10 @@ video needs its `.vtt`, as in the earlier version.
 - then each video without subtitles is transcribed once, before its first analysis. On a CPU it is slow:
   on the 4-core 2017 laptop where it was measured, 2.7 times the length of the video (25 min for a 9-min
   meeting: the speech 1.2×, the times of the words 0.4×, the speakers 1.0×); a newer CPU is faster, and an
-  NVIDIA GPU should take minutes per hour (not measured). The estimate of each analysis gives the figure,
-  and the result stays in the video's cache and next to the video.
+  NVIDIA GPU should take minutes per hour (not measured). On a Mac the estimate uses an Apple silicon
+  profile that is a guess (`TRANSCRIBE_DEFAULTS["cost"]["apple"]`) until it is calibrated on one. The
+  estimate of each analysis gives the figure, and the result stays in the video's cache and next to the
+  video.
 
 **You run it**, after the "yes", always with `run_in_background` (wait for the notification):
 
@@ -226,11 +263,13 @@ python "<skill folder>/check_environment.py" --install-transcription
   `python -m pip install --user uv`. uv creates the environment with its own **Python 3.12**: WhisperX does
   not run on Python 3.14, and uv downloads that Python when the machine lacks it. On macOS, if pip refuses
   ("externally-managed-environment"), `brew install uv` (step 1) and run it again.
-- Installs whisperx 3.8.6 with the PyTorch build of the machine: CUDA with an NVIDIA GPU whose driver is
-  recent enough (`cu128` from driver 570, `cu126` from 528, read from `nvidia-smi`), CPU otherwise and on
-  every Mac. A GPU older than Volta (compute capability below 7.0: GTX 9xx and 10xx) transcribes on the CPU:
-  the CUDA builds and Whisper's float16 do not support it. The variable `VA_TORCH_BACKEND` forces one
-  (`cpu`, `cu126`, `cu128`…).
+- Installs whisperx 3.8.6, CTranslate2 4.9.0 (pinned; an environment with another version gets it
+  reinstalled, and until then the verifier shows the item as `[WARN]`, `with CTranslate2 X instead of
+  4.9.0`) and the PyTorch build of the machine: CUDA with an NVIDIA GPU whose driver is recent enough
+  (`cu128` from driver 570, `cu126` from 528, read from `nvidia-smi`), CPU otherwise, and PyPI's own build
+  on a Mac (CPU and MPS). A GPU older than Volta (compute capability below 7.0: GTX 9xx and 10xx)
+  transcribes on the CPU: the CUDA builds and Whisper's float16 do not support it. On Windows and Linux the
+  variable `VA_TORCH_BACKEND` forces one (`cpu`, `cu126`, `cu128`…); on macOS it is ignored.
 - Downloads NLTK's punkt, which the alignment uses, straight from NLTK's repository into the environment
   (NLTK's own downloader fails behind some proxies).
 - Then the **proof**: `scripts/transcribe.py --check` loads the default Whisper model and the Portuguese
@@ -238,12 +277,29 @@ python "<skill folder>/check_environment.py" --install-transcription
   import whisperx reinstalls it once.
 - A part already in place is skipped, and a download that failed resumes when it runs again: running it
   again repairs the environment. Other languages download their alignment model at first use.
-- **Mac**: Apple silicon only, on the CPU (PyTorch 2.8 has no build for Intel Macs, so the verifier says
-  "not supported" there, and every video needs its `.vtt`). WhisperX's Whisper (CTranslate2) does not use
-  the Mac's GPU.
+- **Mac**: Apple silicon only (PyTorch 2.8 has no build for Intel Macs, so the verifier says "not
+  supported" there, and every video needs its `.vtt`). uv creates the environment with the arm64 Python by
+  name (`cpython-3.12-macos-aarch64-none`), even from an Intel uv. An environment that is x86_64 anyway
+  (made under Rosetta) comes out `[MISSING]` with `is an x86_64 environment`, and `--install-transcription`
+  refuses it: the person deletes that folder and runs step 6 again with the arm64 Homebrew
+  (`/opt/homebrew`).
+  - **What runs where.** The speech (Whisper, CTranslate2) runs on the CPU in `int8`, with one thread per
+    performance core; the word times and the speakers run on the GPU through MPS when PyTorch has it, and
+    a phase that fails there is retried once on the CPU. The proof's JSON (`transcribe.py --check`, last
+    line) has `torch_device` (`mps` or `cpu`) and `mps` (whether PyTorch sees it).
+  - **Experimental: the speech on the GPU too.** `VA_ASR_DEVICE=mps` runs the Whisper ASR on CTranslate2
+    4.9.0's Metal backend (`float16`); if the model does not load there, runs out of memory or fails in
+    any other way, the run falls back to `cpu`/`int8` with a warning. It applies only on macOS, and only to runs that see the
+    variable. For Claude Code, the person adds it to the `env` block of `~/.claude/settings.json`
+    (`"env": {"VA_ASR_DEVICE": "mps"}`) and reopens Claude Code, or runs `export VA_ASR_DEVICE=mps`
+    before starting `claude` in that terminal. With it set, the proof of step 6 loads the model on Metal
+    too (its JSON's `device`: `mps`, or `cpu` after the fallback). To go back, remove it
+    from the `env` block (or `unset VA_ASR_DEVICE`) and reopen Claude Code.
 
 If it fails, the item's `detail` says where; the most common causes (proxy, SSL, a download that stalls)
-are in [`reference/troubleshooting.md`](reference/troubleshooting.md), "Local transcription".
+are in [`reference/troubleshooting.md`](reference/troubleshooting.md), "Local transcription", and those
+of a Mac (`CERTIFICATE_VERIFY_FAILED` with python.org's Python, an x86_64 environment) in its "macOS"
+section.
 
 ## Step 7 — optional: separating the speakers (Hugging Face token)
 

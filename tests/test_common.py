@@ -571,3 +571,44 @@ def test_workflow_and_workspace_defaults():
     assert set(va.WORKSPACE_DIRS) == {"cache", "runs", "requests", "roles", "logs", "debug", "tmp"}
     assert va.WORKSPACE_ENV == "VIDEO_ANALYSIS_HOME"
     assert va.EXIT_CODES == {"ok": 0, "input": 2, "environment": 3, "video_failed": 4, "interrupted": 130}
+
+
+# --- the guard against old Pythons ---------------------------------------------------------------------
+
+SKILL_DIR = Path(__file__).resolve().parent.parent
+GUARDED = ["check_environment.py", "verificar_ambiente.py", "scripts/prepare.py", "scripts/calibrate.py",
+           "scripts/explain.py", "scripts/webcam_mask.py"]
+
+
+def test_old_python_message():
+    assert va.MIN_PYTHON == (3, 10) and va.old_python((3, 10, 0)) is None and va.old_python((3, 14, 5)) is None
+    assert va.old_python() is None                                       # the Python running the tests
+    mac = va.old_python((3, 9, 6), "/usr/bin/python3", "darwin")
+    assert mac == ("video-analysis needs Python 3.10 or newer, and this is Python 3.9.6 (/usr/bin/python3): "
+                   "brew install python, with /opt/homebrew/bin first on PATH, then run it with python3 again")
+    win = va.old_python((3, 8, 10, "final", 0), "C:/Py38/python.exe", "win32")
+    assert "Python 3.8.10 (C:/Py38/python.exe)" in win and "brew" not in win and "\n" not in win
+
+
+def test_package_init_parses_on_old_pythons():
+    """va/__init__.py runs before the guard, so it must stay free of 3.10 syntax (``X | None``, ``match``)."""
+    import ast
+    src = (SKILL_DIR / "scripts" / "va" / "__init__.py").read_text(encoding="utf-8")
+    ast.parse(src, feature_version=(3, 7))
+    assert "|" not in "".join(line for line in src.splitlines() if line.lstrip().startswith("def "))
+
+
+@pytest.mark.parametrize("script", [s for s in GUARDED if s != "scripts/prepare.py"])
+def test_entry_scripts_stop_on_an_old_python(script, monkeypatch, capsys):
+    """Each entry script, run with a 3.9 version tuple, stops with the one line before importing anything of
+    3.10 (prepare.py, with its JSON envelope: test_prepare_cli.py)."""
+    import runpy
+    monkeypatch.setattr(sys, "version_info", (3, 9, 6, "final", 0))
+    monkeypatch.setattr(sys, "argv", [str(SKILL_DIR / script)])
+    with pytest.raises(SystemExit) as stop:
+        runpy.run_path(str(SKILL_DIR / script), run_name="__main__")
+    out = capsys.readouterr().out
+    message = stop.value.code if isinstance(stop.value.code, str) else out.strip()
+    assert stop.value.code in (1, message)
+    assert message.startswith("video-analysis needs Python 3.10 or newer, and this is Python 3.9.6 (")
+    assert sys.executable in message and len(message.splitlines()) == 1

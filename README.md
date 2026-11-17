@@ -5,8 +5,8 @@ meetings (Teams, Zoom) and lectures with slides. You give an objective, such as 
 who is responsible" or "what is on the screen when they talk about the error?", and you get a report per
 video in which each finding points to the frame and the time that support it.
 
-**Version 1.1.0** · Windows (the local transcription also on macOS with Apple silicon) · Python 3.10+ ·
-ffmpeg · Claude Code with the Workflow tool
+**Version 1.1.0** · Windows, or macOS on Apple silicon · Python 3.10+ · ffmpeg · Claude Code with the
+Workflow tool
 
 The command-line options, the request file (`request.md`), the `resume` keyword and the file names of the
 skill are in English. The Portuguese names of the earlier version still work (`--max-lotes`, `--papeis`,
@@ -38,7 +38,8 @@ The skill has two layers.
 1. **Deterministic** (`scripts/`, Python). A video without subtitles is transcribed first by
    `scripts/transcribe.py`, which runs WhisperX in its own Python environment (`whisperx-env`, made by the
    setup): Whisper in blocks of about 10 minutes, each one a checkpoint, then the time of each word and
-   the speakers (pyannote); `prepare.py` writes the result as a `.vtt` next to the video. Then
+   the speakers (pyannote); `prepare.py` writes the result as a `.vtt` next to the video (on a Mac:
+   [What runs where on Apple silicon](#what-runs-where-on-apple-silicon)). Then
    `prepare.py` decodes the video once with ffmpeg, at 2 frames per second, and compares each sample, in
    grayscale and 360 px high, with the last frame kept. Only
    what really changed stays, each frame with the time interval it represents and a JPEG whose longer
@@ -88,9 +89,9 @@ above 800, it refuses the run.
 
 | item | version | what for |
 |---|---|---|
-| Windows | developed on Windows 11 | the skill's paths, permissions and messages are for Windows; the local transcription also runs on macOS with Apple silicon |
+| Windows or macOS | developed on Windows 11; macOS on Apple silicon, with Homebrew | the skill and the local transcription; an Intel Mac runs the skill only with `.vtt` subtitles (PyTorch 2.8 has no Intel macOS build) |
 | Claude Code | with skills and the Workflow tool | without Workflow, the skill runs the same loop with the Agent tool ([`reference/without-workflow.md`](reference/without-workflow.md)) |
-| Python | 3.10 or newer (tested on 3.14) | deterministic layer |
+| Python | 3.10 or newer (tested on 3.14); on macOS, Homebrew's `python3`, not Apple's `/usr/bin/python3` (3.9) | deterministic layer |
 | ffmpeg and ffprobe | on the PATH (tested on 8.1) | probing and frame extraction |
 | numpy and Pillow | any recent version | frame comparison and images; the skill itself does not use OpenCV |
 | WhisperX | 3.8.6 with PyTorch 2.8, in its own Python 3.12 environment (about 6.5 GB with the models, without NVIDIA) | the transcription of a video without subtitles; the setup creates it with uv |
@@ -106,6 +107,12 @@ above 800, it refuses the run.
 
    ```powershell
    git clone https://github.com/rmmaf/video-analysis-skill.git "$env:USERPROFILE\.claude\skills\video-analysis"
+   ```
+
+   On macOS, in Terminal (zsh):
+
+   ```zsh
+   git clone https://github.com/rmmaf/video-analysis-skill.git ~/.claude/skills/video-analysis
    ```
 
 2. In Claude Code, run the setup:
@@ -131,6 +138,21 @@ above 800, it refuses the run.
    | the Hugging Face token (you save it) | `%USERPROFILE%\.cache\huggingface\token` | `hf auth logout` |
    | the DeepFace environment and the YuNet weights | `%USERPROFILE%\deepface-env\` and `%USERPROFILE%\.deepface\weights\face_detection_yunet_2023mar.onnx` | delete the folder and the file |
 
+   On macOS the same places are under `~` (`~/.claude/agents/`, `~/whisperx-env/`, `~/.cache/huggingface/`,
+   `~/deepface-env/`…), and uv comes from Homebrew (`brew install uv`; undone with `brew uninstall uv`). To
+   undo it there, in zsh:
+
+   ```zsh
+   ~/whisperx-env/bin/hf auth logout       # only if you saved a token; before deleting the environment
+   rm ~/.claude/agents/video-analysis-*.md ~/.claude/workflows/video-analysis.js
+   rm -rf ~/whisperx-env ~/deepface-env ~/.deepface/weights/face_detection_yunet_2023mar.onnx
+   rm -rf ~/.claude/skills/video-analysis  # the skill itself
+   ```
+
+   The models stay in `~/.cache/huggingface/hub/` (delete their `models--*` folders; the cache may hold
+   other programs' models), and the permission rules in `~/.claude/settings.json` until you restore its
+   `settings.json.bak-<date>`.
+
 3. Close and reopen Claude Code, so that it loads the agents and the workflow. Start with a short
    analysis, with `--max-batches 1`: it confirms that the run does not ask for permission at every frame.
 
@@ -139,6 +161,10 @@ when they have changed:
 
 ```powershell
 git -C "$env:USERPROFILE\.claude\skills\video-analysis" pull
+```
+
+```zsh
+git -C ~/.claude/skills/video-analysis pull       # macOS
 ```
 
 ## Usage
@@ -150,6 +176,13 @@ In the Claude Code conversation:
 /video-analysis "C:\Videos\aulas" Resuma cada aula em passos numerados --max-batches 2
 /video-analysis "C:\Videos\demo.mp4" Que erro aparece na tela quando falam do deploy? --range 00:10:00-00:20:00
 /video-analysis resume
+```
+
+On macOS, with POSIX paths:
+
+```text
+/video-analysis "/Users/<user>/Movies/reuniao.mp4" Liste as decisões tomadas e quem ficou responsável por cada uma
+/video-analysis "/Volumes/SSD/aulas" Resuma cada aula em passos numerados --max-batches 2
 ```
 
 - A video with a `.vtt` subtitle file of the same name, in the same folder, uses it: `reuniao.mp4` uses
@@ -167,13 +200,32 @@ What happens after the call:
 1. The skill writes the request and estimates the extraction time. A video without subtitles gets a
    question: how many people speak in it?
 2. `prepare.py` transcribes the videos without subtitles (on a CPU, slowly: 25 min for a 9-min meeting on
-   a 2017 laptop; once per video), extracts frames, subtitles and batches, or reuses them from the cache, and computes how many
+   a 2017 laptop; once per video; faster on Apple silicon, below), extracts frames, subtitles and batches, or reuses them from the cache, and computes how many
    agents the run will use. With more than 80, the skill asks before launching the Workflow.
 3. The Workflow runs in the background, at about 4 minutes per batch, and lets you know when it finishes.
 4. The skill shows the summary of each video and the path of the reports.
 
 `/video-analysis resume` (also `retomar`) continues an interrupted run (Claude Code closed, quota, error)
 from where it stopped.
+
+### What runs where on Apple silicon
+
+On a Mac with Apple silicon (an M4 Max, say) the transcription runs natively, without Rosetta:
+
+- **The speech** (Whisper, through CTranslate2, `int8`) runs on the CPU, with one thread per
+  **performance core** (`sysctl -n hw.perflevel0.physicalcpu`: 10 or 12 on an M4 Max). A thread pool that
+  included the efficiency cores would run at the speed of the slowest one.
+- **The time of each word** (wav2vec2) and **the speakers** (pyannote) run on the GPU through **MPS**,
+  PyTorch's Metal backend. A phase that fails on MPS is retried once on the CPU, and `transcribe.log` says
+  so (`alignment on mps failed (…): retrying on the cpu`).
+- **Experimental:** `VA_ASR_DEVICE=mps` runs the speech on CTranslate2's Metal backend too (`float16`),
+  falling back to the CPU (`int8`) with a warning when it does not load, runs out of memory or fails
+  ([`setup.md`](setup.md), step 6).
+- **Intel Macs** cannot transcribe: PyTorch 2.8 has no Intel macOS build, so every video there needs its
+  `.vtt`.
+
+None of this has been measured on a Mac yet: the time the estimate gives there is a guess until it is
+calibrated (`TRANSCRIBE_DEFAULTS["cost"]["apple"]`).
 
 ### Options
 
@@ -201,7 +253,7 @@ When to change each one and what it costs: [`reference/parameters.md`](reference
 ### Outputs
 
 ```text
-%USERPROFILE%\video-analysis\
+%USERPROFILE%\video-analysis\         (~/video-analysis/ on macOS)
 ├── cache\<slug>-<fp8>\              subtitles, frames, batches, webcam timeline and transcription of each video, reused across runs
 ├── runs\<YYYYMMDD-HHMMSS>-<slug>\
 │   ├── relatorio.md                 combined report, with 2+ videos
@@ -228,6 +280,17 @@ python scripts/calibrate.py "C:\Videos\reuniao.mp4" --grid "sensitivity=normal,h
 python scripts/prepare.py "C:\Videos\reuniao.mp4" --num-speakers 3     # transcribes it when there is no .vtt, then warms up the cache
 python check_environment.py                                            # checks the environment, without changing anything
 %USERPROFILE%\deepface-env\Scripts\python scripts/webcam_mask.py "C:\Videos\reuniao.mp4" --timeline webcam.json   # webcam over time by hand (prepare.py already runs it)
+```
+
+On macOS, in zsh, from `~/.claude/skills/video-analysis`:
+
+```zsh
+python3 scripts/prepare.py "/Users/<user>/Movies/reuniao.mp4"                      # only warms up the cache
+python3 scripts/prepare.py "/Users/<user>/Movies/reuniao.mp4" --num-speakers 3     # transcribes it when there is no .vtt
+python3 scripts/explain.py --frames-json <frames.json> --frame F0042               # why this frame was kept
+python3 check_environment.py                                                       # checks the environment
+~/whisperx-env/bin/python -B scripts/transcribe.py --check --model large-v3-turbo  # torch_device and mps: what MPS gives here
+~/deepface-env/bin/python scripts/webcam_mask.py "/Users/<user>/Movies/reuniao.mp4" --timeline webcam.json
 ```
 
 `python scripts/prepare.py --help` lists all the options. The `frames.json` of a video is in
@@ -348,6 +411,9 @@ node tests/harness.mjs                  # the workflow, with simulated agents
 python tests/check_run.py <run_dir>     # checks a finished run
 ```
 
+On macOS, the same with `python3`. The Mac paths of the code (MPS, the performance cores, Homebrew off
+PATH, Rosetta) are tested with fakes, so they run on any machine.
+
 - `-B` and `pytest.ini` keep `__pycache__` and `.pytest_cache` out of the skill folder.
 - `--run-real` and `--run-slow` can also be turned on with `VA_RUN_REAL=1` and `VA_RUN_SLOW=1`.
 - The synthetic videos (`tests/synth.py`) are generated with Pillow and x264, with ground truth, and are
@@ -377,10 +443,10 @@ python tests/check_run.py <run_dir>     # checks a finished run
 |---|---|
 | `0` | ok, sometimes with warnings |
 | `2` | input: video not found, subtitles not found without the transcription environment, invalid request or option, run too large |
-| `3` | environment: ffmpeg, ffprobe, Python, numpy or Pillow missing, or a transcription environment that does not work; run `/video-analysis setup` |
+| `3` | environment: ffmpeg, ffprobe, Python, numpy or Pillow missing (or a Python older than 3.10, such as Apple's `/usr/bin/python3`), or a transcription environment that does not work; run `/video-analysis setup` |
 | `4` | a video failed; the others go on |
 | `130` | interrupted; what was completed stays in the cache |
-| `1` | internal error; the traceback goes to `logs\` |
+| `1` | internal error; the traceback goes to `logs\` (`logs/` on macOS) |
 
 Symptoms, causes and fixes, including permissions, agents and Workflow:
 [`reference/troubleshooting.md`](reference/troubleshooting.md).
@@ -410,12 +476,12 @@ Symptoms, causes and fixes, including permissions, agents and Workflow:
 
 ## Known limitations
 
-- **Windows first.** The setup and the paths assume Windows, but any Windows user can install the
-  skill: the docs name paths as `%USERPROFILE%\...`, the scripts find the folders through
-  `%USERPROFILE%`, `VIDEO_ANALYSIS_HOME` (central folder) and `VA_CLAUDE_HOME` (Claude Code folder),
-  and `check_environment.py` prints the concrete paths. The local transcription was written for Windows
-  and for macOS on Apple silicon (CPU only; Intel Macs have no PyTorch 2.8), but was tested only on a
-  Windows CPU; the rest of the skill on a Mac, and the NVIDIA GPU path, have not been tried on hardware.
+- **Tested on Windows only.** The docs name paths as `%USERPROFILE%\...` (`~/...` on macOS), the scripts
+  find the folders through the user's home, `VIDEO_ANALYSIS_HOME` (central folder) and `VA_CLAUDE_HOME`
+  (Claude Code folder), and `check_environment.py` prints the concrete paths. The skill and the local
+  transcription were written for Windows and for macOS on Apple silicon (the speech on the performance
+  cores, the word times and the speakers on MPS; Intel Macs have no PyTorch 2.8), but were run only on a
+  Windows CPU: the Mac paths with fakes, and the NVIDIA GPU path not on hardware.
 - **A change of color alone does not become a frame.** The comparison is in grayscale: a new color with
   the same brightness goes unnoticed.
 - **Tiny changes can be mistaken for the cursor.** A digit or a few letters may not become a frame;
@@ -423,7 +489,8 @@ Symptoms, causes and fixes, including permissions, agents and Workflow:
 - **Long videos are expensive and slow.** A 55-minute meeting yields about 50 batches, and the batches of
   a video run in series. Use `--range` or `--max-batches`.
 - **Local transcription is slow on a CPU.** 2.7 times the length of the video on the 4-core 2017 laptop
-  where it was measured, once per video (the whole video, even with `--range`); a newer CPU is faster.
+  where it was measured, once per video (the whole video, even with `--range`); a newer CPU is faster,
+  and Apple silicon also moves the word times and the speakers to its GPU.
   Blocks of about 10 minutes are checkpoints: an interrupted transcription resumes.
 - **Anonymous speakers.** The transcription labels them `SPEAKER_00`, `SPEAKER_01`…; `--speakers` gives
   the names. Without a Hugging Face token, the subtitles do not separate the speakers at all.

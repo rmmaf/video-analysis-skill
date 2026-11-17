@@ -36,6 +36,7 @@ import importlib.util
 import json
 import os
 import platform
+import posixpath
 import re
 import shutil
 import subprocess
@@ -44,7 +45,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from . import TRANSCRIBE_DEFAULTS, WEBCAM_DEFAULTS, WHISPER_MODELS, WORKSPACE_DIRS
+from . import MIN_PYTHON, TRANSCRIBE_DEFAULTS, WEBCAM_DEFAULTS, WHISPER_MODELS, WORKSPACE_DIRS
 from .common import as_posix, atomic_write_bytes
 
 __all__ = [
@@ -56,11 +57,13 @@ __all__ = [
     "workspace_status", "yunet_weights",
     "TORCH_BACKEND_ENV", "WHISPERX_ENV", "diarization_status", "find_uv", "install_transcription", "login_command",
     "nltk_dir", "nvidia_info", "platform_supported", "prepare_punkt", "punkt_complete", "torch_backend",
-    "transcription_status", "whisperx_env_dir", "whisperx_python",
+    "transcription_status", "whisperx_env_dir", "whisperx_python", "BREW_BIN_DIRS", "brew_tool",
 ]
 
 CLAUDE_HOME_ENV = "VA_CLAUDE_HOME"
-MIN_PYTHON = (3, 10)
+# Homebrew's bin folders (Apple silicon, then Intel): a Mac whose shell never ran ``brew shellenv`` has
+# ffmpeg there but not on the PATH Claude Code's shell gets
+BREW_BIN_DIRS = ("/opt/homebrew/bin", "/usr/local/bin")
 RULE_TOOLS = ("Read", "Edit", "Write")       # order of the 6 rules in the plan
 WORKFLOW_SCRIPT = "video-analysis.js"        # <skill>/workflow/<this> -> <claude home>/workflows/<this>
 MODULES = {"numpy": ("numpy", "numpy"), "pillow": ("PIL", "Pillow")}
@@ -99,24 +102,41 @@ def python_status() -> dict:
             "detail": f"Python {version} ({sys.executable})" if ok else f"Python {version}: the skill needs 3.10 or newer"}
 
 
+def brew_tool(name: str) -> tuple[str, str] | None:
+    """On macOS, ``(path, note)`` of a ``name`` that is in a Homebrew bin folder but not on PATH; ``note`` says
+    how to put Homebrew on PATH. None elsewhere, or when it is not there either."""
+    if sys.platform != "darwin":
+        return None
+    for folder in BREW_BIN_DIRS:
+        cand = os.path.join(folder, name)
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            brew = posixpath.join(folder.replace("\\", "/"), "brew")
+            return cand, (f"found in {folder}, which is not on PATH: add eval \"$({brew} shellenv)\" to ~/.zprofile "
+                          "and open a new terminal")
+    return None
+
+
 def tool_status(name: str, timeout: float = 15.0) -> dict:
-    """``ffmpeg`` / ``ffprobe``: on PATH and ``-version`` runs."""
-    path = shutil.which(name)
+    """``ffmpeg`` / ``ffprobe``: on PATH (on macOS, also in Homebrew's folder off PATH) and ``-version`` runs."""
+    path, note = shutil.which(name), ""
     if not path:
-        return {"id": name, "ok": False, "version": None, "path": None, "detail": f"{name} is not on PATH"}
+        found = brew_tool(name)
+        if not found:
+            return {"id": name, "ok": False, "version": None, "path": None, "detail": f"{name} is not on PATH"}
+        path, note = found[0], f"; {found[1]}"
     try:
         r = subprocess.run([path, "-hide_banner", "-version"], stdin=subprocess.DEVNULL, capture_output=True,
                            text=True, encoding="utf-8", errors="replace", timeout=timeout, creationflags=_NO_WINDOW)
     except (OSError, subprocess.SubprocessError) as exc:
-        return {"id": name, "ok": False, "version": None, "path": path, "detail": f"{name} did not run: {exc}"}
+        return {"id": name, "ok": False, "version": None, "path": path, "detail": f"{name} did not run: {exc}{note}"}
     first = (r.stdout or r.stderr or "").strip().splitlines()[:1]
     version = first[0].strip() if first else ""
     if r.returncode != 0:
         return {"id": name, "ok": False, "version": version or None, "path": path,
-                "detail": f"{name} -version exited with {r.returncode}"}
+                "detail": f"{name} -version exited with {r.returncode}{note}"}
     short = re.search(r"version\s+(\S+)", version)
     return {"id": name, "ok": True, "version": version, "path": path,
-            "detail": f"{name} {short.group(1) if short else version} ({path})"}
+            "detail": f"{name} {short.group(1) if short else version} ({path}){note}"}
 
 
 def module_status(key: str, version: bool = True) -> dict:
@@ -177,18 +197,35 @@ def _norm(p: str) -> str:
     return s.casefold() if os.name == "nt" or re.match(r"^[A-Za-z]:", s) else s
 
 
+# the path rules of this system (posixpath on macOS and Linux, ntpath on Windows); the tests swap it to
+# check the other system's rules
+_ospath = os.path
+
+
+def _posix() -> bool:
+    return _ospath.sep == "/"
+
+
 def workspace_rules(home: str | os.PathLike, uhome: str | os.PathLike | None = None) -> list[str]:
     """The allow rules for the workspace, derived from its real path: ``Tool(~/<rel>/**)`` when it
-    is under the user's home, and ``Tool(//<drive>/<path>/**)``. For C:\\Users\\<user>\\video-analysis
-    these are exactly the 6 rules of the plan."""
-    ws = Path(os.path.abspath(home))
-    uh = Path(os.path.abspath(uhome)) if uhome is not None else user_home()
+    is under the user's home, and ``Tool(//<drive>/<path>/**)`` on Windows. For C:\\Users\\<user>\\video-analysis
+    these are exactly the 6 rules of the plan. On macOS and Linux, a workspace outside the home (an external
+    disk: /Volumes/SSD/video-analysis) gets Claude Code's absolute spelling, ``Tool(//Volumes/SSD/video-analysis/**)``
+    (a single slash would be relative to the settings file). Empty when no rule can name it (a network path)."""
+    ws = _ospath.abspath(os.fspath(home))
+    uh = _ospath.abspath(os.fspath(uhome)) if uhome is not None else str(user_home())
     rules = []
-    ws_n, uh_n = _norm(str(ws)), _norm(str(uh))
-    if ws_n.startswith(uh_n + "/"):
-        rel = str(ws).replace("\\", "/")[len(str(uh).replace("\\", "/").rstrip("/")) + 1:]
+    ws_n, uh_n = _norm(ws), _norm(uh)
+    under_home = ws_n.startswith(uh_n + "/")
+    if under_home:
+        rel = ws.replace("\\", "/")[len(uh.replace("\\", "/").rstrip("/")) + 1:]
         rules += [f"{t}(~/{rel}/**)" for t in RULE_TOOLS]
-    drive, rest = os.path.splitdrive(str(ws))
+    if _posix():
+        path = ws.strip("/")
+        if not under_home and path:
+            rules += [f"{t}(//{path}/**)" for t in RULE_TOOLS]
+        return rules
+    drive, rest = _ospath.splitdrive(ws)
     if re.fullmatch(r"[A-Za-z]:", drive):
         path = rest.replace("\\", "/").strip("/")
         rules += [f"{t}(//{drive[0].lower()}/{path}/**)" for t in RULE_TOOLS]
@@ -202,14 +239,17 @@ def _rule_base(pattern: str, uhome: Path, settings_dir: Path) -> str | None:
     """Absolute, comparable base of a ``…/**`` path pattern; None when it is not one.
 
     Claude Code's spellings only: ``~/…`` (user home), ``//c/…`` (absolute, Windows drive as a
-    folder) and ``/…`` (relative to the settings file). ``C:/…`` or ``//C:/…`` would be read as
-    relative paths by Claude Code, so they do not count."""
+    folder; on macOS and Linux, ``//<path>`` is the absolute ``/<path>``) and ``/…`` (relative to the
+    settings file). ``C:/…`` or ``//C:/…`` would be read as relative paths by Claude Code, so they do
+    not count."""
     p = pattern.strip()
     if "\\" in p or not p.endswith("/**"):
         return None
     p = p[:-3]
     if p in ("~", "") or p.startswith("~/"):
         base = str(uhome).replace("\\", "/").rstrip("/") + p[1:]
+    elif p.startswith("//") and _posix():
+        base = "/" + p.lstrip("/")
     elif p.startswith("//"):
         m = re.match(r"^//([A-Za-z])(?=/|$)", p)
         if not m:
@@ -262,9 +302,9 @@ def permissions_status(workspace: str | os.PathLike, chome: str | os.PathLike | 
                        uhome: str | os.PathLike | None = None) -> dict:
     """Do the user settings allow Read, Edit and Write on the workspace without prompting?"""
     ch = Path(chome) if chome is not None else claude_home()
-    uh = Path(os.path.abspath(uhome)) if uhome is not None else user_home()
+    uh = Path(_ospath.abspath(os.fspath(uhome))) if uhome is not None else user_home()
     path = ch / "settings.json"
-    ws_n = _norm(os.path.abspath(workspace))
+    ws_n = _norm(_ospath.abspath(os.fspath(workspace)))
     out = {"id": "permissions", "ok": False, "settings_path": as_posix(path), "covered": dict.fromkeys(RULE_TOOLS),
            "missing": list(RULE_TOOLS), "blocked": [], "notes": [], "detail": ""}
     data, err = _load_settings(path)
@@ -519,9 +559,29 @@ def download_weights(opener=None, attempts: int = 8, pause_s: float = 2.0) -> in
             return attempt
         except Exception as exc:   # the network, the server or the content: try again
             last = f"{type(exc).__name__}: {exc}"
+            if _cert_error(exc):
+                raise SetupError(f"could not download the YuNet weights from {url}: {last}{_cert_hint()}") from None
             if attempt < attempts:
                 time.sleep(min(pause_s * attempt, 10.0))
     raise SetupError(f"could not download the YuNet weights from {url} ({attempts} attempts): {last}")
+
+
+def _cert_error(exc: BaseException) -> bool:
+    """An HTTPS certificate that this Python cannot verify (urllib wraps it in a URLError): trying again
+    does not help."""
+    import ssl
+    reason = getattr(exc, "reason", None)
+    return (isinstance(exc, ssl.SSLCertVerificationError) or isinstance(reason, ssl.SSLCertVerificationError)
+            or "CERTIFICATE_VERIFY_FAILED" in str(exc))
+
+
+def _cert_hint() -> str:
+    """What to do about a certificate error on macOS, where python.org's Python ships without a CA bundle."""
+    if sys.platform != "darwin":
+        return ""
+    v = sys.version_info
+    return (f'; run "/Applications/Python {v.major}.{v.minor}/Install Certificates.command" (python.org\'s Python '
+            "ships without a CA bundle) or use Homebrew's Python (brew install python)")
 
 
 def _last_line(text: str | None) -> str:
@@ -651,10 +711,12 @@ TORCH_BACKEND_ENV = "VA_TORCH_BACKEND"   # forces the PyTorch build of the setup
 TRANSCRIBE_SCRIPT = Path(__file__).resolve().parent.parent / "transcribe.py"
 DIARIZE_PAGE = "https://huggingface.co/" + TRANSCRIBE_DEFAULTS["diarize_model"]
 # run by the environment's Python, offline: the versions, the modules that are missing, whether a Hugging Face
-# token is saved (never the token itself) and which models are already in the cache (argv[1]: repo -> files)
+# token is saved (never the token itself), which models are already in the cache (argv[1]: repo -> files) and
+# the environment's processor architecture (an x86_64 Python on Apple silicon runs under Rosetta)
 _WHISPERX_PROBE = r'''
-import importlib.metadata as m, importlib.util as u, json, sys
-out = {"python": "%d.%d.%d" % sys.version_info[:3], "versions": {}, "missing": [], "token": False, "cached": {}}
+import importlib.metadata as m, importlib.util as u, json, platform, sys
+out = {"python": "%d.%d.%d" % sys.version_info[:3], "machine": platform.machine(), "versions": {}, "missing": [],
+       "token": False, "cached": {}}
 for d in ("whisperx", "torch", "ctranslate2", "faster-whisper", "pyannote.audio", "huggingface-hub", "nltk"):
     try:
         out["versions"][d] = m.version(d)
@@ -801,15 +863,17 @@ def gpu_usable(info: dict | None) -> bool:
 
 
 def torch_backend(gpu: dict | None | bool = False) -> str | None:
-    """The PyTorch build to install: VA_TORCH_BACKEND when set; None on macOS (PyPI's build, CPU and Metal);
-    else ``cu128``/``cu126`` by the NVIDIA driver (TRANSCRIBE_DEFAULTS["cuda_backends"]), or ``cpu`` (also for
-    a GPU older than Volta, see gpu_usable). ``gpu``: nvidia_info()'s answer (None: no GPU); left out,
-    nvidia-smi is asked."""
+    """The PyTorch build to install: None on macOS (PyPI's build, CPU and Metal), even with VA_TORCH_BACKEND;
+    else VA_TORCH_BACKEND when set, or ``cu128``/``cu126`` by the NVIDIA driver (TRANSCRIBE_DEFAULTS["cuda_backends"]),
+    or ``cpu`` (also for a GPU older than Volta, see gpu_usable). ``gpu``: nvidia_info()'s answer (None: no
+    GPU); left out, nvidia-smi is asked."""
+    if sys.platform == "darwin":
+        # the cpu index's macOS wheel has no "+cpu" tag, so a forced build never matched what was installed
+        # and every setup reinstalled torch
+        return None
     forced = os.environ.get(TORCH_BACKEND_ENV, "").strip()
     if forced:
         return forced
-    if sys.platform == "darwin":
-        return None
     info = nvidia_info() if gpu is False else gpu
     if not gpu_usable(info):
         return "cpu"
@@ -875,7 +939,8 @@ def transcription_status(env_dir: str | os.PathLike | None = None, python: str |
     in the version the setup installs, the modules it needs and NLTK's punkt; ``ready``: also the default
     Whisper model and the Portuguese alignment model in the Hugging Face cache (the setup downloads them, so
     the first analysis does not). ``state``: ok, absent, unsupported (an Intel Mac) or broken (``problem``:
-    python, modules, version or punkt). ``device`` (cuda or cpu), ``default_model`` (large-v3 on a GPU with
+    python, architecture (an x86_64 environment on a Mac), modules, version or punkt). ``machine``: the
+    environment's platform.machine(); ``ctranslate2``: its CTranslate2 version. ``device`` (cuda or cpu), ``default_model`` (large-v3 on a GPU with
     enough memory, large-v3-turbo otherwise), ``token`` (a Hugging Face token is saved: needed to separate
     the speakers) and ``models`` (repo -> in the cache). ``python`` replaces the environment's (tests);
     ``gpu`` replaces nvidia-smi's answer (tests)."""
@@ -884,7 +949,8 @@ def transcription_status(env_dir: str | os.PathLike | None = None, python: str |
     expected = TRANSCRIBE_DEFAULTS["whisperx_version"]
     out = {"id": "transcription", "ok": False, "ready": False, "state": "absent", "problem": "absent",
            "env": as_posix(d), "python": as_posix(py), "python_version": None, "version": None, "expected": expected,
-           "torch": None, "backend": None, "device": "cpu", "gpu": None, "default_model": TRANSCRIBE_DEFAULTS["model_cpu"],
+           "torch": None, "ctranslate2": None, "machine": None, "backend": None, "device": "cpu", "gpu": None,
+           "default_model": TRANSCRIBE_DEFAULTS["model_cpu"],
            "token": False, "models": {}, "punkt": False, "nltk_data": as_posix(nltk_dir(d)),
            "login_command": login_command(d), "detail": f"no transcription environment at {as_posix(d)}"}
 
@@ -913,8 +979,16 @@ def transcription_status(env_dir: str | os.PathLike | None = None, python: str |
         return broken("python", f"the Python of {as_posix(d)} exited with {r.returncode}: {tail}".rstrip(": "))
     versions = probe.get("versions") or {}
     out.update(python_version=probe.get("python"), version=versions.get("whisperx"), torch=versions.get("torch"),
+               ctranslate2=versions.get("ctranslate2"), machine=probe.get("machine"),
                token=bool(probe.get("token")), models=probe.get("cached") or {})
     out["backend"] = _torch_build(out["torch"])
+    if sys.platform == "darwin" and out["machine"] and out["machine"].lower() not in ("arm64", "aarch64"):
+        # an x86_64 uv or base Python (Intel Homebrew in /usr/local, under Rosetta) built it: PyTorch 2.8 has no
+        # Intel macOS build, and pip-installing into it again cannot change its architecture
+        return broken("architecture", f"{as_posix(d)} is an {out['machine']} environment (made by an Intel uv or "
+                                      "Python, under Rosetta), and PyTorch 2.8 needs arm64 on a Mac: delete that "
+                                      "folder and run step 6 again (--install-transcription) with the arm64 "
+                                      "Homebrew (/opt/homebrew)")
     if probe.get("missing"):
         return broken("modules", f"{as_posix(d)} lacks {', '.join(probe['missing'])}")
     if out["version"] != expected:
@@ -987,6 +1061,8 @@ def _fetch(url: str, opener=None, attempts: int = 6, pause_s: float = 2.0, timeo
                 return r.read()
         except Exception as exc:   # the network or the server: try again, with a growing pause
             last = f"{type(exc).__name__}: {exc}"
+            if _cert_error(exc):
+                raise SetupError(f"could not download {url}: {last}{_cert_hint()}") from None
             if attempt < attempts:
                 time.sleep(min(pause_s * attempt, 10.0))
     raise SetupError(f"could not download {url} ({attempts} attempts): {last}")
@@ -1053,12 +1129,20 @@ def _uv_hint() -> str:
     return "install uv (winget install --id=astral-sh.uv -e, or python -m pip install --user uv) and run it again"
 
 
+def _venv_python() -> str:
+    """uv's request for the environment's Python. On a Mac, the arm64 build by name: an x86_64 uv or base
+    Python (Intel Homebrew, under Rosetta) would otherwise make an x86_64 environment, for which PyTorch 2.8
+    has no build."""
+    version = TRANSCRIBE_DEFAULTS["python"]
+    return f"cpython-{version}-macos-aarch64-none" if sys.platform == "darwin" else version
+
+
 def install_transcription(env_dir: str | os.PathLike | None = None, runner=None, opener=None, uv: list[str] | None = None,
                           backend: str | None | bool = False, base_python: str | None = None) -> dict:
     """Create or repair the transcription environment, skipping what is already done: uv (pip's, when it is
     missing), ``uv venv --python 3.12`` (uv downloads that Python when the machine lacks it: WhisperX needs
-    one older than 3.14), ``uv pip install`` of whisperx and the PyTorch build of this machine
-    (``torch_backend``), NLTK's punkt, and then the proof: transcribe.py --check loads the default Whisper
+    one older than 3.14; on a Mac, its arm64 build by name), ``uv pip install`` of whisperx, the pinned
+    CTranslate2 and the PyTorch build of this machine (``torch_backend``), NLTK's punkt, and then the proof: transcribe.py --check loads the default Whisper
     model, the alignment models of the setup's languages and, with a token, pyannote, downloading them on the
     way. A proof that cannot import whisperx reinstalls it once. ``runner(cmd, timeout) -> (code, output)``,
     ``opener``, ``uv`` and ``backend`` replace the subprocess, the download, uv and the GPU detection (tests).
@@ -1103,16 +1187,21 @@ def install_transcription(env_dir: str | os.PathLike | None = None, runner=None,
         if d.exists() and any(d.iterdir()) and not (d / "pyvenv.cfg").is_file():
             raise SetupError(f"{as_posix(d)} exists and is not a Python environment: move it away, or point "
                              "VA_WHISPERX_ENV elsewhere")
-        step(uvc + ["venv", "--python", TRANSCRIBE_DEFAULTS["python"], str(d)],
+        step(uvc + ["venv", "--python", _venv_python(), str(d)],
              f"create the environment {as_posix(d)} (Python {TRANSCRIBE_DEFAULTS['python']})", 1800.0)
         st = None
     want = torch_backend() if backend is False else backend
     if st is None:
         st = transcription_status(d)
-    pkgs = [f"whisperx=={TRANSCRIBE_DEFAULTS['whisperx_version']}", *TRANSCRIBE_DEFAULTS["torch_packages"]]
+    if st["problem"] == "architecture":   # its packages cannot be fixed in place: the person deletes it
+        raise SetupError(st["detail"])
+    ct2 = TRANSCRIBE_DEFAULTS["ctranslate2_version"]
+    pkgs = [f"whisperx=={TRANSCRIBE_DEFAULTS['whisperx_version']}", f"ctranslate2=={ct2}",
+            *TRANSCRIBE_DEFAULTS["torch_packages"]]
     install = uvc + ["pip", "install", "--python", str(py)] + (["--torch-backend", want] if want else [])
     wrong_build = bool(want) and st.get("torch") is not None and _torch_build(st.get("torch")) != want
-    if st["problem"] in ("absent", "modules", "version") or wrong_build:
+    wrong_ct2 = st.get("ctranslate2") not in (None, ct2)   # an environment of before the pin
+    if st["problem"] in ("absent", "modules", "version") or wrong_build or wrong_ct2:
         what = f"install whisperx {TRANSCRIBE_DEFAULTS['whisperx_version']} with the {want or 'default'} PyTorch build"
         step(install + (["--reinstall-package", "torch"] if wrong_build else []) + pkgs, what,
              timeouts["install_timeout_s"])

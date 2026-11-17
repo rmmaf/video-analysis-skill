@@ -477,3 +477,144 @@ def test_install_transcription_action(sandbox, tools_ok, capsys, monkeypatch):
     action = line_of(out, "install-transcription")
     assert code == 1 and action.startswith("[MISSING]") and "No interpreter found" in action
     assert action.endswith("-> setup.md, step 6 (transcription)")
+
+
+def test_transcription_built_under_rosetta(sandbox, tools_ok, capsys, monkeypatch):
+    """An x86_64 environment on a Mac: [MISSING] with what to do (delete it, step 6 with the arm64 Homebrew),
+    not "--install-transcription repairs it", which refuses it."""
+    user, chome, home = sandbox
+    detail = (f"{(user / 'whisperx-env').as_posix()} is an x86_64 environment (made by an Intel uv or Python, under "
+              "Rosetta), and PyTorch 2.8 needs arm64 on a Mac: delete that folder and run step 6 again")
+    monkeypatch.setattr(environment, "transcription_status", lambda *a, **k: _transcription(
+        user, ok=False, ready=False, state="broken", problem="architecture", machine="x86_64", detail=detail))
+    code, out = run(capsys, "--install-agents", "--apply-permissions")
+    line = line_of(out, "transcription")
+    assert code == 1 and line.startswith("[MISSING]") and detail in line and "repairs it" not in line
+
+
+def test_transcription_warns_on_another_ctranslate2(sandbox, tools_ok, capsys, monkeypatch):
+    """An environment of before the ctranslate2 pin works: [WARN] with both versions and the repair, exit 0."""
+    from va import TRANSCRIBE_DEFAULTS
+    user, chome, home = sandbox
+    pin = TRANSCRIBE_DEFAULTS["ctranslate2_version"]
+    monkeypatch.setattr(environment, "transcription_status",
+                        lambda *a, **k: _transcription(user, ctranslate2="4.6.0"))
+    code, out = run(capsys, "--install-agents", "--apply-permissions")
+    line = line_of(out, "transcription")
+    assert code == 0 and line.startswith("[WARN]") and out.splitlines()[-1] == "Ready."
+    assert f"with CTranslate2 4.6.0 instead of {pin} (--install-transcription repairs it)" in line
+    monkeypatch.setattr(environment, "transcription_status", lambda *a, **k: _transcription(user, ctranslate2=pin))
+    code, out = run(capsys, "--install-agents", "--apply-permissions", "--json")
+    tx = item_of(json.loads(out), "transcription")
+    assert code == 0 and tx["state"] == "ok" and tx["ctranslate2"] == pin
+
+
+# --- macOS: Homebrew off PATH, numpy/Pillow for this Python, an old Python -----------------------------------
+
+@pytest.fixture
+def brew(tmp_path, monkeypatch):
+    """A Mac whose PATH lacks Homebrew: ffmpeg only in a fake /usr/local/bin."""
+    opt, local = tmp_path / "opt-homebrew-bin", tmp_path / "usr-local-bin"
+    opt.mkdir()
+    local.mkdir()
+    (local / "ffmpeg").write_bytes(b"")
+    monkeypatch.setattr(environment, "BREW_BIN_DIRS", (str(opt), str(local)))
+    monkeypatch.setattr(environment.sys, "platform", "darwin")
+    monkeypatch.setattr(environment.shutil, "which", lambda name: None)
+    return opt, local
+
+
+def test_tool_status_finds_homebrew_off_path(brew, monkeypatch):
+    opt, local = brew
+    runs = []
+
+    def run_version(cmd, **k):
+        runs.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "ffmpeg version 8.0 Copyright (c) 2000-2025\n", "")
+    monkeypatch.setattr(environment.subprocess, "run", run_version)
+    st = environment.tool_status("ffmpeg")
+    exe = os.path.join(str(local), "ffmpeg")
+    assert st["ok"] and st["path"] == exe and runs[0][0] == exe
+    assert st["detail"].startswith(f"ffmpeg 8.0 ({exe}); found in {local}, which is not on PATH")
+    assert f'eval "$({local.as_posix()}/brew shellenv)" to ~/.zprofile' in st["detail"]
+    missing = environment.tool_status("ffprobe")
+    assert (missing["ok"], missing["detail"]) == (False, "ffprobe is not on PATH")
+    monkeypatch.setattr(environment.sys, "platform", "win32")                 # elsewhere: only the PATH
+    assert environment.brew_tool("ffmpeg") is None and not environment.tool_status("ffmpeg")["ok"]
+
+
+def test_find_tool_uses_homebrew_off_path(brew, monkeypatch):
+    from va import ffmpeg_io
+    opt, local = brew
+    monkeypatch.setattr(ffmpeg_io, "_TOOLS", {})
+    monkeypatch.setattr(ffmpeg_io.shutil, "which", lambda name: None)
+    monkeypatch.delenv("VA_FFMPEG", raising=False)
+    monkeypatch.delenv("VA_FFPROBE", raising=False)
+    assert ffmpeg_io.find_tool("ffmpeg") == os.path.join(str(local), "ffmpeg")
+    with pytest.raises(ffmpeg_io.FFmpegNotFound, match="brew install ffmpeg") as exc:
+        ffmpeg_io.find_tool("ffprobe")
+    assert "brew shellenv" in str(exc.value)
+
+
+def test_libs_hint_installs_into_this_python():
+    exe = "/opt/homebrew/opt/python@3.13/bin/python3.13"
+    hint = CLI.libs_hint(mac=True, exe=exe)
+    assert f'"{exe}" -m pip install --user --break-system-packages numpy Pillow' in hint
+    assert f'"{exe}" -m venv' in hint and "brew install numpy" not in hint and hint.startswith(f" (for this Python, {exe}:")
+    assert CLI.libs_hint(mac=False) == " (python -m pip install numpy Pillow)"
+    assert sys.executable in CLI.libs_hint(mac=True)
+
+
+def test_old_python_stops_check_environment_and_its_old_name(monkeypatch, capsys):
+    import runpy
+    monkeypatch.setattr(sys, "version_info", (3, 9, 6, "final", 0))
+    monkeypatch.setattr(environment.sys, "platform", "darwin")
+    for script in ("check_environment.py", "verificar_ambiente.py"):
+        monkeypatch.setattr(sys, "argv", [str(SKILL / script), "--json"])
+        with pytest.raises(SystemExit) as stop:
+            runpy.run_path(str(SKILL / script), run_name="__main__")
+        out = capsys.readouterr().out.strip()
+        assert stop.value.code == 1 and len(out.splitlines()) == 1
+        assert out.startswith("video-analysis needs Python 3.10 or newer, and this is Python 3.9.6 (")
+        assert out.endswith("brew install python, with /opt/homebrew/bin first on PATH, then run it with python3 again")
+
+
+# --- permissions outside the home folder (macOS and Linux) -----------------------------------------------------
+
+@pytest.fixture
+def posix_paths(monkeypatch):
+    import posixpath
+    monkeypatch.setattr(environment, "_ospath", posixpath)
+
+
+def test_rules_for_a_workspace_on_an_external_disk(posix_paths, tmp_path):
+    rules = environment.workspace_rules("/Volumes/SSD/video-analysis", uhome="/Users/ana")
+    assert rules == [f"{t}(//Volumes/SSD/video-analysis/**)" for t in ("Read", "Edit", "Write")]
+    assert environment.workspace_rules("/Users/ana/video-analysis", uhome="/Users/ana") == [
+        f"{t}(~/video-analysis/**)" for t in ("Read", "Edit", "Write")]
+    chome = tmp_path / "claude"
+    chome.mkdir()
+    settings = chome / "settings.json"
+    settings.write_text(json.dumps({"permissions": {"allow": rules}}), encoding="utf-8")
+    st = environment.permissions_status("/Volumes/SSD/video-analysis", chome, uhome="/Users/ana")
+    assert st["ok"] and st["covered"]["Read"] == "Read(//Volumes/SSD/video-analysis/**)"
+    # an ancestor in the absolute spelling covers it; a single slash is relative to the settings file
+    settings.write_text(json.dumps({"permissions": {"allow": ["Read(//Volumes/**)",
+                                                              "Edit(/Volumes/SSD/video-analysis/**)"]}}), encoding="utf-8")
+    st = environment.permissions_status("/Volumes/SSD/video-analysis", chome, uhome="/Users/ana")
+    assert st["covered"]["Read"] == "Read(//Volumes/**)" and st["missing"] == ["Edit", "Write"]
+    settings.write_text(json.dumps({"permissions": {"allow": ["Read(~/video-analysis/**)"],
+                                                    "deny": ["Edit(//Volumes/SSD/**)"]}}), encoding="utf-8")
+    assert environment.permissions_status("/Volumes/SSD/video-analysis", chome, uhome="/Users/ana")["blocked"] == [
+        "deny: Edit(//Volumes/SSD/**)"]
+
+
+def test_apply_permissions_without_rules_is_an_error(sandbox, tools_ok, capsys, monkeypatch):
+    """A folder no rule can name (a network path) must not read as "already in place"."""
+    user, chome, home = sandbox
+    monkeypatch.setattr(environment, "workspace_rules", lambda *a, **k: [])
+    code, out = run(capsys, "--apply-permissions", "--install-agents")
+    line = line_of(out, "apply-permissions")
+    assert code == 1 and line.startswith("[MISSING]") and "no permission rule can name" in line
+    assert "already" not in line and not (chome / "settings.json").exists()
+    assert "--apply-permissions merges" not in line_of(out, "permissions")

@@ -1606,3 +1606,39 @@ def test_speaker_shots_refusals_and_failures(sb, capsys, whisperx, shots):
     assert env["errors"][0]["vid"] == "v2" and "speaker shots" in env["errors"][0]["detail"]
     code, env, _ = run_cli(capsys, "--request", write_request(sb, [broken]), "--speaker-shots")
     assert code == 4 and env["videos"] == [] and "no screenshot" in env["error"]["detail"]
+
+
+def test_old_python_gets_the_missing_dependency_envelope(monkeypatch, capsys):
+    """On a Python older than 3.10 (Apple's /usr/bin/python3 is 3.9.6), prepare.py stops before importing the
+    modules written for 3.10, with the usual stdout contract: one JSON line, missing_dependency, exit 3."""
+    import runpy
+    script = Path(prepare.__file__)
+    monkeypatch.setattr(sys, "version_info", (3, 9, 6, "final", 0))
+    monkeypatch.setattr(sys, "argv", [str(script), "--request", "x.md", "--estimate"])
+    with pytest.raises(SystemExit) as stop:
+        runpy.run_path(str(script), run_name="__main__")
+    out, err = capsys.readouterr()
+    assert stop.value.code == 3
+    env = json.loads(out.strip().splitlines()[-1])
+    assert list(env) == ["ok", "error", *ENVELOPE_KEYS[1:]]
+    assert env["ok"] is False and env["error"]["code"] == "missing_dependency" and env["mode"] == "estimate"
+    assert env["error"]["detail"].startswith("video-analysis needs Python 3.10 or newer, and this is Python 3.9.6")
+    assert env["error"]["detail"].endswith(": run /video-analysis setup") and "3.9.6" in err
+    assert (env["videos"], env["workflow_args"], env["errors"], env["warnings"]) == ([], None, [], [])
+    assert env["script_path"] == prepare.SCRIPT_PATH and env["version"] == prepare.va.VERSION
+
+
+@pytest.mark.parametrize("argv, mode", [
+    (["--retomar", "ultimo"], "resume"), (["--resume=latest"], "resume"), (["--gc=30"], "gc"), (["--gc"], "gc"),
+    (["--request", "x.md", "--estimar"], "estimate"), (["--request=x.md", "--speaker-shots=v1"], "speaker_shots"),
+    (["--request", "x.md"], "prepare"),
+])
+def test_old_python_envelope_names_the_mode_of_every_alias(monkeypatch, capsys, argv, mode):
+    import runpy
+    script = Path(prepare.__file__)
+    monkeypatch.setattr(sys, "version_info", (3, 9, 6, "final", 0))
+    monkeypatch.setattr(sys, "argv", [str(script), *argv])
+    with pytest.raises(SystemExit) as stop:
+        runpy.run_path(str(script), run_name="__main__")
+    out, _ = capsys.readouterr()
+    assert stop.value.code == 3 and json.loads(out.strip().splitlines()[-1])["mode"] == mode

@@ -1,7 +1,7 @@
 # Problems: symptom, cause and what to do
 
 `prepare.py` writes its progress to `<home>\logs\` (`<home>` is the central folder,
-`%USERPROFILE%\video-analysis` by default; its concrete path is the `home` of the `prepare.py` JSON) and
+`%USERPROFILE%\video-analysis` by default, `~/video-analysis` on macOS; its concrete path is the `home` of the `prepare.py` JSON) and
 its state to `runs\<run_id>\status.json`. Its errors come out as `{"ok": false, "error": {"code", "detail"}}`, with exit
 code `2` (input), `3` (environment), `4` (a video failed), `130` (interrupted) or `1` (internal error);
 the table of the `error.code` values is in [`contracts.md`](contracts.md), section 2. An error in the
@@ -61,7 +61,9 @@ are those of `SKILL.md`, with the same pre-approved prefix.
   skill. `missing_dependency` starting with `webcam_timeline: on` is the DeepFace environment, which only
   `on` requires: step 8 of the setup creates it, or run without the option (`auto` goes on without it).
   `missing_dependency` starting with `the transcription environment does not work` is the WhisperX
-  environment, needed by a video without subtitles: step 6 of the setup repairs it.
+  environment, needed by a video without subtitles: step 6 of the setup repairs it. `missing_dependency`
+  starting with `video-analysis needs Python 3.10 or newer` is the `python3` that ran it (Apple's
+  `/usr/bin/python3` is 3.9): "macOS", below.
 
 ### A video failed (exit code 4)
 
@@ -283,6 +285,85 @@ are those of `SKILL.md`, with the same pre-approved prefix.
   deleting anything. A `.vtt` the person wrote or edited is never replaced: on one the skill made, the
   warning `… was made by the skill but changed since: kept as it is` says so; delete or rename it.
 
+## macOS
+
+What follows applies to a Mac with Apple silicon (an M4 Max, say). Every `python` is `python3` there.
+
+### `video-analysis needs Python 3.10 or newer, and this is Python 3.9…`
+
+- **Cause:** `python3` is Apple's `/usr/bin/python3` (3.9, from the Command Line Tools), because Homebrew's
+  is not installed or not first on PATH. The verifier prints this one line and exits 1; `prepare.py`
+  exits 3 with `missing_dependency` and `home: null`.
+- **What to do:** `brew install python`, Homebrew on PATH (next item), a new terminal, and a reopened
+  Claude Code. `command -v python3` should then print `/opt/homebrew/bin/python3`.
+
+### `brew` not found, or ffmpeg `found in /opt/homebrew/bin, which is not on PATH`
+
+- **Cause:** Homebrew was installed, but the shell never ran its `shellenv`, so `/opt/homebrew/bin` is not
+  on the PATH that Claude Code's shell gets. The skill finds ffmpeg, ffprobe and uv there anyway (and puts
+  that ffmpeg first on the PATH of the transcription, whose audio decoder runs a bare `ffmpeg`), but
+  `python3` stays Apple's 3.9.
+- **What to do:** the person runs `echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile`, opens
+  a new terminal and reopens Claude Code.
+
+### numpy or Pillow `[MISSING]` although they were installed
+
+- **Cause:** they went into another Python: `brew install numpy pillow` (formulae that may belong to
+  another Python version), or a `pip install` with a different `python3`.
+- **What to do:** the command the verifier prints in the item, which names the Python being checked:
+  `"<that python3>" -m pip install --user --break-system-packages numpy Pillow` (Homebrew's Python refuses
+  a plain `pip install`), or the virtual environment it suggests (setup step 2).
+
+### `CERTIFICATE_VERIFY_FAILED` when the setup downloads punkt or the YuNet weights
+
+- **Cause:** the python.org Python ships without a CA bundle until its `Install Certificates.command` runs.
+  The setup stops at the first certificate error, without retrying, and the detail says what to run.
+- **What to do:** run `/Applications/Python 3.X/Install Certificates.command` (the version the detail
+  names), or use Homebrew's Python, then the setup again. Behind a proxy that inspects TLS, "The setup's
+  download stalls or fails" (above) applies as well.
+
+### The transcription item says `is an x86_64 environment`
+
+- **Cause:** the environment was made by an Intel uv or Python (Homebrew in `/usr/local`, under Rosetta).
+  PyTorch 2.8 has no Intel macOS build, and installing into it again cannot change its architecture, so
+  `--install-transcription` refuses it.
+- **What to do:** delete the folder the detail names (`~/whisperx-env` by default), make sure `uv` and
+  `python3` come from `/opt/homebrew` (`file "$(command -v uv)"` says `arm64`), and run step 6 of the setup
+  again. The setup asks uv for the arm64 Python by name, so a new environment comes out arm64.
+
+### `alignment on mps failed (…): retrying on the cpu` in `transcribe.log`
+
+- **Cause:** the word times (wav2vec2) or the speakers (pyannote; `diarization on mps failed (…)`) run on
+  the GPU through MPS, and an operator MPS lacks, or its memory, made that phase fail. The phase is retried
+  once on the CPU: the result is the same, only slower. `asr.json` then has `align_device: "cpu"`, and the
+  speakers file `device: "cpu"`. If the CPU fails too, the usual `alignment skipped` or `speakers not
+  separated` warning follows.
+- **What to do:** nothing: it costs only time. If it happens on every video, the log line names the
+  error to report. Whether PyTorch sees MPS at all is the `mps` field of the setup's proof (step 6).
+
+### Trying the speech on the GPU (`VA_ASR_DEVICE=mps`), and going back
+
+- **What it is:** experimental. With `VA_ASR_DEVICE=mps`, Whisper runs on CTranslate2 4.9.0's Metal
+  backend (`float16`) instead of the performance cores (`int8`). When the model does not load there, runs
+  out of memory at batch 1, or fails in any other way (an `MPSGraph` error, in the speech or in the
+  language detection), the run falls back to `cpu`/`int8` with the warning `ASR on mps failed (…):
+  cpu/int8`. It applies to `transcribe.py --device auto` (what `prepare.py` uses); an explicit `--device`
+  keeps the speech where it says. `asr.json`'s `device` says which one transcribed.
+- **To try it:** `"env": {"VA_ASR_DEVICE": "mps"}` in `~/.claude/settings.json`, or `export
+  VA_ASR_DEVICE=mps` before starting `claude`; then reopen Claude Code (setup step 6). Only videos
+  transcribed from then on use it: the device is not in the cache key, so a video already transcribed is
+  reused as it is.
+- **To go back:** remove the variable from the `env` block (or `unset VA_ASR_DEVICE`) and reopen Claude
+  Code. To transcribe a video again on the CPU, "To transcribe a video again from scratch" (above).
+
+### Files named `._<video>` on an external disk
+
+- **Cause:** macOS writes an AppleDouble companion (`._reuniao.mp4`, `._reuniao.vtt`) next to each file on
+  a disk without its metadata (exFAT, FAT, some network shares). They are not media.
+- **What to do:** nothing: the folder scan, the subtitle lookup and a glob such as `*.mp4` skip names that
+  start with `._`. A `._` file named explicitly, or a pattern that itself starts with `._`, is taken as
+  asked, and fails as a video. `dot_clean -m <folder>` removes them.
+
 ## Workflow and agents
 
 ### Permission prompt for every frame or report
@@ -291,7 +372,10 @@ are those of `SKILL.md`, with the same pre-approved prefix.
   Claude Code has not reread `settings.json` yet. `prepare.py` flags it with `env.permissions_ok: false`.
 - **What to do:** `/video-analysis setup` and, afterwards, a reopened Claude Code. If it continues with the
   rules written, it is the spelling: both forms (`~/…` and `//c/…`) stay until the first analysis shows
-  which one works.
+  which one works. On macOS a central folder outside the home (`/Volumes/SSD/video-analysis`) gets
+  `//Volumes/SSD/video-analysis/**`, with two slashes; a network path gets no rule, and
+  `--apply-permissions` says so (`no permission rule can name …`): add the rules by hand or use a local
+  disk.
 
 ### Permission prompt for `prepare.py` itself or for the verifier
 

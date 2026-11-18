@@ -495,8 +495,3 @@ video-analysis/
 ├── docs/                    plan, specifications and the earlier prototype (prior-art)
 └── tests/                   pytest, synthetic videos, workflow harness and test data
 ```
-
-## License
-
-Private repository, for personal use. No license is defined: without a `LICENSE` file, all rights remain
-with the author.

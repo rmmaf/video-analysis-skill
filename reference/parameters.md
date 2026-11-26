@@ -54,7 +54,7 @@ spans also fall in the right place in a variable frame rate (VFR) recording, suc
 that only gets frames when the screen changes. There the probe's seeks miss, because OpenCV seeks by
 counting frames: the probe checks where each one landed and goes through the video from the start for
 the parts left without a sample. A probe that still does not cover the video counts for nothing, and the
-full scan runs. The timeline stays in the video's cache (`webcam-<h8>\`), and every later run reuses it,
+full scan runs. The timeline stays in the video's cache (`webcam-<h8>/`), and every later run reuses it,
 also with `range` and `max_batches`. Its spans enter the frames key like an `ignore_timeline` file, so an
 empty timeline changes nothing. The environment must be the setup's: deepface 0.0.104 and the YuNet
 weights with their SHA-256, both in the timeline's cache key, so a timeline is never reused across
@@ -130,7 +130,7 @@ How a video is transcribed:
    silence. Below a probability of 0.6, a warning suggests `audio_language`.
 3. **Speech.** In blocks of about 10 minutes (a video of up to 15 minutes is one block), each cut at the
    quietest half second within 30 s of its boundary, so that no word is cut in two. Each block is a
-   checkpoint (`partial\chunk_NNN.json`): an interrupted transcription resumes at the first block missing.
+   checkpoint (`partial/chunk_NNN.json`): an interrupted transcription resumes at the first block missing.
    On a CPU, `int8` with batch 8; on an NVIDIA GPU, `float16` with batch 16, halved at each out-of-memory
    error, then `int8_float16`, before giving up.
 4. **Words.** The alignment model of the language (wav2vec2; the Portuguese one comes with the setup, the
@@ -309,7 +309,7 @@ subtitles they come from are redone):
 
 - `scripts/explain.py --frames-json <frames.json> --frame F0042` builds a "why this frame was kept"
   panel; with `--top-ignored 12`, the largest changes treated as cursor or same (false-negative
-  candidates). The `frames.json` is in `cache\<slug>-<fp8>\frames-<h8>\`.
+  candidates). The `frames.json` is in `cache/<slug>-<fp8>/frames-<h8>/`.
 - `scripts/calibrate.py <video> [--start --end] --grid "k=v1,v2;k2=…"` sweeps parameters without decoding
   again and compares counts; it is used to recalibrate the defaults.
 - `scripts/prepare.py --gc 30` deletes from the cache the videos unused for more than 30 days and shows

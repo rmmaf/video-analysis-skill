@@ -1,0 +1,111 @@
+# The pytest suite on Windows, macOS and Linux.
+# tests/harness.mjs (the workflow, with simulated agents) stays out: Node.js is not a requirement.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels its older run; every push to main runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows, Python 3.14
+            os: windows-latest
+            python: "3.14"
+            numpy: numpy
+            pillow: Pillow
+          - name: macOS (Apple silicon), Python 3.14
+            os: macos-latest
+            python: "3.14"
+            numpy: numpy
+            pillow: Pillow
+          - name: Ubuntu, Python 3.14
+            os: ubuntu-latest
+            python: "3.14"
+            numpy: numpy
+            pillow: Pillow
+          - name: Ubuntu, minimums (Python 3.10, Pillow 9.1, numpy 1.24)
+            os: ubuntu-latest
+            python: "3.10"
+            numpy: numpy==1.24.*
+            pillow: Pillow==9.1.*
+          # No setup-python: the system Python, with numpy, Pillow and pytest from apt.
+          - name: Ubuntu 24.04, apt packages only
+            os: ubuntu-24.04
+            apt: python3-numpy python3-pil python3-pytest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python ${{ matrix.python }}
+        if: matrix.python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install ffmpeg (choco)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+
+      - name: Install ffmpeg (brew)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+
+      - name: Install ffmpeg (apt)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install numpy, Pillow and pytest (apt)
+        if: matrix.apt
+        run: sudo apt-get install -y ${{ matrix.apt }}
+
+      - name: Install numpy, Pillow and pytest (pip)
+        if: matrix.python
+        run: python -m pip install "${{ matrix.numpy }}" "${{ matrix.pillow }}" pytest
+
+      - name: Show the versions
+        shell: bash
+        env:
+          PYTHON: ${{ matrix.python && 'python' || 'python3' }}
+          APT_ONLY: ${{ matrix.apt && '1' || '' }}
+        run: |
+          "$PYTHON" - <<'EOF'
+          import os, shutil, subprocess, sys
+          import numpy, PIL, pytest
+          print(sys.executable, sys.version.split()[0])
+          for tool in ("ffmpeg", "ffprobe"):
+              path = shutil.which(tool)
+              if not path:
+                  sys.exit(f"{tool} is not on the PATH")
+              version = subprocess.run([path, "-version"], capture_output=True, text=True).stdout
+              print(version.splitlines()[0], " ", path)
+          for module in (numpy, PIL, pytest):
+              print(module.__name__, module.__version__, " ", os.path.dirname(module.__file__))
+              if os.environ["APT_ONLY"] and not module.__file__.startswith("/usr/lib/python3/dist-packages/"):
+                  sys.exit(f"{module.__name__} does not come from apt")
+          EOF
+
+      - name: Run the tests
+        if: matrix.python
+        run: python -B -m pytest -q
+
+      - name: Run the tests (system Python)
+        if: ${{ !matrix.python }}
+        run: python3 -B -m pytest -q

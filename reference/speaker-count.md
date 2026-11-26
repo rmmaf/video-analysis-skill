@@ -2,7 +2,7 @@
 
 When the person answers `Não sei` in the form of step 4 of [`SKILL.md`](../SKILL.md), the skill does not
 leave the count to pyannote alone: `prepare.py --speaker-shots` takes 12 screenshots spread over the video
-(seconds; `cache\<slug>-<fp8>\shots-<h8>\`), and an agent reads them and answers with a range, which becomes
+(seconds; `cache/<slug>-<fp8>/shots-<h8>/`), and an agent reads them and answers with a range, which becomes
 that video's `num_speakers`. The minimum and the maximum guide pyannote without forcing a single number.
 
 **How to call it.** One Agent per video, all in the same message: `subagent_type: "general-purpose"`,

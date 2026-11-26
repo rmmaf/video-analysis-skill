@@ -1,12 +1,14 @@
 # video-analysis
 
+[![tests](https://github.com/rmmaf/video-analysis-skill/actions/workflows/tests.yml/badge.svg)](https://github.com/rmmaf/video-analysis-skill/actions/workflows/tests.yml)
+
 A Claude Code skill that analyses videos frame by frame against the subtitles: screen recordings, recorded
 meetings (Teams, Zoom) and lectures with slides. You give an objective, such as "list the decisions and
 who is responsible" or "what is on the screen when they talk about the error?", and you get a report per
 video in which each finding points to the frame and the time that support it.
 
-**Version 1.1.0** · Windows (the local transcription also on macOS with Apple silicon) · Python 3.10+ ·
-ffmpeg · Claude Code with the Workflow tool
+**Version 1.2.0** · Windows, macOS and Linux · Python 3.10+ · ffmpeg 5.1+ · Claude Code with the Workflow
+tool
 
 The command-line options, the request file (`request.md`), the `resume` keyword and the file names of the
 skill are in English. The Portuguese names of the earlier version still work (`--max-lotes`, `--papeis`,
@@ -23,7 +25,7 @@ and the templates of the reports stay in Portuguese. Reports are written in the 
 - Without subtitles, transcribes the video on the machine with WhisperX, after asking how many people
   speak: the speech, the time of each word and, with a free Hugging Face token, who speaks. The `.vtt`
   stays next to the video, so the next analysis asks nothing. No Docker: a Python environment of its own,
-  on Windows and on Macs with Apple silicon.
+  on Windows, on Linux and on Macs with Apple silicon.
 - Splits each video into batches of up to 20 frames. A curator (Opus) plans the batches and an analyst
   (Sonnet) examines each one, in series.
 - Delivers a `relatorio.md` per video and, with two or more videos, a combined report.
@@ -88,21 +90,43 @@ above 800, it refuses the run.
 
 | item | version | what for |
 |---|---|---|
-| Windows | developed on Windows 11 | the skill's paths, permissions and messages are for Windows; the local transcription also runs on macOS with Apple silicon |
 | Claude Code | with skills and the Workflow tool | without Workflow, the skill runs the same loop with the Agent tool ([`reference/without-workflow.md`](reference/without-workflow.md)) |
-| Python | 3.10 or newer (tested on 3.14) | deterministic layer |
-| ffmpeg and ffprobe | on the PATH (tested on 8.1) | probing and frame extraction |
-| numpy and Pillow | any recent version | frame comparison and images; the skill itself does not use OpenCV |
-| WhisperX | 3.8.6 with PyTorch 2.8, in its own Python 3.12 environment (about 6.5 GB with the models, without NVIDIA) | the transcription of a video without subtitles; the setup creates it with uv |
-| uv | any recent version | creates that environment and brings its Python; the setup installs it when missing |
+| Python | 3.10 or newer (the CI runs 3.10, 3.12 and 3.14) | deterministic layer: `python` on Windows, `python3` on macOS and Linux |
+| ffmpeg and ffprobe | 5.1 or newer, on the PATH (tested on 8.1) | probing and frame extraction |
+| numpy | 1.24 or newer (the oldest the CI runs) | frame comparison |
+| Pillow | 9.1 or newer | images and contact sheets; the skill itself does not use OpenCV |
+| WhisperX | 3.8.6 with PyTorch 2.8, in its own Python 3.12 environment (about 6.5 GB with the models, without NVIDIA) | the transcription of a video without subtitles; the setup creates it with uv. Not on Intel Macs |
+| uv | any recent version | creates that environment and brings its Python |
 | Hugging Face token (optional) | a free Read token, with the conditions of `pyannote/speaker-diarization-community-1` accepted | separating the speakers in the transcription |
 | DeepFace (optional) | 0.0.104, in its own Python environment (about 350 MB) | the webcam timeline; the setup creates it if you want it |
-| Node.js | 24 | only for the workflow tests |
-| pytest | any recent version | only for the tests |
+| pytest | any recent version | only for the tests ([Tests](#tests) says how to install it) |
+| Node.js (optional) | 24 | only for `tests/harness.mjs`, which the CI does not run |
+
+The verifier, `check_environment.py`, checks the versions of Python, ffmpeg and Pillow.
+
+### By system
+
+The setup gives the commands for the system it runs on ([`setup.md`](setup.md), step 1); a command with
+`sudo` you run in your own terminal.
+
+| system | Python, ffmpeg, numpy, Pillow and uv | notes |
+|---|---|---|
+| Windows (x64) | `winget install --id Python.Python.3.12 -e` and `winget install --id Gyan.FFmpeg -e`; numpy and Pillow with pip; uv by the setup, with pip | |
+| macOS | `brew install python ffmpeg uv numpy pillow` ([Homebrew](https://brew.sh)) | Apple's own `/usr/bin/python3` (3.9) is too old. Intel Macs have no local transcription |
+| Ubuntu 24.04+, Debian 12+ | `sudo apt install ffmpeg python3-numpy python3-pil`; uv with [its installer](https://docs.astral.sh/uv/getting-started/installation/) | also `python3-venv`, for the optional DeepFace (on 22.04 too) |
+| Ubuntu 22.04 | an ffmpeg 5.1+ from outside apt; numpy and Pillow with pip; uv with its installer | apt's ffmpeg (4.4) and Pillow (9.0) are too old |
+| Fedora | ffmpeg from [RPM Fusion](https://rpmfusion.org/Howto/Multimedia); `sudo dnf install python3-numpy python3-pillow uv` | Fedora's own `ffmpeg-free` lacks full H.264 support |
+| Arch | `sudo pacman -S python-numpy python-pillow ffmpeg uv` | |
 
 ## Installation
 
 1. Clone the repository into the Claude Code skills folder. The folder must be named `video-analysis`:
+
+   ```bash
+   git clone https://github.com/rmmaf/video-analysis-skill.git ~/.claude/skills/video-analysis
+   ```
+
+   On Windows, in PowerShell:
 
    ```powershell
    git clone https://github.com/rmmaf/video-analysis-skill.git "$env:USERPROFILE\.claude\skills\video-analysis"
@@ -118,18 +142,19 @@ above 800, it refuses the run.
    Pillow, the central folder, the agents and the workflow, the permission rules, the transcription
    environment and, if you want them, the Hugging Face token that separates the speakers and the DeepFace
    environment of the webcam timeline. Nothing is installed or written without your confirmation, and the
-   token you save yourself, in your own terminal. Outside the central folder, it writes to these places:
+   token you save yourself, in your own terminal. Outside the central folder, it writes to these places
+   (`~` is your user folder; on Windows, `C:\Users\<you>`):
 
    | what | where | how to undo |
    |---|---|---|
-   | the curator and analyst roles | `%USERPROFILE%\.claude\agents\video-analysis-*.md` | delete the two files |
-   | the saved workflow | `%USERPROFILE%\.claude\workflows\video-analysis.js` | delete the file |
-   | the permission rules for the central folder | `%USERPROFILE%\.claude\settings.json` | restore the `settings.json.bak-<date>` |
-   | the transcription environment | `%USERPROFILE%\whisperx-env\` | delete the folder |
-   | uv, its Python 3.12 and its package cache | `pip install --user uv`; `uv python dir`; `uv cache dir` | `uv python uninstall 3.12`, `uv cache clean`, `python -m pip uninstall uv` |
-   | the Whisper, alignment and pyannote models | `%USERPROFILE%\.cache\huggingface\hub\` | delete their `models--*` folders |
-   | the Hugging Face token (you save it) | `%USERPROFILE%\.cache\huggingface\token` | `hf auth logout` |
-   | the DeepFace environment and the YuNet weights | `%USERPROFILE%\deepface-env\` and `%USERPROFILE%\.deepface\weights\face_detection_yunet_2023mar.onnx` | delete the folder and the file |
+   | the curator and analyst roles | `~/.claude/agents/video-analysis-*.md` | delete the two files |
+   | the saved workflow | `~/.claude/workflows/video-analysis.js` | delete the file |
+   | the permission rules for the central folder | `~/.claude/settings.json` | restore the `settings.json.bak-<date>` |
+   | the transcription environment | `~/whisperx-env/` | delete the folder |
+   | uv, its Python 3.12 and its package cache | `pip install --user uv`, when pip accepts it; `uv python dir`; `uv cache dir` | `uv python uninstall 3.12`, `uv cache clean`, `python -m pip uninstall uv` (`python3` on macOS and Linux) |
+   | the Whisper, alignment and pyannote models | `~/.cache/huggingface/hub/` | delete their `models--*` folders |
+   | the Hugging Face token (you save it) | `~/.cache/huggingface/token` | `hf auth logout` |
+   | the DeepFace environment and the YuNet weights | `~/deepface-env/` and `~/.deepface/weights/face_detection_yunet_2023mar.onnx` | delete the folder and the file |
 
 3. Close and reopen Claude Code, so that it loads the agents and the workflow. Start with a short
    analysis, with `--max-batches 1`: it confirms that the run does not ask for permission at every frame.
@@ -137,9 +162,11 @@ above 800, it refuses the run.
 **To update**, pull the changes and run the setup again, which copies the agents and the workflow again
 when they have changed:
 
-```powershell
-git -C "$env:USERPROFILE\.claude\skills\video-analysis" pull
+```bash
+git -C ~/.claude/skills/video-analysis pull
 ```
+
+On Windows, in PowerShell: `git -C "$env:USERPROFILE\.claude\skills\video-analysis" pull`.
 
 ## Usage
 
@@ -147,8 +174,8 @@ In the Claude Code conversation:
 
 ```text
 /video-analysis "C:\Videos\reuniao.mp4" Liste as decisões tomadas e quem ficou responsável por cada uma
-/video-analysis "C:\Videos\aulas" Resuma cada aula em passos numerados --max-batches 2
-/video-analysis "C:\Videos\demo.mp4" Que erro aparece na tela quando falam do deploy? --range 00:10:00-00:20:00
+/video-analysis "~/Movies/aulas" Resuma cada aula em passos numerados --max-batches 2
+/video-analysis "~/Videos/demo.mp4" Que erro aparece na tela quando falam do deploy? --range 00:10:00-00:20:00
 /video-analysis resume
 ```
 
@@ -201,37 +228,48 @@ When to change each one and what it costs: [`reference/parameters.md`](reference
 ### Outputs
 
 ```text
-%USERPROFILE%\video-analysis\
-├── cache\<slug>-<fp8>\              subtitles, frames, batches, webcam timeline and transcription of each video, reused across runs
-├── runs\<YYYYMMDD-HHMMSS>-<slug>\
+~/video-analysis/
+├── cache/<slug>-<fp8>/              subtitles, frames, batches, webcam timeline and transcription of each video, reused across runs
+├── runs/<YYYYMMDD-HHMMSS>-<slug>/
 │   ├── relatorio.md                 combined report, with 2+ videos
-│   └── v1\                          the video's relatorio.md, ledger.md, prompts\ and reports\
-├── requests\                        request of the analysis in progress
-├── roles\                           copy of the roles for inline mode
-└── logs\
+│   └── v1/                          the video's relatorio.md, ledger.md, prompts/ and reports/
+├── requests/                        request of the analysis in progress
+├── roles/                           copy of the roles for inline mode
+└── logs/
 ```
 
-The agents only read the cache and only write to `runs\`. Moving, renaming or editing a video causes it
-to be extracted again (and transcribed again, if its `.vtt` stays behind); changing the objective does
-not. The `.vtt` that the skill generates goes next to the video, with a copy in the run (`v1\legenda.vtt`),
-and is never written over a file of yours.
+The central folder is `~/video-analysis` on the three systems (on Windows, `C:\Users\<you>\video-analysis`);
+`VIDEO_ANALYSIS_HOME` moves it, and `python3 check_environment.py --paths` (`python` on Windows), run from
+the skill folder, prints where it is. The agents
+only read the cache and only write to `runs/`. Moving, renaming or editing a video causes it to be
+extracted again (and transcribed again, if its `.vtt` stays behind); changing the objective does not. The
+`.vtt` that the skill generates goes next to the video, with a copy in the run (`v1/legenda.vtt`), and is
+never written over a file of yours.
 
 ## Command-line tools
 
-For manual use, without Claude, from the skill folder:
+For manual use, without Claude, from the skill folder (on Windows, `python` instead of `python3`, with
+Windows paths):
 
-```powershell
-python scripts/prepare.py "C:\Videos\reuniao.mp4"                      # only warms up the cache
-python scripts/prepare.py --gc 30                                       # deletes from the cache the videos unused for 30 days
-python scripts/explain.py --frames-json <frames.json> --frame F0042     # why this frame was kept
-python scripts/calibrate.py "C:\Videos\reuniao.mp4" --grid "sensitivity=normal,high"   # compares parameters
-python scripts/prepare.py "C:\Videos\reuniao.mp4" --num-speakers 3     # transcribes it when there is no .vtt, then warms up the cache
-python check_environment.py                                            # checks the environment, without changing anything
-%USERPROFILE%\deepface-env\Scripts\python scripts/webcam_mask.py "C:\Videos\reuniao.mp4" --timeline webcam.json   # webcam over time by hand (prepare.py already runs it)
+```bash
+python3 scripts/prepare.py ~/Videos/reuniao.mp4                       # only warms up the cache
+python3 scripts/prepare.py --gc 30                                    # deletes from the cache the videos unused for 30 days
+python3 scripts/explain.py --frames-json <frames.json> --frame F0042  # why this frame was kept
+python3 scripts/calibrate.py ~/Videos/reuniao.mp4 --grid "sensitivity=normal,high"   # compares parameters
+python3 scripts/prepare.py ~/Videos/reuniao.mp4 --num-speakers 3      # transcribes it when there is no .vtt, then warms up the cache
+python3 check_environment.py                                          # checks the environment, without changing anything
+~/deepface-env/bin/python scripts/webcam_mask.py ~/Videos/reuniao.mp4 --timeline webcam.json   # webcam over time by hand (prepare.py already runs it)
 ```
 
-`python scripts/prepare.py --help` lists all the options. The `frames.json` of a video is in
-`cache\<slug>-<fp8>\frames-<h8>\`.
+On Windows, the Python of the DeepFace environment is in its `Scripts` folder; in PowerShell, the last
+line is:
+
+```powershell
+& "$env:USERPROFILE\deepface-env\Scripts\python.exe" scripts/webcam_mask.py "C:\Videos\reuniao.mp4" --timeline webcam.json
+```
+
+`python3 scripts/prepare.py --help` lists all the options. The `frames.json` of a video is in
+`cache/<slug>-<fp8>/frames-<h8>/`.
 
 ## Frame reduction on two meetings
 
@@ -338,22 +376,35 @@ doubtful, but their content appears in a frame of the other run at most 2 s away
 
 ## Tests
 
-Run from the skill folder:
+Run from the skill folder (on Windows, `python` instead of `python3`):
 
-```powershell
-python -B -m pytest -q                  # unit tests and synthetic videos
-python -B -m pytest -q --run-real       # includes the real videos of tests/fixtures.json
-python -B -m pytest -q --run-slow       # includes the performance tests
-node tests/harness.mjs                  # the workflow, with simulated agents
-python tests/check_run.py <run_dir>     # checks a finished run
+```bash
+python3 -B -m pytest -q                  # unit tests and synthetic videos
+python3 -B -m pytest -q --run-real       # includes the real videos of tests/fixtures.json
+python3 -B -m pytest -q --run-slow       # includes the performance tests
+python3 tests/check_run.py <run_dir>     # checks a finished run
+node tests/harness.mjs                   # optional: the workflow, with simulated agents (Node.js 24)
 ```
 
+- **pytest.** On Windows, `python -m pip install pytest`. On Linux, the system's package: `python3-pytest`
+  with apt or dnf, `python-pytest` with pacman. With Homebrew's Python, which refuses pip outside a
+  virtual environment, a virtual environment that also sees Homebrew's numpy and Pillow:
+  `python3 -m venv --system-site-packages ~/va-tests && ~/va-tests/bin/python -m pip install pytest`, and
+  then `~/va-tests/bin/python -B -m pytest -q`.
+- **CI.** `.github/workflows/tests.yml` runs `python -B -m pytest -q` on every push to `main` and on
+  every pull request, in five jobs: Windows, macOS (Apple silicon) and Ubuntu
+  with Python 3.14; Ubuntu with the minimums (Python 3.10, Pillow 9.1 and numpy 1.24); and Ubuntu 24.04
+  with only its apt packages (`python3-numpy`, `python3-pil`, `python3-pytest`) and its own Python. The
+  badge at the top shows the result on `main`. The CI runs neither the harness nor the `--run-real` and
+  `--run-slow` tests.
 - `-B` and `pytest.ini` keep `__pycache__` and `.pytest_cache` out of the skill folder.
 - `--run-real` and `--run-slow` can also be turned on with `VA_RUN_REAL=1` and `VA_RUN_SLOW=1`.
 - The synthetic videos (`tests/synth.py`) are generated with Pillow and x264, with ground truth, and are
-  cached in `%TEMP%\va-synth-v<N>` (or in `VA_SYNTH_DIR`).
-- `harness.mjs` runs `workflow/video-analysis.js` with simulated agents: happy path, a batch that skips
-  frames, failures, resume, several videos and the two role modes. It has no dependencies.
+  cached in `va-synth-v<N>`, in the system's temporary folder (or in `VA_SYNTH_DIR`). Their tests are
+  skipped when ffmpeg has no libx264, as with Fedora's `ffmpeg-free`.
+- `harness.mjs` is optional and has no dependencies besides Node.js 24. It runs `workflow/video-analysis.js`
+  with simulated agents: happy path, a batch that skips frames, failures, resume, several videos and the
+  two role modes.
 - `check_run.py` checks the ledger, whether the prompts cite the batches without copying cues, whether
   the reports cover all the frames and whether the final report answers the objective. The ledger and
   prompt checks follow the run's curation (`options.curation`). With the default `plan`,
@@ -366,8 +417,8 @@ python tests/check_run.py <run_dir>     # checks a finished run
   and the transcription part of `test_prepare_cli.py`) need neither WhisperX nor a network: a fake
   `transcribe.py`, fake environments and an in-memory punkt stand in for them.
 - `tests/test_vtt.py` and `tests/test_data_files.py` read real subtitle excerpts that are kept out of git
-  (see [Data and privacy](#data-and-privacy)). In a fresh clone, these tests fail because the files are
-  missing.
+  (see [Data and privacy](#data-and-privacy)). In a fresh clone, the tests that need those files are
+  skipped.
 
 ## Troubleshooting
 
@@ -377,12 +428,12 @@ python tests/check_run.py <run_dir>     # checks a finished run
 |---|---|
 | `0` | ok, sometimes with warnings |
 | `2` | input: video not found, subtitles not found without the transcription environment, invalid request or option, run too large |
-| `3` | environment: ffmpeg, ffprobe, Python, numpy or Pillow missing, or a transcription environment that does not work; run `/video-analysis setup` |
+| `3` | environment: ffmpeg, ffprobe, Python, numpy or Pillow missing or older than the minimums, or a transcription environment that does not work; run `/video-analysis setup` |
 | `4` | a video failed; the others go on |
 | `130` | interrupted; what was completed stays in the cache |
-| `1` | internal error; the traceback goes to `logs\` |
+| `1` | internal error; the traceback goes to `logs/` |
 
-Symptoms, causes and fixes, including permissions, agents and Workflow:
+Symptoms, causes and fixes, including permissions, agents, Workflow and the setup on each system:
 [`reference/troubleshooting.md`](reference/troubleshooting.md).
 
 ## Data and privacy
@@ -410,12 +461,26 @@ Symptoms, causes and fixes, including permissions, agents and Workflow:
 
 ## Known limitations
 
-- **Windows first.** The setup and the paths assume Windows, but any Windows user can install the
-  skill: the docs name paths as `%USERPROFILE%\...`, the scripts find the folders through
-  `%USERPROFILE%`, `VIDEO_ANALYSIS_HOME` (central folder) and `VA_CLAUDE_HOME` (Claude Code folder),
-  and `check_environment.py` prints the concrete paths. The local transcription was written for Windows
-  and for macOS on Apple silicon (CPU only; Intel Macs have no PyTorch 2.8), but was tested only on a
-  Windows CPU; the rest of the skill on a Mac, and the NVIDIA GPU path, have not been tried on hardware.
+On each system:
+
+- **Where it was tried.** The skill was developed and is used on Windows 11 (x64): the setup, the
+  analyses, the local transcription on a CPU and the webcam timeline ran there on real videos. On macOS
+  and Linux, the CI runs the test suite on every change (the badge at the top); a full analysis on those
+  systems is not recorded here yet.
+- **macOS.** Intel Macs have no local transcription: PyTorch 2.8, which WhisperX 3.8.6 needs, has no build
+  for them. There, the setup ends with a `[WARN]` for the transcription, each video needs its `.vtt`, and
+  the rest of the skill works. On Apple silicon, the transcription runs on the CPU: WhisperX's Whisper
+  does not use the Mac's GPU.
+- **Linux.** Ubuntu 22.04 needs an ffmpeg 5.1 or newer from outside apt, such as a static build linked
+  from <https://ffmpeg.org/download.html>, and numpy and Pillow from pip. On Fedora, the ffmpeg of RPM
+  Fusion, since Fedora's own `ffmpeg-free` lacks full H.264 support. Under WSL, the skill is a Linux one: its
+  folders are in the WSL home, and a video on the Windows side is given as `/mnt/c/…`.
+- **ARM.** Linux on ARM and Windows on ARM are not tested.
+- **GPU.** The NVIDIA path (Windows and Linux) has not been tried on hardware. An AMD GPU and the Mac's
+  GPU are not used: the transcription runs on the CPU.
+
+Of the method:
+
 - **A change of color alone does not become a frame.** The comparison is in grayscale: a new color with
   the same brightness goes unnoticed.
 - **Tiny changes can be mistaken for the cursor.** A digit or a few letters may not become a frame;
@@ -445,7 +510,7 @@ Out of scope for version 1, according to the [plan](docs/plan.md):
 
 | component | version | constant in `scripts/va/__init__.py` |
 |---|---|---|
-| skill | `1.1.0` | `VERSION` |
+| skill | `1.2.0` | `VERSION` |
 | frame extraction and deduplication | `dedup-1.1` | `ALGO_VERSION` |
 | subtitle parser | `vtt-1.0` | `PARSER_VERSION` |
 | alignment, batches and rendering | `render-1.1` | `RENDER_VERSION` |
@@ -462,7 +527,7 @@ following ones.
 | file | contents |
 |---|---|
 | [`SKILL.md`](SKILL.md) | instructions that Claude follows when calling the skill |
-| [`setup.md`](setup.md) | procedure for `/video-analysis setup` |
+| [`setup.md`](setup.md) | procedure for `/video-analysis setup`, with the commands of each system |
 | [`reference/contracts.md`](reference/contracts.md) | formats of the request, of the `prepare.py` stdout, of the `workflow_args` and of the central folder |
 | [`reference/parameters.md`](reference/parameters.md) | what each parameter does and when to change it |
 | [`reference/troubleshooting.md`](reference/troubleshooting.md) | symptom, cause and what to do |
@@ -473,13 +538,16 @@ following ones.
 | [`docs/design-agentic.md`](docs/design-agentic.md) | specification of the agentic layer |
 | [`tests/data/calibration.md`](tests/data/calibration.md) | measurements that calibrated the parameters |
 
+The files in `docs/` are the record of how the skill was designed: they keep the paths and the commands
+of the time, written for Windows.
+
 ## Repository structure
 
 ```text
 video-analysis/
 ├── SKILL.md                 the skill's instructions for Claude Code
 ├── setup.md                 setup procedure
-├── check_environment.py    checks Python, ffmpeg, agents, workflow, permissions, the transcription and the optional DeepFace
+├── check_environment.py     checks Python, ffmpeg, agents, workflow, permissions, the transcription and the optional DeepFace
 ├── agents/                  roles of the curator (Opus) and the analyst (Sonnet)
 ├── workflow/                video-analysis.js, the Workflow script
 ├── scripts/
@@ -493,5 +561,6 @@ video-analysis/
 │   └── va/                  extraction, deduplication, subtitles, alignment, batches, cache and runs
 ├── reference/               contracts, parameters, troubleshooting, the procedure without Workflow and the speaker-count prompt
 ├── docs/                    plan, specifications and the earlier prototype (prior-art)
-└── tests/                   pytest, synthetic videos, workflow harness and test data
+├── tests/                   pytest, synthetic videos, the optional workflow harness and test data
+└── .github/workflows/       tests.yml, the CI: pytest on Windows, macOS and Ubuntu
 ```

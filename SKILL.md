@@ -8,6 +8,7 @@ allowed-tools:
   - Bash(python "${CLAUDE_SKILL_DIR}/verificar_ambiente.py" *)
   - Bash(python3 "${CLAUDE_SKILL_DIR}/scripts/prepare.py" *)
   - Bash(python3 "${CLAUDE_SKILL_DIR}/check_environment.py" *)
+  - Bash(python3 "${CLAUDE_SKILL_DIR}/verificar_ambiente.py" *)
   - Write(~/video-analysis/requests/*)
   - Write(~/video-analysis/pedidos/*)
 ---
@@ -41,7 +42,8 @@ The argument reaches the end of the skill as `ARGUMENTS: …`. A request to "con
 
 Every command of this skill goes through the **Bash** tool, the one the skill pre-approves (never
 PowerShell), with `python` on Windows (there, `python3` is the Microsoft Store shortcut) and `python3` on
-macOS. The examples below use `python`.
+macOS and Linux (there, `python` may not exist, or may be another Python). The examples below use
+`python`: on macOS and Linux, write `python3`.
 
 | option | in `request.md` | effect |
 |---|---|---|
@@ -90,7 +92,8 @@ still work, as do `num_falantes`, `modelo_whisper` and `idioma_audio`: map them 
    available agent types; otherwise `inline`, which works the same and spends a little more per agent.
    The user's `--roles` option prevails.
 3. **Request.** With Write, save `<home>/requests/request.md`, where `<home>` is the central folder
-   (**Files** section) with `/`, such as `C:/Users/<user>/video-analysis`. Take it from the `home` that
+   (**Files** section) with `/`, such as `C:/Users/<user>/video-analysis` on Windows,
+   `/Users/<user>/video-analysis` on macOS or `/home/<user>/video-analysis` on Linux. Take it from the `home` that
    `prepare.py` or `check_environment.py` already printed in this conversation; otherwise run
    `python "${CLAUDE_SKILL_DIR}/check_environment.py" --paths` (instant: it checks nothing) and use its
    `home`. If the file exists, read it first (Write requires it). The objective goes in verbatim, with quotes and line breaks: nothing
@@ -109,6 +112,9 @@ still work, as do `num_falantes`, `modelo_whisper` and `idioma_audio`: map them 
    roles: inline
    max_batches: 2
    ```
+
+   On macOS and Linux, the paths start at `/`: `/Users/<user>/Movies/venda_zero_clientes.mp4`,
+   `/home/<user>/Videos/venda_zero_clientes.mp4`.
 
 4. **Estimate:**
 
@@ -163,8 +169,8 @@ still work, as do `num_falantes`, `modelo_whisper` and `idioma_audio`: map them 
    the request moves to the run folder.
    - exit code other than 0, or `ok: false` → state the problem in one sentence, by exit code:
      - `2` input, by `error.code`: `missing_vtt` → per item of `missing_vtt`, the candidates and the
-       suggested rename from the `detail` (`Rename-Item` on Windows, `mv -n` on macOS; the user is the one
-       who decides to rename), and, by `transcription.state`: `absent` → also offer `/video-analysis
+       suggested rename from the `detail` (`Rename-Item` on Windows, `mv -n` on macOS and Linux; the user
+       is the one who decides to rename), and, by `transcription.state`: `absent` → also offer `/video-analysis
        setup`, whose step 6 installs the local transcription; `ok` → a `choice` video without
        `num_speakers`: the form of step 4; `unsupported` → this machine cannot transcribe (the `detail`
        says why): the rename or a `.vtt` only. `video_not_found` → confirm the path; `run_too_large` (more
@@ -177,7 +183,7 @@ still work, as do `num_falantes`, `modelo_whisper` and `idioma_audio`: map them 
        (step 6, with that JSON).
      - `130` interrupted: the completed stages stay in the cache (a transcription, its blocks of ~10 min);
        offer to run it again.
-     - `1` internal error of `prepare.py`: give the `detail` and the log in `logs\`; do not try to work
+     - `1` internal error of `prepare.py`: give the `detail` and the log in `logs/`; do not try to work
        around it.
 
      An error in step 5 (not in 4) renames the request to `request.error.md`: to retry, write it again.
@@ -190,7 +196,7 @@ still work, as do `num_falantes`, `modelo_whisper` and `idioma_audio`: map them 
    - `webcam timeline failed` (in the video's warnings) or `webcam timeline skipped` (in `warnings`) → the
      frames were extracted without the webcam timeline; for `skipped`, the DeepFace environment is not the
      setup's (it does not run, another deepface version, damaged weights), and for a `failed` whose detail
-     points to DeepFace or its libraries (an `ImportError`, a DLL), it does not load: offer
+     points to DeepFace or its libraries (an `ImportError`, a DLL, `.so` or `.dylib`), it does not load: offer
      `/video-analysis setup` at the end.
    - `speakers not separated` (in the video's warnings) → offer, at the end, step 7 of the setup (the
      person saves a Hugging Face token); for `the diarization failed (…)`, fixing the cause the error names
@@ -268,11 +274,12 @@ with `run_in_background`.
 
 ## Files
 
-Central folder (`<home>`): `%USERPROFILE%\video-analysis\`, or the folder in `VIDEO_ANALYSIS_HOME`;
-the `home` of `check_environment.py --paths` gives its concrete path. `cache\<slug>-<fp8>\` (subtitles,
-frames, batches, the webcam timeline, the local transcription and the screenshots of the speaker count,
-reused across runs) · `runs\<YYYYMMDD-HHMMSS>-<slug>\` (combined `relatorio.md`, with 2+ videos; per video,
-`v1\relatorio.md`, `v2\…`, with ledger, prompts and batch reports) · `requests\` · `roles\` · `logs\`. The
-`.vtt` the skill generates goes next to the video, only when there is none there. Formats and paths:
+Central folder (`<home>`): `~/video-analysis/` (on Windows, `C:\Users\<user>\video-analysis\`), or the
+folder in `VIDEO_ANALYSIS_HOME`; the `home` of `check_environment.py --paths` gives its concrete path.
+`cache/<slug>-<fp8>/` (subtitles, frames, batches, the webcam timeline, the local transcription and the
+screenshots of the speaker count, reused across runs) · `runs/<YYYYMMDD-HHMMSS>-<slug>/` (combined
+`relatorio.md`, with 2+ videos; per video, `v1/relatorio.md`, `v2/…`, with ledger, prompts and batch
+reports) · `requests/` · `roles/` · `logs/`. The `.vtt` the skill generates goes next to the video, only
+when there is none there. Formats and paths:
 [`reference/contracts.md`](reference/contracts.md). Errors and warnings:
 [`reference/troubleshooting.md`](reference/troubleshooting.md).
